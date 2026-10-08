@@ -1,0 +1,10 @@
+# Blank issues stay on: the app's Help › Create Report opens issues/new with the title and the
+# text already filled in (app/Sources/Report.swift, issueURL), and that link needs them.
+blank_issues_enabled: true
+contact_links:
+  - name: Troubleshooting
+    url: https://github.com/Gabe-LS/rbstemsplus/blob/main/docs/troubleshooting.md
+    about: Most problems have a quick fix here. Have a look first.
+  - name: Report a security problem
+    url: https://github.com/Gabe-LS/rbstemsplus/security/advisories/new
+    about: Please report security problems privately, not as an issue.
