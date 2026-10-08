@@ -36,7 +36,7 @@ Troubleshooting** opens this page. Nothing here helped?
 **After updates**
 - [Stems Cache is off after a rekordbox update](#stems-cache-is-off-after-a-rekordbox-update)
 - [rekordbox was prevented from modifying apps](#rekordbox-was-prevented-from-modifying-apps)
-- [Stems Plus is off](#stems-plus-is-off)
+- [Demucs v4 is off](#demucs-v4-is-off)
 - [Reinstall reminders are off](#reinstall-reminders-are-off)
 - [Update failed](#update-failed)
 - [New Mac, Migration Assistant or Time Machine](#new-mac-migration-assistant-or-time-machine)
@@ -114,7 +114,7 @@ The line under the buttons (the status line) says why something can't be install
 |---|---|
 | rekordbox 7 isn't installed. | [rekordbox missing](#rekordbox-missing) |
 | Open rekordbox and turn on STEMS once... | [Open rekordbox and turn on STEMS once](#open-rekordbox-and-turn-on-stems-once) |
-| ...doesn't support ... yet. | [My rekordbox version isn't supported](#my-rekordbox-version-isnt-supported) |
+| ...doesn't support ... yet. / ...isn't available for STEMS Engine ... yet. | [My rekordbox version isn't supported](#my-rekordbox-version-isnt-supported) |
 | ...rekordbox's ONNX Runtime... reinstall rekordbox. | [Reinstall rekordbox](#reinstall-rekordbox) |
 | ...needs an administrator account. | [Administrator needed](#administrator-needed) |
 | Reinstall reminders are off... | [Reinstall reminders are off](#reinstall-reminders-are-off) |
@@ -148,8 +148,8 @@ installed."*
 
 ### Open rekordbox and turn on STEMS once
 
-RB Stems Plus needs rekordbox's STEMS Engine (the files STEMS uses) before it can install Stems
-Plus.
+RB Stems Plus needs rekordbox's STEMS Engine (the files STEMS uses) before it can install
+Demucs v4.
 1. Open rekordbox and switch to **Performance** mode.
 2. Load a track and turn on **STEMS**. rekordbox offers to download the STEMS Engine: let it
    finish.
@@ -160,13 +160,13 @@ can't add it.
 
 ### My rekordbox version isn't supported
 
-The status line says *"...doesn't support STEMS Engine ... yet"*, *"...doesn't support rekordbox
-... yet"* or *"...doesn't support ONNX Runtime ... yet"*. RB Stems Plus has a list of the versions
+The status line says *"...isn't available for STEMS Engine ... yet"*, *"...doesn't support
+rekordbox ... yet"* or *"...doesn't support ONNX Runtime ... yet"*. RB Stems Plus has a list of the versions
 it was tested with (rekordbox 7.2.17 to 7.2.19 in version 1.0). On anything else it doesn't
 install, because a change inside rekordbox could make it fail.
 
-- **rekordbox works normally meanwhile,** with its own model where Stems Plus can't be used.
-- **Stems Plus can still work** on a rekordbox version Stems Cache doesn't support, as long as the
+- **rekordbox works normally meanwhile,** with its own model where Demucs v4 can't be used.
+- **Demucs v4 can still work** on a rekordbox version Stems Cache doesn't support, as long as the
   STEMS Engine is on the list.
 - **Nothing to do:** the list is updated online, and RB Stems Plus checks it each time you open
   it. If a newer RB Stems Plus is out, the status line says *"RB Stems Plus X is available"*:
@@ -221,7 +221,7 @@ Nothing was changed.
 - **"couldn't be verified" or "didn't download correctly":** try again later or on another
   network. If it keeps happening, [make a report](#making-a-problem-report).
 
-Offline, RB Stems Plus can reinstall from files it already has: Stems Plus any time, Stems Cache
+Offline, RB Stems Plus can reinstall from files it already has: Demucs v4 any time, Stems Cache
 only if its files were downloaded in the last 7 days. A first install always needs internet.
 
 ### Low disk space
@@ -325,14 +325,14 @@ again.
 
 ### The first STEMS on a track is slow
 
-That's expected. The Stems Plus model does more work: on an Apple Silicon Mac, a 6½-minute
-track takes about 77 seconds instead of about 26. The fans may spin up meanwhile. With Stems
-Cache, the next load of that track takes about 7 seconds.
+That's expected. Demucs v4 does more work: on an Apple Silicon Mac, a 6½-minute track takes
+about 77 seconds instead of about 26. The fans may spin up meanwhile. With Stems Cache, the next
+load of that track takes about 7 seconds.
 
 - **Check that rekordbox doesn't run under Rosetta:** select rekordbox in Applications, press
   Cmd+I, and untick "Open using Rosetta" if it's ticked. Under Rosetta, STEMS is much slower.
 - Only an Apple Silicon Mac has been tested.
-- Too slow for you? Click **Uninstall Stems Plus** to go back to rekordbox's model.
+- Too slow for you? Click **Uninstall Demucs v4** to go back to rekordbox's model.
 
 ### Reloading a track is still slow
 
@@ -342,9 +342,9 @@ Cache, the next load of that track takes about 7 seconds.
 Other reasons a track gets separated again:
 - its stems were removed: unused for 60 days, over the size limit, or **Clear Saved Stems**
 - you're in another Mac account (each account has its own saved stems)
-- you switched model (Stems Plus or rekordbox's own): each has its own saved stems, used again
+- you switched model (Demucs v4 or rekordbox's own): each has its own saved stems, used again
   when you switch back
-- a new Stems Plus model came with an update (it starts a fresh set)
+- a new Demucs v4 model file came with an RB Stems Plus update (it starts a fresh set)
 - the track's audio was edited
 
 Renaming, re-tagging or moving a track doesn't matter: stems are found by the audio itself. None
@@ -356,10 +356,10 @@ Yellow means Stems Cache is installed but isn't saving stems right now. Hold the
 light to see why:
 
 - ***"Stems Cache doesn't support STEMS Engine ... yet."*** rekordbox downloaded a STEMS Engine
-  that's newer than this Stems Cache, and Stems Plus is off, so rekordbox uses that engine's
+  that's newer than this Stems Cache, and Demucs v4 is off, so rekordbox uses that engine's
   model. rekordbox works as usual, but its stems aren't saved. When an RB Stems Plus update
-  supports it, click **Reinstall Stems Cache**. Or click **Install Stems Plus**: Stems Cache
-  saves the Stems Plus model's stems.
+  supports it, click **Reinstall Stems Cache**. Or click **Install Demucs v4**: Stems Cache
+  then saves the stems Demucs v4 makes.
 - ***"Stems Cache needs an update to save the stems of rekordbox's own model."*** The Stems Cache
   in rekordbox is from before it could do that. Click **Reinstall Stems Cache**.
 - ***"Stems Cache was installed from another account on this Mac."*** Click **Install Stems
@@ -396,7 +396,7 @@ link: RB Stems Plus leaves a link alone, and the next time it can't open (see
 
 Try these in order, checking rekordbox after each:
 1. Click **Uninstall Stems Cache**: rekordbox gets Pioneer's files back.
-2. Click **Uninstall Stems Plus**: rekordbox gets its own model back.
+2. Click **Uninstall Demucs v4**: rekordbox gets its own model back.
 3. Reinstall rekordbox from rekordbox.com (see [Reinstall rekordbox](#reinstall-rekordbox)).
 
 Then [make a report](#making-a-problem-report): it includes rekordbox's crash reports.
@@ -406,7 +406,7 @@ Then [make a report](#making-a-problem-report): it includes rekordbox's crash re
 ### Stems Cache is off after a rekordbox update
 
 That's expected. A rekordbox update (or reinstalling rekordbox) puts Pioneer's original app back,
-which turns Stems Cache off. Stems Plus keeps working, and your saved stems are kept.
+which turns Stems Cache off. Demucs v4 keeps working, and your saved stems are kept.
 
 When the update is done and rekordbox is closed, RB Stems Plus asks (*"rekordbox was updated"*).
 Click **Reinstall Now**.
@@ -434,24 +434,24 @@ The notification only has **Allow…**. If you close or ignore it, the update ca
 you allow it: turn on rekordbox in System Settings › Privacy & Security › App Management, then
 update rekordbox again.
 
-### Stems Plus is off
+### Demucs v4 is off
 
-A new STEMS Engine download puts rekordbox's own stems model back. The Stems Plus light turns
+A new STEMS Engine download puts rekordbox's own stems model back. The Demucs v4 light turns
 red. Stems Cache goes on saving stems, now with rekordbox's model, if it supports that STEMS
 Engine (otherwise its light turns yellow). RB Stems Plus asks you (*"rekordbox put its own stems
 model back"*):
 
-<img src="images/rekordbox-model-back.png" width="632" alt="The rekordbox put its own stems model back message: Stems Plus is off. Reinstall it to separate tracks with the Stems Plus model instead of rekordbox's own. Buttons: Don't Ask Again for This Version, Remind Me Later, Reinstall Now.">
+<img src="images/rekordbox-model-back.png" width="632" alt="The rekordbox put its own stems model back message: Demucs v4 is off. Reinstall it to separate tracks with Demucs v4 instead of rekordbox's own model. Buttons: Don't Ask Again for This Version, Remind Me Later, Reinstall Now.">
 
 - **Reinstall Now** puts back only what went missing. If Stems Cache is still in place, that's
-  just Stems Plus.
+  just Demucs v4.
 - The **Reinstall** button in the app reinstalls everything you chose: with Stems Cache it also
   re-signs rekordbox (about a minute).
 
 Reinstalling works offline too, from the files RB Stems Plus already has (for Stems Cache, only
 if they were downloaded in the last 7 days).
 
-It says *"doesn't support STEMS Engine ... yet"* instead? See
+It says *"isn't available for STEMS Engine ... yet"* instead? See
 [My rekordbox version isn't supported](#my-rekordbox-version-isnt-supported).
 
 ### Reinstall reminders are off
@@ -503,7 +503,7 @@ uninstall again.
 
 ### No saved copy of rekordbox's model
 
-RB Stems Plus saves rekordbox's own stems model before Stems Plus replaces it, and puts it back
+RB Stems Plus saves rekordbox's own stems model before Demucs v4 replaces it, and puts it back
 when you uninstall. If there's no saved copy, or it doesn't verify, uninstalling stops and says
 so; nothing is deleted. This can happen if `~/Library/Application Support/rbstemsplus` was
 deleted by hand, or on a Mac that had a test version of RB Stems Plus.
@@ -520,11 +520,11 @@ ships it:
    (**No** turns STEMS off in rekordbox.)
 
 Then uninstall again: RB Stems Plus sees rekordbox's own model and finishes. If it asks to
-reinstall Stems Plus meanwhile, click **Remind Me Later**.
+reinstall Demucs v4 meanwhile, click **Remind Me Later**.
 
 ### Remove RB Stems Plus Anyway
 
-When **Uninstall Stems Plus** (*"Uninstall failed"*) or **Uninstall RB Stems Plus Completely**
+When **Uninstall Demucs v4** (*"Uninstall failed"*) or **Uninstall RB Stems Plus Completely**
 (*"Uninstall stopped"*) can't put rekordbox's own stems model back, it says why. Nothing is
 deleted. **Open Help** brings you here, or to
 [No saved copy of rekordbox's model](#no-saved-copy-of-rekordboxs-model) when there's no saved
@@ -538,19 +538,19 @@ copy that verifies.
   account: its settings, the stems it saved, its logs, RB Stems Plus Watcher and the app. It
   never touches rekordbox or `/Library/Application Support/rbstemsplus`.
 
-A stems model RB Stems Plus doesn't know may be a newer Stems Plus model, so it isn't taken for
+A stems model RB Stems Plus doesn't know may be a newer Demucs v4 model file, so it isn't taken for
 rekordbox's own. RB Stems Plus never deletes a saved copy of rekordbox's own model that verifies:
 the folder `~/Library/Application Support/rbstemsplus/originals` stays, and the last message says
 so. To put that copy back, follow step 3 of
 [Removing everything without the app](#removing-everything-without-the-app). Then you can move the
 `rbstemsplus` folder in `~/Library/Application Support` to the Trash.
 
-The last message also says what's in rekordbox now, usually the Stems Plus model. With no saved
+The last message also says what's in rekordbox now, usually the Demucs v4 model. With no saved
 copy, see [No saved copy of rekordbox's model](#no-saved-copy-of-rekordboxs-model).
 
 ### Several accounts on one Mac
 
-- **Stems Plus** is per account: each account has its own rekordbox settings. Install and
+- **Demucs v4** is per account: each account has its own rekordbox settings. Install and
   uninstall it in each account that uses it.
 - **Stems Cache** changes rekordbox itself, which every account shares. If you uninstall from an
   account that didn't install it, RB Stems Plus asks first (*"Stems Cache from another
@@ -567,7 +567,7 @@ copy, see [No saved copy of rekordbox's model](#no-saved-copy-of-rekordboxs-mode
 
 ### I dragged RB Stems Plus to the Trash
 
-That doesn't undo anything: rekordbox keeps Stems Plus and Stems Cache. And you get no more
+That doesn't undo anything: rekordbox keeps Demucs v4 and Stems Cache. And you get no more
 reinstall reminders after rekordbox updates.
 
 **Fix:** paste the install command (see the [README](../README.md#install)), then click
@@ -582,14 +582,14 @@ install command can't bring it back:
 2. **Stems Cache:** download rekordbox from rekordbox.com and install it over the current one.
    That puts Pioneer's original app back. **Do this before step 4:** without it, rekordbox's
    STEMS stops working.
-3. **Stems Plus:** in Finder, choose Go › Go to Folder, paste
+3. **Demucs v4:** in Finder, choose Go › Go to Folder, paste
    `~/Library/Application Support/rbstemsplus/originals`. rekordbox's own model is the `.onnx`
    file named with a long string of letters and digits. If there are several, take the one whose
    `.engine` file (open it with TextEdit) holds the same number as `demucs3_ver.txt` in
    rekordbox's model folder below. Copy it into
    `~/Library/Application Support/Pioneer/rekordbox6/models/demucs3_model/` and rename it
    `hdemucs.onnx`, replacing the file there. Never use a file whose name starts with `ours-`:
-   that's the Stems Plus model. No such file? See
+   that's the Demucs v4 model. No such file? See
    [No saved copy of rekordbox's model](#no-saved-copy-of-rekordboxs-model).
 4. **The rest,** in Terminal:
 

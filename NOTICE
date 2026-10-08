@@ -10,12 +10,12 @@ are named here only to say what RB Stems Plus works with.
 This product includes or uses the following third-party work.
 
 -------------------------------------------------------------------------------
-Demucs (the Stems Plus model, stemsplus-model.onnx)
+Demucs (the Demucs v4 model, stemsplus-model.onnx)
 -------------------------------------------------------------------------------
-The Stems Plus model is Meta's Hybrid Transformer Demucs ("htdemucs", Demucs v4)
-with its published pretrained weights, wrapped and exported to ONNX so that
-rekordbox can run it. The model file is distributed as a release asset, not in
-this repository.
+This model is Meta's Hybrid Transformer Demucs ("htdemucs", Demucs v4) with its
+published pretrained weights, wrapped and exported to ONNX so that rekordbox can
+run it. The model file is distributed as a release asset, not in this
+repository.
 
   https://github.com/facebookresearch/demucs
   MIT License

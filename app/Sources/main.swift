@@ -1,4 +1,4 @@
-// RB Stems Plus: installs, reinstalls and uninstalls Stems Plus (our model) and Stems Cache (the
+// RB Stems Plus: installs, reinstalls and uninstalls Demucs v4 (our model) and Stems Cache (the
 // bridge) without Terminal, and includes the background watcher.
 //
 // Run from the watcher helper inside the app (Contents/Helpers/RB Stems Plus Watcher.app, a copy

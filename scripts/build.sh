@@ -63,7 +63,7 @@ model_size=308572524
 # so RB Stems Plus still knows them as its own and never saves one as rekordbox's.
 previous_models=""
 # payload.json's "compatible" block: rekordbox versions Stems Cache may be installed on, the
-# ONNX Runtime the bridge expects, the STEMS Engine versions Stems Plus fits.
+# ONNX Runtime the bridge expects, the STEMS Engine versions our Demucs v4 model fits.
 compat_rekordbox="7.2.17 7.2.18 7.2.19"
 compat_ort_prefix="1.18."
 compat_stems_engine="0002"

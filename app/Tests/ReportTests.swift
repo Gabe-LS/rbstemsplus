@@ -87,8 +87,16 @@ func reportTests() {
                                              (800, "admin run (install), attempt 1"), (790, "  FAILED: rekordbox's folder is missing")]), bridgeLog: "", now: now)
     check(p.title == "admin run (install) failed" && p.text == "Last problem:\n\(at(790))  admin run (install) FAILED: rekordbox's folder is missing",
           "fail, success, fail: only the last failure: \(p.text)")
+    p = lastProblem(appLog: log([(700, "Demucs v4 not installed: the STEMS Engine isn't downloaded"), (600, "Demucs v4: installed (0cc50d877629)")]), bridgeLog: "", now: now)
+    check(p.title == nil, "Demucs v4 not installed, then installed: no block")
+    p = lastProblem(appLog: log([(700, "Demucs v4 not installed: the STEMS Engine isn't downloaded")]), bridgeLog: "", now: now)
+    check(p.title == "Demucs v4 not installed: the STEMS Engine isn't downloaded", "Demucs v4 not installed is a problem")
+    p = lastProblem(appLog: log([(700, "Stems Plus not installed: the STEMS Engine isn't downloaded"), (600, "Demucs v4: installed (0cc50d877629)")]), bridgeLog: "", now: now)
+    check(p.title == nil, "1.1.0's Stems Plus not installed, then installed after the update: no block")
+    p = lastProblem(appLog: log([(700, "Stems Plus not installed: the STEMS Engine isn't downloaded")]), bridgeLog: "", now: now)
+    check(p.title == "Stems Plus not installed: the STEMS Engine isn't downloaded", "1.1.0's Stems Plus not installed is a problem")
     p = lastProblem(appLog: log([(700, "Stems Plus not installed: the STEMS Engine isn't downloaded"), (600, "Stems Plus: installed (0cc50d877629)")]), bridgeLog: "", now: now)
-    check(p.title == nil, "Stems Plus not installed, then installed: no block")
+    check(p.title == nil, "1.1.0's Stems Plus not installed, then 1.1.0's installed: no block")
     p = lastProblem(appLog: log([(700, "Stems Cache not installed: rekordbox 7.3.0 isn't supported")]), bridgeLog: "", now: now)
     check(p.title == "Stems Cache not installed: rekordbox 7.3.0 isn't supported", "Stems Cache not installed is a problem")
     p = lastProblem(appLog: "", bridgeLog: log([(500, "ERROR no real ONNX Runtime library: rekordbox's analysis will fail; reinstall or uninstall"),
@@ -110,8 +118,8 @@ func reportTests() {
     check(masked.contains("<email>") && masked.contains("token=<token>") && !masked.contains("example.com"), "the last problem is masked like the rest: \(masked)")
 
     // MARK: the summary's short lines
-    check(appLine(version: "1.0.0", build: "7", plus: (.on, "Stems Plus is on."), cache: (.limited, "Stems Cache stopped saving stems."))
-          == "RB Stems Plus: 1.0.0 (7); lights: Stems Plus green (Stems Plus is on.), Stems Cache yellow (Stems Cache stopped saving stems.)",
+    check(appLine(version: "1.0.0", build: "7", plus: (.on, "Demucs v4 is on."), cache: (.limited, "Stems Cache stopped saving stems."))
+          == "RB Stems Plus: 1.0.0 (7); lights: Demucs v4 green (Demucs v4 is on.), Stems Cache yellow (Stems Cache stopped saving stems.)",
           "the app line: version, build and the two lights")
     check(lightColour(.off) == "red", "an off light is red")
     check(macLine(os: "Version 26.0 (Build 25A354)", model: "Mac15,3", chip: "Apple M3", arch: "arm64", memory: 16 * 1_073_741_824, language: "en_IT")
@@ -123,8 +131,12 @@ func reportTests() {
           "rekordbox not installed")
     check(translated(getpid()) == false, "this test isn't under Rosetta (P_TRANSLATED read from the kernel)")
     check(installedLine(plus: true, cache: false, chosenModel: true, chosenCache: true, modelSha: sha, modelSize: 308_572_524)
-          == "installed: Stems Plus yes, Stems Cache no; chosen: Stems Plus yes, Stems Cache yes; model in rekordbox: 0cc50d877629 (308572524 bytes)",
+          == "installed: Demucs v4 yes, Stems Cache no; chosen: Demucs v4 yes, Stems Cache yes; model in rekordbox: 0cc50d877629 (308572524 bytes)",
           "the installed line, with the model's checksum prefix")
+    let reportLines = [appLine(version: "1.0.0", build: "7", plus: plusLight(installed: true), cache: (.off, "Stems Cache is off.")),
+                       installedLine(plus: true, cache: true, chosenModel: true, chosenCache: true, modelSha: sha, modelSize: nil)]
+    check(reportLines.allSatisfy { $0.range(of: "(?<!RB )Stems Plus", options: .regularExpression) == nil && $0.contains("Demucs v4") },
+          "the report names the model feature Demucs v4: \(reportLines)")
     check(diskLine(free: 120_500_000_000, disk: 994_700_000_000, floor: cacheFreeFloor(disk: 994_700_000_000))
           == "disk: 120.5 GB free of 994.7 GB; Stems Cache's floor: 50 GB", "the disk line")
     check(diskLine(free: 20_000_000_000, disk: 256_000_000_000, floor: cacheFreeFloor(disk: 256_000_000_000))
@@ -139,7 +151,7 @@ func reportTests() {
           == "rekordbox signature: invalid: /Applications/rekordbox 7/rekordbox.app: a sealed resource is missing or invalid; team none", "an invalid signature")
 
     // MARK: the issue's link
-    let facts = [appLine(version: "1.0.0", build: "7", plus: (.on, "Stems Plus is on."), cache: (.off, "Stems Cache is off.")),
+    let facts = [appLine(version: "1.0.0", build: "7", plus: (.on, "Demucs v4 is on."), cache: (.off, "Stems Cache is off.")),
                  macLine(os: "Version 26.0 (Build 25A354)", model: "Mac15,3", chip: "Apple M3", arch: "arm64", memory: 17_179_869_184, language: "en_IT"),
                  rekordboxLine(version: "7.2.19", running: false, rosetta: nil, engine: "0002"),
                  installedLine(plus: true, cache: false, chosenModel: true, chosenCache: false, modelSha: sha, modelSize: 308_572_524),

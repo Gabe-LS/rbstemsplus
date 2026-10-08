@@ -9,7 +9,7 @@ final class Controller: NSObject {
     let status = NSTextField(wrappingLabelWithString: "")
     let spinner = NSProgressIndicator()
     let plusIcon = NSImageView(), cacheIcon = NSImageView()
-    let plusLabel = NSTextField(labelWithString: "Stems Plus"), cacheLabel = NSTextField(labelWithString: "Stems Cache")
+    let plusLabel = NSTextField(labelWithString: "Demucs v4"), cacheLabel = NSTextField(labelWithString: "Stems Cache")
     var buttons: [NSButton] = []
     var installPlusBtn = NSButton(), installCacheBtn = NSButton(), reinstallBtn = NSButton(), uninstallPlusBtn = NSButton(), uninstallCacheBtn = NSButton()
     var uninstallAllBtn = NSButton()
@@ -42,10 +42,10 @@ final class Controller: NSObject {
         title.font = .boldSystemFont(ofSize: 16)
         // two features, each installed on its own; none is the default button (neither is
         // recommended over the other)
-        let installPlus = NSButton(title: "Install Stems Plus", target: self, action: #selector(installPlusAction))
+        let installPlus = NSButton(title: "Install Demucs v4", target: self, action: #selector(installPlusAction))
         let installCache = NSButton(title: "Install Stems Cache", target: self, action: #selector(installCacheAction))
         let reinstall = NSButton(title: "Reinstall", target: self, action: #selector(reinstallAction))
-        let uninstallPlus = NSButton(title: "Uninstall Stems Plus", target: self, action: #selector(uninstallStemsPlus))
+        let uninstallPlus = NSButton(title: "Uninstall Demucs v4", target: self, action: #selector(uninstallStemsPlus))
         let uninstall = NSButton(title: "Uninstall Stems Cache", target: self, action: #selector(uninstallCache))
         let uninstallAll = NSButton(title: "Uninstall RB Stems Plus Completely", target: self, action: #selector(uninstallEverything))
         let quit = NSButton(title: "Quit", target: NSApp, action: #selector(NSApplication.terminate(_:)))
@@ -119,7 +119,7 @@ final class Controller: NSObject {
             self.updateWatcherState()
             // 1.0's saved copy of Pioneer's model, into the layout by checksum (once)
             if installedModels(self.log).migrateLegacy() {
-                self.onMain { self.modelNotice = "There's no saved copy of rekordbox's own stems model, so uninstalling Stems Plus can't put it back."; self.refresh() }
+                self.onMain { self.modelNotice = "There's no saved copy of rekordbox's own stems model, so uninstalling Demucs v4 can't put it back."; self.refresh() }
             }
             self.removeLeftovers()
             // an account that chose Stems Cache before it saved rekordbox's own model's stems: on
@@ -144,11 +144,11 @@ final class Controller: NSObject {
 
     /// The first launch's welcome: what the two features do, the macOS permission Stems Cache
     /// needs, and that the tool is unofficial. Never again after. No feature is called better:
-    /// Stems Plus is a different model, the user chooses.
+    /// Demucs v4 is a different model, the user chooses.
     func welcomeOnce() {
         guard !FileManager.default.fileExists(atPath: welcomedFile) else { return }
         _ = alert("Welcome to RB Stems Plus", """
-            Stems Plus gives rekordbox's STEMS a different separation model, Demucs v4. The first separation of a track takes longer, and the two models split some sounds differently: listen and keep the one you prefer.
+            Demucs v4 replaces rekordbox's own stems model with Meta's Demucs v4 separation model. The first separation of a track takes longer, and the two models split some sounds differently: listen and keep the one you prefer.
 
             Stems Cache saves the separated stems, with either model, so a track's stems load much faster the next time. It changes one file inside rekordbox, so macOS will ask you to allow RB Stems Plus to change rekordbox.
 
@@ -199,7 +199,7 @@ final class Controller: NSObject {
             // that removing Stems Cache needs an administrator like installing it. Uninstall Stems
             // Cache also removes what Stems Cache left in /Library after a rekordbox update.
             let plusWhy = stemsPlusBlocked(), cacheWhy = stemsCacheBlocked(), traces = cacheTraces()
-            let names = { (p: Bool, k: Bool) in p && k ? "Stems Plus + Stems Cache" : (k ? "Stems Cache" : "Stems Plus") }
+            let names = { (p: Bool, k: Bool) in p && k ? "Demucs v4 + Stems Cache" : (k ? "Stems Cache" : "Demucs v4") }
             // each feature installs on its own; Stems Cache also when another account installed it
             // (then it only turns it on here); reinstall names what the user chose
             self.installPlusBtn.isEnabled = !plus && plusWhy == nil
@@ -280,9 +280,9 @@ func lightDrawing(_ look: LightLook) -> (symbol: String, tint: NSColor, descript
     }
 }
 
-/// The Stems Plus light: on or off, as rekordbox's model folder says.
+/// The Demucs v4 light: on or off, as rekordbox's model folder says.
 func plusLight(installed: Bool) -> (look: LightLook, tip: String) {
-    installed ? (.on, "Stems Plus is on.") : (.off, "Stems Plus is off.")
+    installed ? (.on, "Demucs v4 is on.") : (.off, "Demucs v4 is off.")
 }
 
 /// The Stems Cache light. Installed (`installed`: the bridge is in rekordbox) but not saving stems

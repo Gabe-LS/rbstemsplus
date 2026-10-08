@@ -60,7 +60,7 @@ struct Models {
     /// a .part file, checked, then renamed into place only if nothing is there.
     func saveOriginal(_ sha: String) -> Outcome {
         guard isSHA256(sha), !ours.contains(sha) else {
-            return fail("rekordbox's stems model is the Stems Plus model, so it wasn't saved as rekordbox's own.")
+            return fail("rekordbox's stems model is the Demucs v4 model, so it wasn't saved as rekordbox's own.")
         }
         if savedIsGood(sha) { log("save Pioneer's model: already saved (\(sha.prefix(12)))"); return Outcome(ok: true, message: "") }
         try? FileManager.default.createDirectory(atPath: originals, withIntermediateDirectories: true)
@@ -91,7 +91,7 @@ struct Models {
     /// Whether a model that isn't ours (checksum `sha`) can be taken for Pioneer's: when no
     /// original of Pioneer's is saved, when it is one of them, or when rekordbox's STEMS Engine
     /// version is known and differs from every saved one's (a new STEMS Engine brought it).
-    /// Otherwise it may be a newer Stems Plus model this app doesn't know (its payload.json
+    /// Otherwise it may be a newer export of the Demucs v4 model this app doesn't know (its payload.json
     /// missing or refused): it is never saved as Pioneer's, nor taken for Pioneer's put back.
     func mayBePioneers(_ sha: String, _ saved: [(sha: String, engine: String)]? = nil) -> Bool {
         let saved = saved ?? savedOriginals()
@@ -224,18 +224,18 @@ struct Models {
             remove(newTemp)                                             // left by a run that was stopped
             if let err = copyFile(source, newTemp) {
                 remove(newTemp)
-                return fail(err.contains("No space") ? "There isn't enough free space to copy the Stems Plus model." : "The Stems Plus model couldn't be copied: \(err).")
+                return fail(err.contains("No space") ? "There isn't enough free space to copy the Demucs v4 model." : "The Demucs v4 model couldn't be copied: \(err).")
             }
-            guard sha256(newTemp) == sha, syncFile(newTemp) else { remove(newTemp); return fail("The Stems Plus model didn't copy correctly.") }
+            guard sha256(newTemp) == sha, syncFile(newTemp) else { remove(newTemp); return fail("The Demucs v4 model didn't copy correctly.") }
             willReplace()
             guard (fileType(model) != nil ? sha256(model) : nil) == live else {
                 remove(newTemp); return fail("rekordbox's stems model changed meanwhile.")
             }
             guard rename(newTemp, model) == 0 else {
                 let err = String(cString: strerror(errno))
-                remove(newTemp); return fail("The Stems Plus model couldn't be put in place: \(err).")
+                remove(newTemp); return fail("The Demucs v4 model couldn't be put in place: \(err).")
             }
-            log("Stems Plus: installed (\(sha.prefix(12)))")
+            log("Demucs v4: installed (\(sha.prefix(12)))")
             return Outcome(ok: true, message: "")
         }
     }
@@ -285,5 +285,5 @@ func syncFile(_ path: String) -> Bool {
 func modelLeftBehind(_ m: Models) -> String {
     guard fileType(m.model) != nil else { return "rekordbox has no stems model." }
     guard let sha = sha256(m.model) else { return "rekordbox's stems model can't be read." }
-    return m.ours.contains(sha) ? "rekordbox still has the Stems Plus model." : "rekordbox's stems model isn't one RB Stems Plus knows."
+    return m.ours.contains(sha) ? "rekordbox still has the Demucs v4 model." : "rekordbox's stems model isn't one RB Stems Plus knows."
 }

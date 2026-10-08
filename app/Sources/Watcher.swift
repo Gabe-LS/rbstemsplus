@@ -105,7 +105,7 @@ func watcherCheck(app: String, putOff: inout Set<String>, log: (String) -> Void)
     // leaves the again-mark anew
     safeRemove(watcherAgainFile)
     let c = chosen()
-    log("run: \(watcherName) \(appVersion) (\(appBuild)); rekordbox \(rekordboxVersion()), engine \(engineVersion()), Stems Plus \(stemsPlusPresent() ? "on" : "off"), Stems Cache \(stemsCachePresent() ? "on" : "off"); chosen: model=\(c.model) cache=\(c.cache)")
+    log("run: \(watcherName) \(appVersion) (\(appBuild)); rekordbox \(rekordboxVersion()), engine \(engineVersion()), Demucs v4 \(stemsPlusPresent() ? "on" : "off"), Stems Cache \(stemsCachePresent() ? "on" : "off"); chosen: model=\(c.model) cache=\(c.cache)")
     // what went missing, less what the user was already told can't be reinstalled yet
     let keys = missingKeys().filter { !dismissed().contains(unsupportedKey($0)) }
     if keys.isEmpty { log("nothing to ask"); return true }
@@ -169,7 +169,7 @@ func watcherPrompt(_ keys: [String]) -> String {
     return Sheet(title: d.title, message: d.message, buttons: d.buttons, inline: true).runAlone()
 }
 
-/// What the watcher says when Stems Plus (`modelOff`) and/or Stems Cache (`cacheOff`) went
+/// What the watcher says when Demucs v4 (`modelOff`) and/or Stems Cache (`cacheOff`) went
 /// missing, judged against the last payload.json's version lists (`engineOK`, `rekordboxOK`).
 /// A feature is blocked when its version isn't listed (each on its own: Stems Cache works with
 /// either model). When nothing that went missing can be reinstalled, it says
@@ -181,11 +181,11 @@ func watcherDialog(modelOff: Bool, cacheOff: Bool, engine: String, rekordbox: St
     let both = modelOff && cacheOff
     let rekordboxLine = "doesn't support rekordbox \(rekordbox) yet"
     if (!modelOff || modelBlocked) && (!cacheOff || cacheBlocked) {
-        // one feature off: "It doesn't support …"; both: each by name
+        // one feature off: "It isn't available for …" or "It doesn't support …"; both: each by name
         let why: String
-        if !both { why = "It " + (modelOff ? "doesn't support STEMS Engine \(engine) yet." : rekordboxLine + ".") }
-        else { why = "Stems Plus doesn't support STEMS Engine \(engine) yet, and Stems Cache \(rekordboxLine)." }
-        let off = both ? "Stems Plus and Stems Cache are off." : modelOff ? "Stems Plus is off." : "Stems Cache is off."
+        if !both { why = "It " + (modelOff ? "isn't available for STEMS Engine \(engine) yet." : rekordboxLine + ".") }
+        else { why = "Demucs v4 isn't available for STEMS Engine \(engine) yet, and Stems Cache \(rekordboxLine)." }
+        let off = both ? "Demucs v4 and Stems Cache are off." : modelOff ? "Demucs v4 is off." : "Stems Cache is off."
         return (cacheOff ? "rekordbox was updated" : "rekordbox installed a new STEMS Engine",
                 "\(off) \(why) RB Stems Plus checks again each time you open it, and asks you to reinstall once it can.",
                 ["OK", "Don't Ask Again for This Version"])
@@ -193,14 +193,14 @@ func watcherDialog(modelOff: Bool, cacheOff: Bool, engine: String, rekordbox: St
     let buttons = ["Reinstall Now", "Remind Me Later", "Don't Ask Again for This Version"]
     if both {
         let message = cacheBlocked
-            ? "Stems Plus and Stems Cache are off. Reinstall Stems Plus to separate tracks with the Stems Plus model. Stems Cache \(rekordboxLine), so it stays off for now."
+            ? "Demucs v4 and Stems Cache are off. Reinstall Demucs v4 to separate tracks with it. Stems Cache \(rekordboxLine), so it stays off for now."
             : modelBlocked
-            ? "Stems Plus and Stems Cache are off. Reinstall Stems Cache to reuse the stems it has saved. Stems Plus doesn't support STEMS Engine \(engine) yet, so it stays off for now."
-            : "Stems Plus and Stems Cache are off. Reinstall them to separate tracks with the Stems Plus model and reuse the stems Stems Cache has saved."
+            ? "Demucs v4 and Stems Cache are off. Reinstall Stems Cache to reuse the stems it has saved. Demucs v4 isn't available for STEMS Engine \(engine) yet, so it stays off for now."
+            : "Demucs v4 and Stems Cache are off. Reinstall them to separate tracks with Demucs v4 and reuse the stems Stems Cache has saved."
         return ("rekordbox was updated", message, buttons)
     }
     if cacheOff {
-        return ("rekordbox was updated", "Stems Cache is off\(plusWorks ? " (Stems Plus still works)" : ""). Reinstall it to reuse the stems it has saved.", buttons)
+        return ("rekordbox was updated", "Stems Cache is off\(plusWorks ? " (Demucs v4 still works)" : ""). Reinstall it to reuse the stems it has saved.", buttons)
     }
-    return ("rekordbox put its own stems model back", "Stems Plus is off. Reinstall it to separate tracks with the Stems Plus model instead of rekordbox's own.", buttons)
+    return ("rekordbox put its own stems model back", "Demucs v4 is off. Reinstall it to separate tracks with Demucs v4 instead of rekordbox's own model.", buttons)
 }

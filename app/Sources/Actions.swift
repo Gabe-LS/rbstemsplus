@@ -1,4 +1,4 @@
-// What the buttons do: install, reinstall and uninstall Stems Plus (our model, no admin) and
+// What the buttons do: install, reinstall and uninstall Demucs v4 (our model, no admin) and
 // Stems Cache (the bridge, one admin run), the complete uninstall, the watcher's LaunchAgent,
 // and the watcher's "Reinstall now" request.
 import AppKit
@@ -22,7 +22,7 @@ extension Controller {
             _ = self.alert("Download failed", "Nothing was changed. Check your internet connection and try again.", ["OK"])
             self.busy(nil)
         }
-        // payload.json: the latest. Offline, Stems Plus may use the last good one (its files may
+        // payload.json: the latest. Offline, Demucs v4 may use the last good one (its files may
         // be here); Stems Cache only if that one was downloaded within the last 7 days and its
         // bridge is here and verified (cacheFromSavedPayload). Never after a refused download.
         setStatus("Checking for the latest files…")
@@ -46,7 +46,7 @@ extension Controller {
         log(fresh != nil ? "using the payload.json just downloaded (payload \(m.payloadVersion))"
                          : "offline: using the saved payload.json (payload \(m.payloadVersion), downloaded \(Int((age ?? 0) / 3600)) hours ago, signed with the \(m.signedBy ?? "?") key)")
         onMain { self.updateFound(m) }                  // the notice follows the latest payload.json
-        if wantModel, let why = stemsPlusBlocked() { log("Stems Plus not installed: \(why)"); wantModel = false }
+        if wantModel, let why = stemsPlusBlocked() { log("Demucs v4 not installed: \(why)"); wantModel = false }
         if wantCache && !optInOnly, let why = stemsCacheBlocked() { log("Stems Cache not installed: \(why)"); wantCache = false }
         var c = chosen()
         let modelFile = modelDir + "/hdemucs.onnx"
@@ -61,7 +61,7 @@ extension Controller {
         var got = Fetched.ok
         if copyModel {
             got = fetchAsset(m.model.file, to: m.modelPath, sha: m.model.sha256, size: m.model.size,
-                             what: "the Stems Plus model", status: setStatus, log: log)
+                             what: "the Demucs v4 model", status: setStatus, log: log)
         }
         if got == .ok && wantCache && !optInOnly {
             got = fetchAsset(m.bridge.file, to: m.bridgePath, sha: m.bridge.sha256, size: nil,
@@ -86,15 +86,15 @@ extension Controller {
             if copyModel {
                 // Pioneer's model is saved first (by checksum, with its STEMS Engine version), and
                 // only then replaced (Models.swift)
-                setStatus("Installing Stems Plus…")
+                setStatus("Installing Demucs v4…")
                 let r = installedModels(log).installOurs(from: m.modelPath, sha: m.model.sha256)
                 if !r.ok {
-                    log("Stems Plus not installed: \(r.message)")
-                    _ = alert(failedTitle, "Stems Plus couldn't be \(done). \(r.message) Nothing was changed.", ["OK"])
+                    log("Demucs v4 not installed: \(r.message)")
+                    _ = alert(failedTitle, "Demucs v4 couldn't be \(done). \(r.message) Nothing was changed.", ["OK"])
                     busy(nil); return
                 }
                 c.model = true
-            } else { log("Stems Plus: already in place"); c.model = true }
+            } else { log("Demucs v4: already in place"); c.model = true }
         }
         if wantCache && optInOnly {
             log("Stems Cache: already in rekordbox (installed from another account): turned on for this account")
@@ -125,7 +125,7 @@ extension Controller {
     }
 
     /// If there isn't room for an action, about how many GB it needs (rounded up to 0.1), else nil.
-    /// Stems Plus: the model's download (what is still missing of it), its copy in rekordbox and
+    /// Demucs v4: the model's download (what is still missing of it), its copy in rekordbox and
     /// Pioneer's saved model. Stems Cache: root's backup of rekordbox's executable and library
     /// (once per version), the library's copy for the bridge, the staging copy and the temporary
     /// copy codesign makes of the executable. Plus 200 MB to spare.
@@ -335,8 +335,8 @@ extension Controller {
         start("reinstall", reinstallBtn.title, "Reinstalling…") { self.install(model: c.model, cache: c.cache, force: true) }
     }
 
-    /// Reinstalls only what the user chose and went missing (the watcher's "Reinstall Now"): Stems
-    /// Plus alone needs no password, and an intact Stems Cache isn't re-signed. False if nothing is
+    /// Reinstalls only what the user chose and went missing (the watcher's "Reinstall Now"):
+    /// Demucs v4 alone needs no password, and an intact Stems Cache isn't re-signed. False if nothing is
     /// missing (nothing started).
     @discardableResult
     func reinstallMissing() -> Bool {
@@ -355,14 +355,14 @@ extension Controller {
     /// rekordbox's own model. No password.
     func startUninstallStemsPlus(_ label: String) {
         start("uninstall-plus", label, "Uninstalling…") {
-            guard self.rekordboxClosed() else { self.log("rekordbox is open: Stems Plus left in place"); self.busy(nil); return }
+            guard self.rekordboxClosed() else { self.log("rekordbox is open: Demucs v4 left in place"); self.busy(nil); return }
             let r = installedModels(self.log).restore()
             if r.ok {
                 setChosen(model: false, cache: chosen().cache)
             } else if r.noSpace {
-                _ = self.alert("Uninstall failed", "Stems Plus couldn't be removed. \(r.message) Free up some space and try again.", ["OK"])
+                _ = self.alert("Uninstall failed", "Demucs v4 couldn't be removed. \(r.message) Free up some space and try again.", ["OK"])
             } else {
-                let b = self.alert("Uninstall failed", "Stems Plus couldn't be removed. \(r.message) To get rekordbox's own stems model back, click Open Help.",
+                let b = self.alert("Uninstall failed", "Demucs v4 couldn't be removed. \(r.message) To get rekordbox's own stems model back, click Open Help.",
                                    ["OK", "Open Help"])
                 if b == "Open Help" { self.openHelp(modelHelpURL(installedModels { _ in })) }
             }
@@ -577,7 +577,7 @@ func missingParts(chosen c: (model: Bool, cache: Bool), plusPresent: Bool, cache
 
 /// The action's label for those parts, as the Reinstall button names them.
 func reinstallLabel(_ p: (model: Bool, cache: Bool)) -> String {
-    "Reinstall " + (p.model && p.cache ? "Stems Plus + Stems Cache" : p.cache ? "Stems Cache" : "Stems Plus")
+    "Reinstall " + (p.model && p.cache ? "Demucs v4 + Stems Cache" : p.cache ? "Stems Cache" : "Demucs v4")
 }
 
 // MARK: - offline installs
@@ -734,22 +734,22 @@ func modelHelpURL(_ m: Models) -> String { m.verifiedOriginals().isEmpty ? noSav
 /// features): what the command does. `paused`: Stems Cache's floor when its disk is under it,
 /// else nil (said only when the label names Stems Cache).
 func installNote(_ label: String, reinstall: Bool, paused: Int64?) -> String {
-    let plus = label.contains("Stems Plus"), cache = label.contains("Stems Cache")
+    let plus = label.contains("Demucs v4"), cache = label.contains("Stems Cache")
     var s: String
     if reinstall {
-        s = "Installs the latest version of " + (plus && cache ? "Stems Plus and Stems Cache" : cache ? "Stems Cache" : "Stems Plus") + " again."
+        s = "Installs the latest version of " + (plus && cache ? "Demucs v4 and Stems Cache" : cache ? "Stems Cache" : "Demucs v4") + " again."
     } else if plus && cache {
-        s = "Replaces rekordbox's stems model with the Stems Plus model, and saves the stems it separates so they load much faster the next time."
+        s = "Replaces rekordbox's stems model with Demucs v4, and saves the stems it separates so they load much faster the next time."
     } else if cache {
         s = "Saves the stems rekordbox separates, with either stems model, so they load much faster the next time."
     } else {
-        s = "Replaces rekordbox's stems model with the Stems Plus model. rekordbox's own model is kept, so it can be put back."
+        s = "Replaces rekordbox's stems model with Demucs v4. rekordbox's own model is kept, so it can be put back."
     }
     if cache, let floor = paused { s += " " + cachePausedAtInstall(floor) }
     return s
 }
 
-/// The Uninstall Stems Plus and Uninstall Stems Cache confirmations' text, for the button's
+/// The Uninstall Demucs v4 and Uninstall Stems Cache confirmations' text, for the button's
 /// `label`: what the command does, and that the saved stems stay.
 func uninstallNote(_ label: String) -> String {
     label.contains("Stems Cache") ? "Stops saving stems and puts rekordbox's original files back. The stems already saved are kept."

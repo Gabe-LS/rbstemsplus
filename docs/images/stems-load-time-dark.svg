@@ -14,11 +14,11 @@
 <text x="238" y="62" font-size="12" text-anchor="end" fill="#9198a1">every time you load the track</text>
 <path d="M250,30 H382.5 Q386.5,30 386.5,34 V60 Q386.5,64 382.5,64 H250 Z" fill="#3987e5"/>
 <text x="394.5" y="52" font-size="14" font-weight="600" fill="#f0f6fc">about 26 s</text>
-<text x="238" y="101" font-size="14" font-weight="600" text-anchor="end" fill="#f0f6fc">Stems Plus, first load</text>
+<text x="238" y="101" font-size="14" font-weight="600" text-anchor="end" fill="#f0f6fc">Demucs v4, first load</text>
 <text x="238" y="118" font-size="12" text-anchor="end" fill="#9198a1">the track is separated</text>
 <path d="M250,86 H650.25 Q654.25,86 654.25,90 V116 Q654.25,120 650.25,120 H250 Z" fill="#d95926"/>
 <text x="662.25" y="108" font-size="14" font-weight="600" fill="#f0f6fc">about 77 s</text>
-<text x="238" y="157" font-size="14" font-weight="600" text-anchor="end" fill="#f0f6fc">Stems Plus, next loads</text>
+<text x="238" y="157" font-size="14" font-weight="600" text-anchor="end" fill="#f0f6fc">Demucs v4, next loads</text>
 <text x="238" y="174" font-size="12" text-anchor="end" fill="#9198a1">with Stems Cache</text>
 <path d="M250,142 H282.75 Q286.75,142 286.75,146 V172 Q286.75,176 282.75,176 H250 Z" fill="#199e70"/>
 <text x="294.75" y="164" font-size="14" font-weight="600" fill="#f0f6fc">about 7 s</text>

@@ -18,7 +18,7 @@ func stemsCachePresent() -> Bool {
 
 /// Which of rekordbox's own models the installed bridge saves stems for, by checksum, from the
 /// line it carries ("rbstems-cache: rebuild=1 pioneer=<sha>,<sha>;"). nil without a bridge, or for
-/// a bridge without the line (1.0's, which saves only the Stems Plus model's stems).
+/// a bridge without the line (1.0's, which saves only the Demucs v4 model's stems).
 func bridgeCacheModels(_ path: String = rbLib) -> [String]? {
     guard let d = FileManager.default.contents(atPath: path) else { return nil }
     return bridgeCacheModels(data: d)

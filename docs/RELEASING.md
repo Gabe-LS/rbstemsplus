@@ -191,7 +191,7 @@ Engine … yet") until a release lists it:
    and to the `rbstems_caps` line (the app reads that line from the installed bridge).
    `REBUILD_VERSION` changes only when the rebuild itself changes (it then orphans every rebuilt
    entry); a new listed model doesn't need it.
-4. **Allow it for Stems Plus too** if it should be (`compat_stems_engine` in `scripts/build.sh`),
+4. **Allow it for Demucs v4 too** if it should be (`compat_stems_engine` in `scripts/build.sh`),
    which is separate.
 5. **Release notes:** users with Stems Cache click Reinstall Stems Cache once to get the new
    list.
@@ -272,9 +272,9 @@ clone** of the template.
    - [ ] rekordbox: STEMS on the same track twice (first a miss, then a hit, much faster);
          `~/Library/Logs/rbstemsplus/bridge.log` shows "miss … rebuilt", then the hits, and
          nothing "not cached" on ordinary music
-   - [ ] Install Stems Plus: no prompt, no password; Pioneer's model saved in `originals/`;
+   - [ ] Install Demucs v4: no prompt, no password; Pioneer's model saved in `originals/`;
          the same track again is a new first separation (its own cache folder), then hits
-   - [ ] Uninstall Stems Plus: no password; Stems Cache stays green; the track loads from the
+   - [ ] Uninstall Demucs v4: no password; Stems Cache stays green; the track loads from the
          stems saved with rekordbox's model
    - [ ] a second, standard account (`sysadminctl -addUser`, rekordbox's `demucs3_model` folder
          copied in): the light says "installed from another account"; Install Stems Cache asks

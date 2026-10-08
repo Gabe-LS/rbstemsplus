@@ -1,9 +1,9 @@
 // Compatibility gating: whether each feature can be installed on this Mac. The lists come from
 // payload.json's "compatible" block (the built-in 1.0.0 list until one is downloaded).
-// - Stems Plus: the STEMS Engine version (demucs3_ver.txt) is listed.
+// - Demucs v4: the STEMS Engine version (demucs3_ver.txt) is listed.
 // - Stems Cache: rekordbox is installed, the user is an administrator, the rekordbox version is
 //   listed, and Pioneer's ONNX Runtime is 1.18.x and validly signed by AlphaTheta. It works with
-//   either stems model, so it doesn't need Stems Plus (nor a STEMS Engine yet: the light says
+//   either stems model, so it doesn't need Demucs v4 (nor a STEMS Engine yet: the light says
 //   when it starts saving).
 // Each reason is one line for the status line, naming the feature. Uninstalling is never gated.
 import Foundation
@@ -37,12 +37,12 @@ let userIsAdmin: Bool = {
     return runTool("/usr/bin/id", ["-Gn"]).1.split(separator: " ").contains("admin")
 }()
 
-/// Why Stems Plus can't be installed on this Mac, or nil if it can.
+/// Why Demucs v4 can't be installed on this Mac, or nil if it can.
 func stemsPlusBlocked() -> String? {
     if !rekordboxInstalled() { return "rekordbox 7 isn't installed." }
     let engine = engineVersion()
     if engine.isEmpty { return "Open rekordbox and turn on STEMS once, so it downloads its STEMS Engine." }
-    if !engineSupported(engine) { return "Stems Plus doesn't support STEMS Engine \(engine) yet." + checksAgain }
+    if !engineSupported(engine) { return "Demucs v4 isn't available for STEMS Engine \(engine) yet." + checksAgain }
     return nil
 }
 

@@ -330,7 +330,7 @@ enum Fetched { case ok, offline, damaged, noSpace }
 /// Makes sure `dest` holds the release asset `name` with this sha256 (and size): kept if it is
 /// already there, reused from an older payload folder, or downloaded and verified. A partial
 /// download left by an earlier try is resumed. `status` gets the line to show ("Downloading the
-/// Stems Plus model… 42%"); `what` names the file for the user.
+/// Demucs v4 model… 42%"); `what` names the file for the user.
 func fetchAsset(_ name: String, to dest: String, sha: String, size: Int?, what: String,
                 status: (String) -> Void, log: (String) -> Void) -> Fetched {
     let fm = FileManager.default

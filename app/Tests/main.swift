@@ -504,12 +504,12 @@ check(!mm().migrateLegacy(), "the migration runs once")
 // MARK: what stays after "Remove RB Stems Plus anyway"
 
 put(oursData, rbModel)
-check(modelLeftBehind(mm()) == "rekordbox still has the Stems Plus model.", "anyway: says rekordbox keeps our model")
+check(modelLeftBehind(mm()) == "rekordbox still has the Demucs v4 model.", "anyway: says rekordbox keeps our model")
 try? fm.removeItem(atPath: rbModel)
 check(modelLeftBehind(mm()) == "rekordbox has no stems model.", "anyway: says rekordbox has no model")
 
 // MARK: a model RB Stems Plus doesn't know is Pioneer's only if nothing says otherwise (it may be
-// a newer Stems Plus model whose payload.json is missing)
+// a newer Demucs v4 model whose payload.json is missing)
 
 let dataX = Data("a model nobody named".utf8), shaX = sha256(data: dataX)
 clearOriginals(); setEngine("0002"); put(dataA, rbModel)
@@ -564,12 +564,12 @@ check(anyway(lasting, answer: "Cancel") == .stop && asked.count == 1 && asked[0]
 check(anyway(lasting, answer: "Open Help") == .help(url: removeAnywayHelpURL) && modelHelpURL(mm()) == removeAnywayHelpURL,
       "anyway: Open Help stops, nothing deleted, and opens how to put the saved copy back")
 if case .remove(let about, let keep) = anyway(lasting, answer: removeAnywayButton) {
-    check(keep && about.contains("The saved copy of rekordbox's own stems model stays in \(orig).") && about.hasPrefix("rekordbox still has the Stems Plus model."),
+    check(keep && about.contains("The saved copy of rekordbox's own stems model stays in \(orig).") && about.hasPrefix("rekordbox still has the Demucs v4 model."),
           "anyway: a saved original that verifies is kept, and the user told where (\(about))")
 } else { check(false, "anyway: a saved original that verifies is kept, and the user told where") }
 put(Data("damaged".utf8), orig + "/\(shaA).onnx")
 if case .remove(let about, let keep) = anyway(Outcome(ok: false, message: "The saved copy of rekordbox's own stems model is damaged."), answer: removeAnywayButton) {
-    check(!keep && !asked[0].text.contains("keeps") && about == "rekordbox still has the Stems Plus model. To get rekordbox's own stems model back, click Open Help.",
+    check(!keep && !asked[0].text.contains("keeps") && about == "rekordbox still has the Demucs v4 model. To get rekordbox's own stems model back, click Open Help.",
           "anyway: with no saved original that verifies, everything goes")
 } else { check(false, "anyway: with no saved original that verifies, everything goes") }
 check(anyway(Outcome(ok: false, message: "x"), answer: "Open Help") == .help(url: noSavedModelHelpURL) && modelHelpURL(mm()) == noSavedModelHelpURL,
@@ -695,29 +695,29 @@ check(["uninstall", "remove-root-folder"].allSatisfy { !Controller.rootRunTexts(
 // MARK: the confirmations say what happens, never mentioning the password
 
 let floorLine = " Stems Cache will stop saving stems while your disk has less than 26 GB free."
-check(installNote("Install Stems Plus", reinstall: false, paused: 50_000_000_000)
-      == "Replaces rekordbox's stems model with the Stems Plus model. rekordbox's own model is kept, so it can be put back."
+check(installNote("Install Demucs v4", reinstall: false, paused: 50_000_000_000)
+      == "Replaces rekordbox's stems model with Demucs v4. rekordbox's own model is kept, so it can be put back."
       && installNote("Install Stems Cache", reinstall: false, paused: nil) == "Saves the stems rekordbox separates, with either stems model, so they load much faster the next time."
-      && installNote("Install Stems Plus + Stems Cache", reinstall: false, paused: nil)
-         == "Replaces rekordbox's stems model with the Stems Plus model, and saves the stems it separates so they load much faster the next time."
+      && installNote("Install Demucs v4 + Stems Cache", reinstall: false, paused: nil)
+         == "Replaces rekordbox's stems model with Demucs v4, and saves the stems it separates so they load much faster the next time."
       && installNote("Install Stems Cache", reinstall: false, paused: 25_600_000_000)
          == "Saves the stems rekordbox separates, with either stems model, so they load much faster the next time." + floorLine,
       "install: what the command does, and the free-space floor only for Stems Cache")
-check(installNote("Reinstall Stems Plus", reinstall: true, paused: 25_600_000_000) == "Installs the latest version of Stems Plus again."
-      && installNote("Reinstall Stems Plus + Stems Cache", reinstall: true, paused: nil) == "Installs the latest version of Stems Plus and Stems Cache again."
+check(installNote("Reinstall Demucs v4", reinstall: true, paused: 25_600_000_000) == "Installs the latest version of Demucs v4 again."
+      && installNote("Reinstall Demucs v4 + Stems Cache", reinstall: true, paused: nil) == "Installs the latest version of Demucs v4 and Stems Cache again."
       && installNote("Reinstall Stems Cache", reinstall: true, paused: nil) == "Installs the latest version of Stems Cache again."
-      && installNote("Reinstall Stems Plus + Stems Cache", reinstall: true, paused: 25_600_000_000)
-         == "Installs the latest version of Stems Plus and Stems Cache again." + floorLine,
+      && installNote("Reinstall Demucs v4 + Stems Cache", reinstall: true, paused: 25_600_000_000)
+         == "Installs the latest version of Demucs v4 and Stems Cache again." + floorLine,
       "reinstall: names what the button names, and the free-space floor as Install does")
-check(uninstallNote("Uninstall Stems Plus") == "Puts rekordbox's own stems model back."
+check(uninstallNote("Uninstall Demucs v4") == "Puts rekordbox's own stems model back."
       && uninstallNote("Uninstall Stems Cache") == "Stops saving stems and puts rekordbox's original files back. The stems already saved are kept.",
       "uninstall: what the command does, and the saved stems kept")
-check(([installNote("Install Stems Plus + Stems Cache", reinstall: false, paused: 50_000_000_000),
-        installNote("Reinstall Stems Plus + Stems Cache", reinstall: true, paused: 50_000_000_000),
-        uninstallNote("Uninstall Stems Plus"), uninstallNote("Uninstall Stems Cache"), uninstallEverythingMessage(othersCache: true, noSavedModel: true, stems: "")]
+check(([installNote("Install Demucs v4 + Stems Cache", reinstall: false, paused: 50_000_000_000),
+        installNote("Reinstall Demucs v4 + Stems Cache", reinstall: true, paused: 50_000_000_000),
+        uninstallNote("Uninstall Demucs v4"), uninstallNote("Uninstall Stems Cache"), uninstallEverythingMessage(othersCache: true, noSavedModel: true, stems: "")]
        + ["install", "reinstall", "uninstall", "remove-root-folder"].map { Controller.rootRunTexts($0).status })
       .allSatisfy { !$0.lowercased().contains("password") }, "no confirmation or status line mentions the password")
-check([installNote("Install Stems Plus + Stems Cache", reinstall: false, paused: nil), installNote("Reinstall Stems Cache", reinstall: true, paused: nil),
+check([installNote("Install Demucs v4 + Stems Cache", reinstall: false, paused: nil), installNote("Reinstall Stems Cache", reinstall: true, paused: nil),
        uninstallEverythingMessage(othersCache: true, noSavedModel: true, stems: "")]
       .allSatisfy { !$0.contains("permission") && !$0.contains("ask") && !$0.contains("quit") },
       "confirmations say what the command does, not side events (permission prompts, questions, quitting)")
@@ -741,12 +741,12 @@ check(standardAccountLine(admin: false, cacheTraces: true, cacheChosen: true) ==
 
 func parts(_ p: (model: Bool, cache: Bool)) -> [Bool] { [p.model, p.cache] }
 check(parts(missingParts(chosen: (true, true), plusPresent: false, cachePresent: true)) == [true, false]
-      && reinstallLabel((true, false)) == "Reinstall Stems Plus",
-      "Reinstall Now after Stems Plus is off: Stems Plus alone (no password), the intact Stems Cache left alone")
+      && reinstallLabel((true, false)) == "Reinstall Demucs v4",
+      "Reinstall Now after Demucs v4 is off: Demucs v4 alone (no password), the intact Stems Cache left alone")
 check(parts(missingParts(chosen: (true, true), plusPresent: true, cachePresent: false)) == [false, true]
       && reinstallLabel((false, true)) == "Reinstall Stems Cache", "Reinstall Now after a rekordbox update: Stems Cache alone")
 check(parts(missingParts(chosen: (true, true), plusPresent: false, cachePresent: false)) == [true, true]
-      && reinstallLabel((true, true)) == "Reinstall Stems Plus + Stems Cache", "Reinstall Now with both off: both")
+      && reinstallLabel((true, true)) == "Reinstall Demucs v4 + Stems Cache", "Reinstall Now with both off: both")
 check(parts(missingParts(chosen: (true, false), plusPresent: true, cachePresent: false)) == [false, false]
       && parts(missingParts(chosen: (false, false), plusPresent: false, cachePresent: false)) == [false, false],
       "Reinstall Now: never what wasn't chosen, nothing when nothing chosen went missing")
@@ -813,27 +813,29 @@ func dialog(_ model: Bool, _ cache: Bool, engineOK: Bool = true, rbOK: Bool = tr
 }
 let notYet = ["OK", "Don't Ask Again for This Version"], reinstall = ["Reinstall Now", "Remind Me Later", "Don't Ask Again for This Version"]
 var w = dialog(false, true, plusWorks: true)
-check(w.title == "rekordbox was updated" && w.message == "Stems Cache is off (Stems Plus still works). Reinstall it to reuse the stems it has saved." && w.buttons == reinstall,
+check(w.title == "rekordbox was updated" && w.message == "Stems Cache is off (Demucs v4 still works). Reinstall it to reuse the stems it has saved." && w.buttons == reinstall,
       "watcher: Stems Cache off: the approved text")
 w = dialog(true, true)
 check(w.buttons == reinstall && w.message.contains("Reinstall them"), "watcher: both off, both supported: reinstall them")
 w = dialog(true, true, rbOK: false)
-check(w.buttons == reinstall && w.message.contains("Reinstall Stems Plus") && w.message.contains("rekordbox 7.2.20") && !w.message.contains("Reinstall them"),
-      "watcher: both off, rekordbox not supported: reinstall Stems Plus, and says Stems Cache stays off (\(w.message))")
+check(w.buttons == reinstall && w.message.contains("Reinstall Demucs v4 to separate tracks with it.") && w.message.contains("rekordbox 7.2.20") && !w.message.contains("Reinstall them"),
+      "watcher: both off, rekordbox not supported: reinstall Demucs v4, and says Stems Cache stays off (\(w.message))")
 w = dialog(true, true, engineOK: false)
-check(w.buttons == reinstall && w.message.contains("Reinstall Stems Cache") && w.message.contains("STEMS Engine 0003") && !w.message.contains("needs Stems Plus"),
+check(w.buttons == reinstall && w.message.contains("Reinstall Stems Cache") && w.message.contains("STEMS Engine 0003") && !w.message.contains("needs Demucs v4")
+      && w.message.contains("Demucs v4 isn't available for STEMS Engine 0003 yet"),
       "watcher: both off, STEMS Engine not supported: Stems Cache alone is offered (it works with rekordbox's own model) (\(w.message))")
 w = dialog(true, true, engineOK: false, rbOK: false)
 check(w.buttons == notYet && w.message.contains("STEMS Engine 0003") && w.message.contains("rekordbox 7.2.20"),
       "watcher: both off, neither version supported: names both (\(w.message))")
 w = dialog(true, false, engineOK: false)
-check(w.title == "rekordbox installed a new STEMS Engine" && w.buttons == notYet && w.message.hasPrefix("Stems Plus is off. It doesn't support STEMS Engine 0003 yet."),
-      "watcher: Stems Plus off, STEMS Engine not supported")
+check(w.title == "rekordbox installed a new STEMS Engine" && w.buttons == notYet && w.message.hasPrefix("Demucs v4 is off. It isn't available for STEMS Engine 0003 yet."),
+      "watcher: Demucs v4 off, STEMS Engine not supported")
 w = dialog(false, true, rbOK: false)
 check(w.title == "rekordbox was updated" && w.buttons == notYet && w.message.hasPrefix("Stems Cache is off. It doesn't support rekordbox 7.2.20 yet."),
       "watcher: Stems Cache off, rekordbox not supported")
 w = dialog(true, false)
-check(w.title == "rekordbox put its own stems model back" && w.buttons == reinstall, "watcher: Stems Plus off: reinstall it")
+check(w.title == "rekordbox put its own stems model back" && w.buttons == reinstall
+      && w.message == "Demucs v4 is off. Reinstall it to separate tracks with Demucs v4 instead of rekordbox's own model.", "watcher: Demucs v4 off: reinstall it")
 rc = cacheRemoval(folder: false, root: false)
 check(rc.0 == .removed && rc.1.isEmpty, "rekordbox and the root folder both gone: nothing to ask or run")
 rc = cacheRemoval(folder: true, root: false, run: .rekordboxMissing)
@@ -877,8 +879,8 @@ check(FileManager.default.fileExists(atPath: cacheVolumePath()) && cacheDir.hasP
 
 // MARK: the status lights: on, installed but not working right now, off
 
-check(plusLight(installed: true) == (.on, "Stems Plus is on.") && plusLight(installed: false) == (.off, "Stems Plus is off."),
-      "Stems Plus light: green when on, red when off")
+check(plusLight(installed: true) == (.on, "Demucs v4 is on.") && plusLight(installed: false) == (.off, "Demucs v4 is off."),
+      "Demucs v4 light: green when on, red when off")
 /// the Stems Cache light with rekordbox's own model unless said otherwise: this account chose it,
 /// rekordbox_model on, a bridge listing the model, STEMS Engine 0002, no low disk
 func cl(installed: Bool = true, plusOn: Bool = false, chosen: Bool = true, rekordboxModel: Bool = true, bridgeModels: [String]? = [String(repeating: "a", count: 64)],
@@ -886,11 +888,11 @@ func cl(installed: Bool = true, plusOn: Bool = false, chosen: Bool = true, rekor
     cacheLight(installed: installed, plusOn: plusOn, chosen: chosen, rekordboxModel: rekordboxModel, bridgeModels: bridgeModels, model: model, engine: engine, pausedFloor: pausedFloor)
 }
 check(cl(plusOn: true) == (.on, "Stems Cache is on.") && cl() == (.on, "Stems Cache is on."),
-      "Stems Cache light: green when installed and saving, with Stems Plus or with rekordbox's own (listed) model")
+      "Stems Cache light: green when installed and saving, with Demucs v4 or with rekordbox's own (listed) model")
 check(cl(installed: false, pausedFloor: 50 * gb) == (.off, "Stems Cache is off.") && cl(installed: false, plusOn: true, chosen: false) == (.off, "Stems Cache is off."),
       "Stems Cache light: red when not installed, whatever else")
 check(cl(plusOn: true, chosen: false, rekordboxModel: false, bridgeModels: nil, model: nil) == (.on, "Stems Cache is on."),
-      "Stems Cache light: with Stems Plus, green as in 1.0 (another account's bridge, an older bridge: it saves the Stems Plus model's stems)")
+      "Stems Cache light: with Demucs v4, green as in 1.0 (another account's bridge, an older bridge: it saves the Demucs v4 model's stems)")
 check(cl(chosen: false) == (.limited, "Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."),
       "Stems Cache light: rekordbox's own model, Stems Cache from another account: yellow, pointing at Install Stems Cache")
 check(cl(rekordboxModel: false) == (.limited, "Stems Cache doesn't save the stems of rekordbox's own model: rekordbox_model is 0 in config.ini."),
@@ -907,8 +909,26 @@ check(cl(plusOn: true, pausedFloor: 25_600_000_000) == (.limited, "Stems Cache s
       && cl(pausedFloor: 25_600_000_000) == (.limited, "Stems Cache stopped saving stems: your disk has less than 26 GB free."),
       "Stems Cache light: yellow under the free-space floor, giving the floor, with either model")
 check(![cl(chosen: false), cl(rekordboxModel: false), cl(bridgeModels: nil), cl(model: String(repeating: "b", count: 64)), cl(engine: "")]
-        .contains { $0.tip.contains("needs Stems Plus") || $0.tip.contains("only with Stems Plus") || $0.tip.contains("Install Stems Plus") },
-      "Stems Cache light: never says it needs Stems Plus")
+        .contains { $0.tip.contains("needs Demucs v4") || $0.tip.contains("only with Demucs v4") || $0.tip.contains("Install Demucs v4") },
+      "Stems Cache light: never says it needs Demucs v4")
+
+// MARK: the model feature is called Demucs v4 wherever the user reads it (the app stays RB Stems Plus)
+
+func oldName(_ s: String) -> Bool { s.range(of: "(?<!RB )Stems Plus", options: .regularExpression) != nil }
+check(oldName("Install Stems Plus") && !oldName("Remove RB Stems Plus Anyway"), "the old-name finder finds the feature, not the app")
+// every source line but comment lines; Report.swift still reads the log lines 1.1.0 and earlier wrote
+var stale: [String] = []
+let srcDir = fm.currentDirectoryPath + "/app/Sources"
+let sources = ((try? fm.contentsOfDirectory(atPath: srcDir)) ?? []).filter { $0.hasSuffix(".swift") }.sorted()
+let oldLogLines = ["\"Stems Plus not installed\"", "\"Stems Plus: installed\"", "\"Stems Plus: already in place\""]
+for f in sources {
+    for (i, l) in ((try? String(contentsOfFile: srcDir + "/" + f, encoding: .utf8)) ?? "").components(separatedBy: "\n").enumerated() {
+        if l.trimmingCharacters(in: .whitespaces).hasPrefix("//") { continue }
+        let code = f == "Report.swift" ? oldLogLines.reduce(l) { $0.replacingOccurrences(of: $1, with: "") } : l
+        if oldName(code) { stale.append("\(f):\(i + 1)") }
+    }
+}
+check(sources.count > 10 && stale.isEmpty, "no source string calls the model feature Stems Plus: \(sources.count) files, \(stale)")
 
 // MARK: what the installed bridge saves stems for
 
@@ -997,7 +1017,7 @@ check(!isRootScript("/usr/bin/sudo", ["-S", "-p", "", "-v"]) && !isRootScript("/
 var stepCritical: [String: Bool] = [:]
 let watched = Models(dir: rbm, originals: orig, ours: [oursSha], gate: mgate, log: { line in
     if line.hasPrefix("save Pioneer's model: saved") { stepCritical["save"] = critical.running }
-    if line.hasPrefix("Stems Plus: installed") { stepCritical["install"] = critical.running }
+    if line.hasPrefix("Demucs v4: installed") { stepCritical["install"] = critical.running }
     if line.hasPrefix("restore Pioneer's model: Pioneer's stems model is back") { stepCritical["restore"] = critical.running }
 })
 clearOriginals(); put(dataA, rbModel); setEngine("0002")
@@ -1056,10 +1076,10 @@ func marker(_ text: String, mtime: Int? = nil) {
 let myStart = processStartTime(getpid()) ?? -1
 check(myStart > 0 && myStart <= Int(Date().timeIntervalSince1970), "this process's start time is known")
 check(processStartTime(done.processIdentifier) == nil && processStartTime(0) == nil, "a process that has gone has no start time")
-setBusyMarker(Action(id: "install", label: "Install Stems Plus"), at: bm)
-check((try? String(contentsOfFile: bm, encoding: .utf8)) == "\(getpid())\n\(myStart)\ninstall\nInstall Stems Plus\n", "marker: pid, start time, then the action")
+setBusyMarker(Action(id: "install", label: "Install Demucs v4"), at: bm)
+check((try? String(contentsOfFile: bm, encoding: .utf8)) == "\(getpid())\n\(myStart)\ninstall\nInstall Demucs v4\n", "marker: pid, start time, then the action")
 check(appBusy(bm) && leftoverAction(bm, wait: 0) == nil, "marker: this process's own: live, and no leftover")
-marker("\(getpid())\n\(myStart + 1)\ninstall\nInstall Stems Plus\n")
+marker("\(getpid())\n\(myStart + 1)\ninstall\nInstall Demucs v4\n")
 check(!appBusy(bm) && leftoverAction(bm, wait: 0)?.id == "install", "marker: this pid with another start time (the pid used again): not live, a leftover")
 let writer = sleeperAt(procs + "/marker/sleeper"), heldStart = processStartTime(writer) ?? -1
 marker("\(writer)\n\(heldStart)\nuninstall-all\nUninstall RB Stems Plus completely\n")

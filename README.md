@@ -6,7 +6,7 @@ open source.
 [What it does](#what-it-does) · [What you get](#what-you-get) · [Install](#install) ·
 [FAQ](#faq) · [Troubleshooting](docs/troubleshooting.md) · [Get help](#get-help)
 
-<img src="docs/images/main-window.png" width="700" alt="The RB Stems Plus window with both lights green: Stems Plus and Stems Cache are on. Buttons on the left, the log on the right.">
+<img src="docs/images/main-window.png" width="700" alt="The RB Stems Plus window with both lights green: Demucs v4 and Stems Cache are on. Buttons on the left, the log on the right.">
 
 ## What it does
 
@@ -17,13 +17,13 @@ works the stems out on your Mac with a "model": a program trained to tell the pa
 
 RB Stems Plus is a small app with two features:
 
-- **Stems Plus: a different stems model.** It swaps rekordbox's model for Demucs v4, the newer
-  version of Meta's open source separation model that rekordbox's own is based on. It doesn't
+- **Demucs v4: a different stems model.** It swaps rekordbox's model for Meta's Demucs v4, the
+  newer version of the open source separation model that rekordbox's own is based on. It doesn't
   change the rekordbox app.
 - **Stems Cache: much faster reloads.** rekordbox separates a track again every time you load
   it. Stems Cache keeps the stems it already made, so the next time you load that track they
   come back in seconds, without separating the track again. It works with either model,
-  rekordbox's own or Stems Plus, and it changes one file inside rekordbox (see
+  rekordbox's own or Demucs v4, and it changes one file inside rekordbox (see
   [Honest risks](#honest-risks)).
 
 Install either one, or both.
@@ -32,49 +32,47 @@ Install either one, or both.
 
 ### Which model sounds better? It depends on your music
 
-rekordbox's own model is Demucs v3, retuned by Pioneer. Stems Plus uses Demucs v4, Meta's newer
-version. They split some sounds differently, and which split is better depends on the music, and
-on the stem:
+rekordbox's own model is Demucs v3, retuned by Pioneer. Demucs v4 is Meta's newer version. They
+split some sounds differently, and which split is better depends on the music, and on the stem:
 
-- **Pop, rock and rap:** on MUSDB18, a standard test of 50 songs with their real stems, Stems Plus
+- **Pop, rock and rap:** on MUSDB18, a standard test of 50 songs with their real stems, Demucs v4
   came closer to the real stems on every stem: bass on 45 of 50 songs, drums on 44, the rest of
   the music on 41, vocals on 36.
-- **Electronic tracks:** on six electronic productions with their producers' stems, Stems Plus was
+- **Electronic tracks:** on six electronic productions with their producers' stems, Demucs v4 was
   closer on drums and bass (about 2.5 dB at the median, roughly 40% less bleed), and rekordbox's
   model on vocals and the rest of the music. Not on every track: one went to rekordbox's model on
   bass too.
 - **Rumble techno:** on *Lunfardo* by Ignez, rekordbox's model keeps a short low note before each
-  kick in the bass stem. Stems Plus puts it in the drums until the track opens up, and to our
+  kick in the bass stem. Demucs v4 puts it in the drums until the track opens up, and to our
   ears rekordbox's split was closer. We tried many other models on the same minute and got
   different results from each:
-  - Meta's htdemucs, htdemucs_ft and mdx_extra, and ZFTurbo's SCNet and BS-RoFormer did the same
-    as Stems Plus;
+  - Meta's htdemucs (the same model, run outside rekordbox), htdemucs_ft and mdx_extra, and
+    ZFTurbo's SCNet and BS-RoFormer did the same;
   - Demucs v4's six-stem version and Meta's original Demucs v3 caught part of it;
   - AudioShake and Ableton Live's stem separation each made yet another split.
-- **Synthetic techno loops with known stems:** close. With a held sub bass Stems Plus came closer
+- **Synthetic techno loops with known stems:** close. With a held sub bass Demucs v4 came closer
   on average. With short rolling bass notes both did much worse, and rekordbox's model was
   slightly closer on 5 of 8 loops.
 
-So try both on your own tracks and keep the one you like. **Uninstall Stems Plus** puts
-rekordbox's model back any time, and **Install Stems Plus** brings Stems Plus back. Stems Cache
-works with both and keeps the stems saved with each.
+So try both on your own tracks and keep the one you like. **Uninstall Demucs v4** puts rekordbox's
+model back any time, and **Install Demucs v4** brings it back. Stems Cache works with both and
+keeps the stems saved with each.
 
 ### Faster reloads, and the price
 
-The Stems Plus model does more work, so the first STEMS on a track takes longer. Stems Cache
-saves the stems once a track is separated, with either model, so every later load is much
-faster.
+Demucs v4 does more work, so the first STEMS on a track takes longer. Stems Cache saves the stems
+once a track is separated, with either model, so every later load is much faster.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/stems-load-time-dark.svg">
-  <img alt="Time until a 6½-minute track's stems are ready: rekordbox's own model about 26 seconds every time, Stems Plus about 77 seconds the first time, and about 7 seconds for the next loads with Stems Cache." src="docs/images/stems-load-time-light.svg" width="760">
+  <img alt="Time until a 6½-minute track's stems are ready: rekordbox's own model about 26 seconds every time, Demucs v4 about 77 seconds the first time, and about 7 seconds for the next loads with Stems Cache." src="docs/images/stems-load-time-light.svg" width="760">
 </picture>
 
 Timed in rekordbox on an Apple Silicon Mac, from loading a 6½-minute track to its stems being
-ready. Stems Plus separates about 5 times faster than the music plays, rekordbox's own model
+ready. Demucs v4 separates about 5 times faster than the music plays, rekordbox's own model
 about 15 times.
 
-**Memory:** rekordbox's own model uses about 1.42 GB at its peak. The Stems Plus model, run
+**Memory:** rekordbox's own model uses about 1.42 GB at its peak. The Demucs v4 model, run
 with rekordbox's usual settings, peaks at about 2.30 GB. With Stems Cache installed it runs with
 a leaner setting and peaks at about 1.52 GB, with the same speed and the same stems.
 
@@ -110,10 +108,10 @@ Function** on.
 
    <img src="docs/images/install-terminal.png" width="640" alt="Terminal after the install command: Downloading RB Stems Plus, Installing RB Stems Plus in the Applications folder, RB Stems Plus is in your Applications folder and open. You can close Terminal.">
 
-3. **Click Install Stems Cache, Install Stems Plus, or both, one after the other** (after
+3. **Click Install Stems Cache, Install Demucs v4, or both, one after the other** (after
    **Continue** on the welcome message), and **Install** to confirm each. If a button is greyed
    out, the line under the buttons says why (see [Troubleshooting](docs/troubleshooting.md)).
-   - **Stems Plus** downloads the model (about 300 MB) and puts it in place. No password.
+   - **Demucs v4** downloads the model (about 300 MB) and puts it in place. No password.
    - **Stems Cache** needs your password and, the first time, macOS's permission (steps 4
      and 5).
 4. **Type your password** when it asks (*Password needed*), then click **Continue**.
@@ -128,7 +126,7 @@ Function** on.
 
    Installing Stems Cache takes about a minute. When the light of what you installed is green,
    you're done.
-6. **Open rekordbox, load a track and turn on STEMS.** With Stems Plus the first time takes
+6. **Open rekordbox, load a track and turn on STEMS.** With Demucs v4 the first time takes
    longer than before. Load it again later: with Stems Cache it's much faster.
 
 **Changed your mind?** Each feature can be added or removed on its own any time.
@@ -157,8 +155,8 @@ explained in the line under the buttons.
 ## After a rekordbox update
 
 - **A rekordbox update** puts Pioneer's original rekordbox back, so Stems Cache is off until you
-  reinstall it. Stems Plus keeps working, and your saved stems are kept.
-- **A new STEMS Engine** puts rekordbox's own model back, so Stems Plus is off. Stems Cache goes
+  reinstall it. Demucs v4 keeps working, and your saved stems are kept.
+- **A new STEMS Engine** puts rekordbox's own model back, so Demucs v4 is off. Stems Cache goes
   on saving stems if it supports that STEMS Engine; if not yet, its light turns yellow until
   an RB Stems Plus update does.
 
@@ -169,7 +167,7 @@ reinstalls only what went missing. Or open the app any time and click **Reinstal
 If RB Stems Plus doesn't support the new version yet, it says so instead, checks again each time
 you open it, and asks you to reinstall once it can.
 
-<img src="docs/images/rekordbox-was-updated.png" width="632" alt="The rekordbox was updated message: Stems Cache is off (Stems Plus still works). Reinstall it to reuse the stems it has saved. Buttons: Don't Ask Again for This Version, Remind Me Later, Reinstall Now.">
+<img src="docs/images/rekordbox-was-updated.png" width="632" alt="The rekordbox was updated message: Stems Cache is off (Demucs v4 still works). Reinstall it to reuse the stems it has saved. Buttons: Don't Ask Again for This Version, Remind Me Later, Reinstall Now.">
 
 ## Updating RB Stems Plus
 
@@ -190,7 +188,7 @@ rekordbox opens. **Clear Saved Stems** frees the space now.
 
 Open RB Stems Plus and click:
 - **Uninstall Stems Cache:** rekordbox gets Pioneer's original files back, byte for byte.
-- **Uninstall Stems Plus:** rekordbox gets its own stems model back. Stems Cache, if you have it,
+- **Uninstall Demucs v4:** rekordbox gets its own stems model back. Stems Cache, if you have it,
   goes on saving stems with that model.
 - **Uninstall RB Stems Plus Completely:** rekordbox goes back to exactly how it was, and RB Stems
   Plus deletes itself, its settings, its logs and the stems it saved.
@@ -204,7 +202,7 @@ Your music and your rekordbox library are never touched. The complete uninstall 
 - **It's unofficial.** AlphaTheta doesn't know about it or support it. A future rekordbox could
   change how STEMS works. RB Stems Plus then leaves rekordbox on its own model until it's
   updated.
-- **It changes rekordbox's files.** Stems Plus replaces rekordbox's model file. Stems Cache
+- **It changes rekordbox's files.** Demucs v4 replaces rekordbox's model file. Stems Cache
   replaces one file inside rekordbox.app and re-signs the app on your Mac, so while it's
   installed rekordbox is no longer signed by AlphaTheta. Pioneer's originals are kept, and
   uninstalling puts everything back. Reinstalling rekordbox from rekordbox.com also always gives
@@ -241,7 +239,7 @@ puts the app in Applications. You can [read it first](scripts/bootstrap.sh).
 without a paid Apple account trigger macOS's "damaged" or "unidentified developer" warnings.
 The command avoids them.
 
-**Will it break rekordbox?** Stems Plus swaps only the model file. Stems Cache replaces one file
+**Will it break rekordbox?** Demucs v4 swaps only the model file. Stems Cache replaces one file
 inside rekordbox and keeps Pioneer's original, which uninstalling puts back. If anything goes
 wrong, reinstalling rekordbox from rekordbox.com gives you Pioneer's app again.
 
@@ -258,23 +256,24 @@ it.**
 
 **Does it work with my controller, CDJs or USB exports?** RB Stems Plus only changes the
 separation done inside rekordbox on your Mac. A controller just controls rekordbox, so it gets
-the Stems Plus stems. It doesn't touch USB exports, CDJs or any other hardware.
+the Demucs v4 stems. It doesn't touch USB exports, CDJs or any other hardware.
 
 **Does it work with streaming tracks?** No. rekordbox doesn't separate streaming tracks, so STEMS,
 and RB Stems Plus with it, works only on tracks you have as files.
 
-**Which rekordbox versions work?** rekordbox 7. Stems Plus works with the STEMS Engine versions
-it knows; Stems Cache only with the rekordbox versions it was tested on (7.2.17 to 7.2.19 at
-release). The list is updated online, and the app tells you if your version isn't on it yet.
+**Which rekordbox versions work?** rekordbox 7. Demucs v4 works with the STEMS Engine versions
+RB Stems Plus knows; Stems Cache only with the rekordbox versions it was tested on (7.2.17 to
+7.2.19 at release). The list is updated online, and the app tells you if your version isn't on it
+yet.
 
 **Which Macs? Windows?** Mac only. Tested on macOS 26 Tahoe on an Apple Silicon Mac.
 
-**Do I need both features?** No. Each works on its own: Stems Plus changes the model, Stems Cache
+**Do I need both features?** No. Each works on its own: Demucs v4 changes the model, Stems Cache
 saves the stems of whichever model rekordbox uses. Install one, both, or add the other later.
 
 **Will my tracks sound better?** It depends on your music: see
 [Which model sounds better?](#which-model-sounds-better-it-depends-on-your-music). If you prefer
-rekordbox's model, **Uninstall Stems Plus** brings it back any time.
+rekordbox's model, **Uninstall Demucs v4** brings it back any time.
 
 **Does it work offline, at a gig?** Yes. Separating tracks and loading saved stems happen on
 your Mac, with no internet needed (we tested it with the network off).
@@ -300,7 +299,7 @@ Settings › General › Login Items & Extensions), the app says *"Reinstall rem
 then open it after rekordbox updates.
 
 **Do I have to reinstall after every rekordbox update?** For Stems Cache, yes: RB Stems Plus
-asks when the update is done (one click). Stems Plus survives rekordbox
+asks when the update is done (one click). Demucs v4 survives rekordbox
 updates, but not a new STEMS Engine download.
 
 **Can I change how much space saved stems use?** Yes, in [Settings](#settings). The stems are in
@@ -326,8 +325,8 @@ music or track names, and your user name is replaced. More in
 
 ## Licence and credits
 
-Made by Gabe-LS. MIT licence, see [LICENSE](LICENSE). The Stems Plus model is Meta's Demucs (MIT). Stems Cache
-includes libFLAC (BSD-3-Clause) and uses rekordbox's own ONNX Runtime. Full credits in
+Made by Gabe-LS. MIT licence, see [LICENSE](LICENSE). The Demucs v4 model is Meta's htdemucs (MIT).
+Stems Cache includes libFLAC (BSD-3-Clause) and uses rekordbox's own ONNX Runtime. Full credits in
 [NOTICE](NOTICE).
 
 rekordbox, Pioneer DJ and AlphaTheta are trademarks of AlphaTheta Corporation. RB Stems Plus is

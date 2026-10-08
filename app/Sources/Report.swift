@@ -156,7 +156,7 @@ func reportFacts() -> [(line: String, link: Bool)] {
                     payload: m?.payloadVersion, lastCheck: manifestAge()))
     add(signatureLine(valid: verify.0 == 0, verifyOutput: verify.1, signer: signer))
     // then the rest, still in the link while it fits
-    add("can install: Stems Plus \(stemsPlusBlocked() ?? "yes"); Stems Cache \(stemsCacheBlocked() ?? "yes")")
+    add("can install: Demucs v4: \(stemsPlusBlocked() ?? "yes"); Stems Cache \(stemsCacheBlocked() ?? "yes")")
     if let m = m {
         add("payload.json: payload \(m.payloadVersion), app \(m.app.version), model \(m.model.sha256.prefix(12)), bridge \(m.bridge.sha256.prefix(12))")
         add("compatible: rekordbox \(m.compatible.rekordbox.joined(separator: " ")), ONNX Runtime \(m.compatible.ortVersionPrefix)x, STEMS Engine \(m.compatible.stemsEngine.joined(separator: " "))")
@@ -193,7 +193,7 @@ func lightColour(_ look: LightLook) -> String {
 }
 
 func appLine(version: String, build: String, plus: (look: LightLook, tip: String), cache: (look: LightLook, tip: String)) -> String {
-    "RB Stems Plus: \(version) (\(build)); lights: Stems Plus \(lightColour(plus.look)) (\(plus.tip)), Stems Cache \(lightColour(cache.look)) (\(cache.tip))"
+    "RB Stems Plus: \(version) (\(build)); lights: Demucs v4 \(lightColour(plus.look)) (\(plus.tip)), Stems Cache \(lightColour(cache.look)) (\(cache.tip))"
 }
 
 func macLine(os: String, model: String, chip: String, arch: String, memory: UInt64, language: String) -> String {
@@ -208,7 +208,7 @@ func rekordboxLine(version: String?, running: Bool, rosetta: Bool?, engine: Stri
 
 func installedLine(plus: Bool, cache: Bool, chosenModel: Bool, chosenCache: Bool, modelSha: String, modelSize: Int?) -> String {
     func yn(_ b: Bool) -> String { b ? "yes" : "no" }
-    return "installed: Stems Plus \(yn(plus)), Stems Cache \(yn(cache)); chosen: Stems Plus \(yn(chosenModel)), Stems Cache \(yn(chosenCache)); "
+    return "installed: Demucs v4 \(yn(plus)), Stems Cache \(yn(cache)); chosen: Demucs v4 \(yn(chosenModel)), Stems Cache \(yn(chosenCache)); "
         + "model in rekordbox: \(modelSha.prefix(12))\(modelSize.map { " (\($0) bytes)" } ?? "")"
 }
 
@@ -244,8 +244,9 @@ let lastProblemWindow: TimeInterval = 3 * 3600
 /// then the newest 3 ERROR lines of bridge.log. Only lines of the lastProblemWindow before `now`,
 /// each with its date and time; a line without a readable date is skipped. The same problem
 /// several times in a row is one line, "(3 times, last at HH:mm)". A problem the logs show fixed
-/// later is left out: an admin run that later succeeded under the same name, "Stems Plus not
-/// installed" before "Stems Plus: installed" or "already in place", "Stems Cache not installed"
+/// later is left out: an admin run that later succeeded under the same name, "Demucs v4 not
+/// installed" before "Demucs v4: installed" or "already in place" (and 1.1.0's "Stems Plus …"
+/// lines), "Stems Cache not installed"
 /// before a successful install or reinstall run, the bridge's loading errors before "bridge
 /// loaded", and its model reading errors before "Demucs session opened".
 /// `text` is "" and `title` nil when there is no problem; else `title` says what failed, in at
@@ -286,11 +287,12 @@ func lastProblem(appLog: String, bridgeLog: String, now: Date = Date()) -> (titl
             found.append((i, Problem(line: line, title: "admin run (\(name)) failed"), { j in okRun[j] == name }))
             run = nil; continue
         }
-        let plusMissing = m.hasPrefix("Stems Plus not installed"), cacheMissing = m.hasPrefix("Stems Cache not installed")
+        // "Stems Plus …": the lines 1.1.0 and earlier wrote, before the feature was renamed
+        let plusMissing = m.hasPrefix("Demucs v4 not installed") || m.hasPrefix("Stems Plus not installed"), cacheMissing = m.hasPrefix("Stems Cache not installed")
         guard !m.hasPrefix("report:"), plusMissing || cacheMissing
                 || failed.firstMatch(in: m, range: NSRange(m.startIndex..., in: m)) != nil else { continue }
         let fixed: (Int) -> Bool
-        if plusMissing { fixed = { j in app[j].message.hasPrefix("Stems Plus: installed") || app[j].message.hasPrefix("Stems Plus: already in place") } }
+        if plusMissing { fixed = { j in ["Demucs v4: installed", "Demucs v4: already in place", "Stems Plus: installed", "Stems Plus: already in place"].contains { app[j].message.hasPrefix($0) } } }
         else if cacheMissing { fixed = { j in okRun[j] == "install" || okRun[j] == "reinstall" } }
         else { fixed = { _ in false } }
         found.append((i, Problem(line: l, title: m), fixed))

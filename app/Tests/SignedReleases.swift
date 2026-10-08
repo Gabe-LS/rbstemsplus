@@ -301,11 +301,11 @@ func signedReleaseTests() {
     try? fm.removeItem(atPath: marker)
     check(!bootstrapBusy(), "bootstrap: no busy marker, it goes on")
     let start = myStart.map(String.init) ?? "0"
-    writeMarker("\(getpid())\n\(start)\ninstall\nInstall Stems Plus\n")
+    writeMarker("\(getpid())\n\(start)\ninstall\nInstall Demucs v4\n")
     check(bootstrapBusy(), "bootstrap: the app's marker, its writer running: stops")
     writeMarker("\(getpid())\n\(start)\n")
     check(bootstrapBusy(), "bootstrap: the update's marker (pid and start), its writer running: stops")
-    writeMarker("\(getpid())\n\((myStart ?? 0) - 100)\ninstall\nInstall Stems Plus\n")
+    writeMarker("\(getpid())\n\((myStart ?? 0) - 100)\ninstall\nInstall Demucs v4\n")
     check(!bootstrapBusy(), "bootstrap: a marker whose pid is now another process's (another start time): goes on")
     writeMarker("\(getpid())\ninstall\nInstall Stems Plus\n")
     check(bootstrapBusy(), "bootstrap: 1.0's marker (no start time), its writer running: stops")
