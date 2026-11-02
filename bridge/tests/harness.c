@@ -11,7 +11,14 @@
  *                               c (a with a loud tone burst), d (unrelated audio), wait (until the
  *                               background writer has stored every miss so far), sleep (1 s, for
  *                               the writer to finish when nothing is expected to be stored),
- *                               free=GB (the free space the test bridge sees from now on)
+ *                               free=GB (the free space the test bridge sees from now on),
+ *                               e, f, g (more unrelated audio), nN (unrelated audio number N: n1, n2, ...),
+ *                               sh=CMD (runs CMD with system())
+ *                               After creating the session it waits (10 s, or $RBSTEMS_HARNESS_READY) for the bridge's
+ *                               (or for $RBSTEMS_HARNESS_WAIT_FOR anywhere in the log, e.g. "cache: using")
+ *                               "summaries" line: the index loads off rekordbox's threads. Stored
+ *                               entries are counted in $RBSTEMS_HARNESS_CACHE (a chosen location),
+ *                               else in the default folder.
  *   harness prun MODEL WHAT...  the same with a model shaped like rekordbox's own (make_model.py
  *                               --pioneer): mag [1, 4, 2048, F] with bin 0 of the real parts at 1,
  *                               x non-zero. Each answer is "model" (exactly the model's), "cache" (x
@@ -115,7 +122,9 @@ static int missing(void) {
 /* ---------------------------------------------------------------- run */
 
 #define K 2.475f                          /* the test model's factor (make_model.py) */
-#define L 88200                                 /* 2 s: 20 summary frames */
+#ifndef L
+#define L 88200                                 /* 2 s: 20 summary frames (perfgate.sh: rekordbox's 485,100) */
+#endif
 #define SRC (L + 1000)
 #ifndef BURST
 #define BURST 0.05
@@ -143,9 +152,11 @@ static void source(unsigned seed, float *l, float *r) {
 /* the chunk "what" as planar [2][L]. The source is shifted and scaled so that its first L samples
  * have mean 0 and std 0.1 (as the bridge measures them): the test model's stems, xt * std + mean
  * = 0.2475 * mix each, then add up to 0.99 * mix, a residual of -40 dB, like a good model. */
+static unsigned nseed;                    /* "n<N>": unrelated audio N (a miss and a write each) */
+
 static void chunk(char what, float *mix) {
     static float l[SRC], r[SRC];
-    source(what == 'd' ? 7 : 1, l, r);
+    source(what == 'n' ? 1000 + nseed : what == 'd' ? 7 : what >= 'e' && what <= 'g' ? 11 + 2 * (unsigned)(what - 'e') : 1, l, r);
     double sum = 0, ss = 0;
     for (int i = 0; i < L; i++) sum += (double)l[i] + r[i];
     double mean = sum / (2 * L);
@@ -200,6 +211,41 @@ static void spec_shape(int F, double *out) {
     }
 }
 
+/* the bridge's log, as a string ("" if none) */
+static char *log_text(void) {
+    const char *home = getenv("RBSTEMS_TEST_HOME") ? getenv("RBSTEMS_TEST_HOME") : getenv("HOME");
+    char p[1200];
+    snprintf(p, sizeof p, "%s/Library/Logs/rbstemsplus/bridge.log", home ? home : "");
+    FILE *f = fopen(p, "r");
+    if (!f) return strdup("");
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *b = malloc((size_t)n + 1);
+    n = (long)fread(b, 1, (size_t)n, f);
+    b[n] = 0;
+    fclose(f);
+    return b;
+}
+
+/* waits until the bridge has dealt with the new session's index (its "summaries" line), unless it
+ * didn't take the session (", not cached") */
+static void wait_ready(void) {
+    int tenths = getenv("RBSTEMS_HARNESS_READY") ? atoi(getenv("RBSTEMS_HARNESS_READY")) * 10 : 100;
+    for (int t = 0; t < tenths; t++) {
+        char *b = log_text(), *s = NULL, *p = b;
+        while ((p = strstr(p, "Demucs session opened"))) s = p++;
+        char *eol = s ? strchr(s, '\n') : NULL;
+        const char *want = getenv("RBSTEMS_HARNESS_WAIT_FOR") ? getenv("RBSTEMS_HARNESS_WAIT_FOR") : "  summaries ";
+        int done = !s || (eol && memmem(s, (size_t)(eol - s), ", not cached", 12)) || (eol && strstr(eol, want))
+                   || (getenv("RBSTEMS_HARNESS_WAIT_FOR") && strstr(b, want));
+        free(b);
+        if (done) return;
+        usleep(100000);
+    }
+    printf("FAIL no \"summaries\" line from the bridge in time\n");
+}
+
 static int run(const char *model, int argc, char **argv, int pioneer) {
     const OrtApiBase *b = OrtGetApiBase();
     const OrtApi *a = b ? b->GetApi(ORT_API_VERSION) : NULL;
@@ -214,8 +260,10 @@ static int run(const char *model, int argc, char **argv, int pioneer) {
     if (!st) st = a->CreateSession(env, model, so, &s);
     if (!st) st = a->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mi);
     if (st) { printf("FAIL session: %s\n", a->GetErrorMessage(st)); return 1; }
+    wait_ready();
     char cache[1200];
-    snprintf(cache, sizeof cache, "%s/Library/Caches/rbstemsplus", getenv("HOME"));
+    if (getenv("RBSTEMS_HARNESS_CACHE")) snprintf(cache, sizeof cache, "%s", getenv("RBSTEMS_HARNESS_CACHE"));
+    else snprintf(cache, sizeof cache, "%s/Library/Caches/rbstemsplus", getenv("HOME"));
     static float mix[2 * L];
     static double shape[L];
     float mag1 = 1.0f, *mag = &mag1;
@@ -256,12 +304,17 @@ static int run(const char *model, int argc, char **argv, int pioneer) {
             setenv("RBSTEMS_TEST_FREE_GB", argv[k] + 5, 1);
             continue;
         }
+        if (!strncmp(argv[k], "sh=", 3)) {               /* a shell command between chunks (moving the folder...) */
+            if (system(argv[k] + 3) != 0) printf("FAIL sh: %s\n", argv[k] + 3);
+            continue;
+        }
         if (!strcmp(argv[k], "sleep")) {
             sleep(1);
             printf("stored %d\n", count_flac(cache));
             continue;
         }
         char what = argv[k][0];
+        if (what == 'n') nseed = (unsigned)atoi(argv[k] + 1);
         chunk(what, mix);
         if (gain != 1)
             for (int i = 0; i < 2 * L; i++) mix[i] = (float)(mix[i] * gain);

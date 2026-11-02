@@ -102,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Coming back to the app: what changed meanwhile (e.g. rekordbox downloaded its STEMS Engine,
     /// or was updated) shows at once, then the watcher's request, if any.
     func applicationDidBecomeActive(_ notification: Notification) {
+        LocationMonitor.shared.update()                 // where the stems are saved, in the background
         DispatchQueue.main.async { self.controller?.refresh(); self.controller?.checkRequest(); self.controller?.checkWatcherOn() }
     }
     /// "open -a" on an already open app arrives here, not as an activation

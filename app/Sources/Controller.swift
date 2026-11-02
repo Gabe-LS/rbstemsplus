@@ -22,11 +22,16 @@ final class Controller: NSObject {
     /// Set while the watcher's request waits for rekordbox to be closed (its dialog is up): a
     /// reopen or activation meanwhile doesn't ask again.
     var requestWaiting = false
+    /// Set once this run has asked "Stems Cache update": a payload.json downloaded later in the
+    /// run doesn't ask again (Not Now holds until the next launch).
+    var cacheUpdateAsked = false
     /// A line shown under the reasons in the status line between actions (e.g. an update notice).
     var notice: String?
     /// Shown in the status line for this run when 1.0's saved copy of Pioneer's model turned out
     /// to be ours (Models.swift, migrateLegacy).
     var modelNotice: String?
+    /// What a deletion in the stems' location left (LocationActions.swift), for the status line.
+    var locationNotice: String?
     /// The watcher's LaunchAgent is there but launchd won't run it (Actions.swift, watcherOff).
     var watcherIsOff = false
     /// "Update RB Stems Plus" in the app menu, shown when a newer RB Stems Plus is out (Update.swift).
@@ -112,6 +117,9 @@ final class Controller: NSObject {
     /// loop runs (sheets need it), an action left half-done by the last run, then the watcher's
     /// request.
     func startupChecks() {
+        // where the stems are saved, measured in the background from now on (LocationMonitor)
+        LocationMonitor.shared.onChange = { [weak self] in self?.refresh() }
+        LocationMonitor.shared.startObserving()
         work.async {
             // first: the watcher registered for this app's code (after an update or the install
             // command), before anything here changes a folder it watches
@@ -122,6 +130,8 @@ final class Controller: NSObject {
                 self.onMain { self.modelNotice = "There's no saved copy of rekordbox's own stems model, so uninstalling Demucs v4 can't put it back."; self.refresh() }
             }
             self.removeLeftovers()
+            // This Mac's stems left after a switch to a drive, under 3.3.3's conditions only
+            self.retryThisMacDeletion()
             // an account that chose Stems Cache before it saved rekordbox's own model's stems: on
             // for it too, as Install Stems Cache sets it now
             if chosen().cache && !configSets("rekordbox_model") {
@@ -137,6 +147,7 @@ final class Controller: NSObject {
             if resumed { _ = takeReinstallRequest() }           // the resumed action covers it
             self.startupDone = true
             if !resumed { self.checkRequest() }
+            self.offerCacheUpdate()                             // skipped while an action runs
             self.checkForUpdate()
             self.refresh()                                      // the update notice, if any
         }
@@ -177,15 +188,17 @@ final class Controller: NSObject {
     func refresh() {
         onMain {
             let plus = stemsPlusPresent(), cache = stemsCachePresent(), c = chosen(), cfg = readConfig()
-            // Stems Cache's free-space floor, as the bridge measures it (only while it's on in config.ini)
-            let paused = cache && cfg.enabled ? cachePausedFloor() : nil
+            // where the stems are saved, and its disk's free-space floor as the bridge measures it
+            // (only while it's on in config.ini): measured in the background (LocationMonitor)
+            let loc = LocationMonitor.shared.snapshot()
+            let paused = cache && cfg.enabled ? loc.pausedFloor : nil
             // with rekordbox's own model: whether the installed bridge saves its stems (by checksum,
             // worked out in the background the first time)
             let own = cache && !plus
             let light = cacheLight(installed: cache, plusOn: plus, chosen: c.cache, rekordboxModel: cfg.rekordboxModel,
                                    bridgeModels: own ? bridgeCacheModels() : nil,
                                    model: own ? currentModelSHA(done: { self.refresh() }) : nil,
-                                   engine: engineVersion(), pausedFloor: paused)
+                                   engine: engineVersion(), pausedFloor: paused, location: loc.lightTip, drive: loc.drive)
             for (icon, label, light) in [(self.plusIcon, self.plusLabel, plusLight(installed: plus)), (self.cacheIcon, self.cacheLabel, light)] {
                 let look = lightDrawing(light.look)
                 icon.image = NSImage(systemSymbolName: look.symbol, accessibilityDescription: look.description)?
@@ -220,6 +233,7 @@ final class Controller: NSObject {
             if let why = cacheWhy, !cache || c.cache, !lines.contains(why), standard == nil || why != needsAdminLine { lines.append(why) }
             if let s = standard { lines.append(s) }
             if cacheIsLink() { lines.append(cacheLinkLine) }
+            if let n = self.locationNotice { lines.append(n) }
             if self.watcherIsOff { lines.append(watcherOffLine) }
             if let n = self.modelNotice { lines.append(n) }
             if let n = self.notice { lines.append(n) }
@@ -292,9 +306,10 @@ func plusLight(installed: Bool) -> (look: LightLook, tip: String) {
 /// config.ini (`rekordboxModel`); the installed bridge is older than saving rekordbox's own model's
 /// stems (`bridgeModels` nil); or it doesn't list that model (`model`, its checksum; nil while
 /// unknown: not judged). With either model, also when it stopped saving for lack of space
-/// (`pausedFloor`: the floor its disk is under).
+/// (`pausedFloor`: the floor its disk is under; `drive`: the chosen drive's name, nil on this
+/// Mac), or when where it saves stems isn't usable now (`location`: the text, locationLight).
 func cacheLight(installed: Bool, plusOn: Bool, chosen: Bool, rekordboxModel: Bool, bridgeModels: [String]?, model: String?,
-                engine: String, pausedFloor: Int64?) -> (look: LightLook, tip: String) {
+                engine: String, pausedFloor: Int64?, location: String? = nil, drive: String? = nil) -> (look: LightLook, tip: String) {
     guard installed else { return (.off, "Stems Cache is off.") }
     if !plusOn {
         if engine.isEmpty { return (.limited, "Stems Cache starts saving stems once rekordbox has downloaded its STEMS Engine.") }
@@ -307,6 +322,7 @@ func cacheLight(installed: Bool, plusOn: Bool, chosen: Bool, rekordboxModel: Boo
             return (.limited, "Stems Cache doesn't support STEMS Engine \(engine) yet. When an RB Stems Plus update supports it, click Reinstall Stems Cache.")
         }
     }
-    if let floor = pausedFloor { return (.limited, cachePausedTip(floor)) }
+    if let tip = location { return (.limited, tip) }
+    if let floor = pausedFloor { return (.limited, cachePausedTip(floor, drive: drive)) }
     return (.on, "Stems Cache is on.")
 }

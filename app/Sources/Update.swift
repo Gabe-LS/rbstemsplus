@@ -1,4 +1,5 @@
-// Updates. At launch, at most once a day, the app downloads payload.json (Payload.swift); if its
+// Updates. At launch, at most once a day (or at once after the install command put a newer app
+// here: manifestDue), the app downloads payload.json (Payload.swift); if its
 // app.version is newer, a line in the status line and "Update RB Stems Plus" in the app menu. Update RB Stems Plus does
 // what the bootstrap does: download the app's zip, verify its sha256, then, once this app has quit,
 // copy the new app next to it, sign it ad hoc (its watcher helper first), swap the two in one step
@@ -12,15 +13,26 @@ let lsregister = "/System/Library/Frameworks/CoreServices.framework/Frameworks/L
 /// Whether `version` is newer than this app's ("1.0.10" > "1.0.9").
 func newerThanApp(_ version: String) -> Bool { version.compare(appVersion, options: .numeric) == .orderedDescending }
 
+/// Whether to download payload.json at launch: none saved, or it's a day old, or it's from before
+/// this app (the install command put a newer app here without saving the release's payload.json;
+/// its Stems Cache update would otherwise wait a day), or a feature is blocked by its version
+/// lists (a newer list may allow it; `blocked` is checked last).
+func manifestDue(age: TimeInterval?, savedApp: String?, app: String, blocked: () -> Bool) -> Bool {
+    guard let a = age, let s = savedApp else { return true }
+    return a > 86_400 || app.compare(s, options: .numeric) == .orderedDescending || blocked()
+}
+
 extension Controller {
-    /// At launch: the notice from the last payload.json, then a new one in the background if the
-    /// last is a day old, or if a feature is blocked by its version lists (a newer list may allow it).
+    /// At launch: the notice from the last payload.json, then a new one in the background when
+    /// manifestDue says so. A downloaded one may name a newer Stems Cache: asked at once
+    /// (offerCacheUpdate), not at the next launch.
     func checkForUpdate() {
-        if let m = savedManifest() { updateFound(m) }
-        guard (manifestAge() ?? .infinity) > 86_400 || blockedByVersionList() else { return }
+        let saved = savedManifest()
+        if let m = saved { updateFound(m) }
+        guard manifestDue(age: manifestAge(), savedApp: saved?.app.version, app: appVersion, blocked: blockedByVersionList) else { return }
         DispatchQueue.global().async {                   // not the work queue: actions mustn't wait for it
             guard let m = fetchManifest(self.log) else { return }
-            self.onMain { self.updateFound(m); self.refresh() }
+            self.onMain { self.updateFound(m); self.refresh(); self.offerCacheUpdate() }
         }
     }
 

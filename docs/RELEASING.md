@@ -193,8 +193,8 @@ Engine … yet") until a release lists it:
    entry); a new listed model doesn't need it.
 4. **Allow it for Demucs v4 too** if it should be (`compat_stems_engine` in `scripts/build.sh`),
    which is separate.
-5. **Release notes:** users with Stems Cache click Reinstall Stems Cache once to get the new
-   list.
+5. **Release notes:** users with Stems Cache get the new list when they update Stems Cache (the
+   app asks at launch when its bridge changed).
 
 ## Requirements (on the developer's Mac)
 
@@ -235,7 +235,23 @@ Engine … yet") until a release lists it:
 ```sh
 make check
 make test
+make bridge-test        # outside a sandbox: it attaches disk images
 ```
+
+`make bridge-test` runs the bridge's tests (chosen locations on exFAT, FAT32, APFS, HFS+ and an
+owners-on APFS image included), again with ASan and UBSan, and the fuzz targets. It fails when a
+test is skipped (no copy of Pioneer's library, no Rosetta, hdiutil refused): a release needs it
+to pass whole. Its last line ("bridge-test: run.sh N passed, 0 failed; SANITIZE=1 ...; fuzz: no
+failures (seed ...)") goes into the release commit's message.
+
+- [ ] Check libFLAC's pinned version (`FLAC_VERSION` in `bridge/build.sh`) against its advisories
+      (the bridge decodes files anyone who can write a chosen drive may control). The fuzz build
+      instruments libFLAC too: UBSan reports signed integer overflows inside libFLAC 1.5.0's
+      decoder on corrupt input (`fixed.c:590`, `lpc.c:1083`, restoring samples of a damaged
+      frame). Known and non-fatal in the gate: the arithmetic wraps, and the frame's CRC then
+      fails, so the entry is refused. A new libFLAC version: check whether they're gone.
+- [ ] No downgrades: a 1.1.x app over a 1.2 install ignores `cache_dir` and saves on This Mac;
+      the app never offers its own payload's older bridge (payload floor).
 
 ### 3. Test the TEST build of that commit on the VM
 
@@ -283,6 +299,18 @@ clone** of the template.
          then asks; Remind Me Later; Reinstall Now → the app reinstalls
    - [ ] rekordbox's own update → "rekordbox was prevented…" (Allow) → the watcher asks →
          Reinstall Now
+   - [ ] the previous release installed with Stems Cache, then Update RB Stems Plus: the new app
+         asks "Stems Cache update" once it opens (only when the bridge changed); Not Now → asked
+         again at the next launch; Update with rekordbox open → asks to quit it; Update →
+         password → the light green, `bridge.log` from the new bridge; the next launch asks
+         nothing
+   - [ ] the previous release installed with Stems Cache, then the new release with the install
+         command: the app asks "Stems Cache update" within seconds of opening, once
+   - [ ] a chosen drive ejected while rekordbox runs, then connected again: the light says to
+         connect it, then turns green within seconds; the same track hits again, no restart
+   - [ ] a chosen USB stick unplugged and plugged in again with no load meanwhile: the next load
+         of a saved track hits at once ("cache: checked again: using" in `bridge.log`), the light
+         stays green
    - [ ] each uninstall, then **Uninstall RB Stems Plus Completely**
 5. **Trace audit after the complete uninstall:**
    - [ ] rekordbox's file-tree hash equals the one before the install; `codesign --verify
@@ -290,7 +318,13 @@ clone** of the template.
    - [ ] Pioneer's model is back (its SHA-256, `435c9878…` on the template)
    - [ ] no `~/Library/Application Support/rbstemsplus`, `~/Library/Logs/rbstemsplus`,
          `~/Library/Caches/rbstemsplus`, `/Library/Application Support/rbstemsplus`,
-         LaunchAgent plist or background-item record (`sfltool dumpbtm`)
+         `~/Library/Preferences/io.github.rbstemsplus.app.plist` (macOS's own preferences of
+         the app, e.g. the folder chooser's last folder: removed a few seconds after it quits),
+         LaunchAgent plist or background-item record (`sfltool dumpbtm`); kept in the Dock
+         before the uninstall, its icon is gone from the Dock after it
+   - [ ] with a chosen drive connected: no `RB Stems Plus Cache.noindex` on it, and on exFAT no
+         `._RB Stems Plus Cache.noindex` next to where it was; with the drive not connected, the
+         final alert names the folder left on it
 6. **Faults worth a quick run:** a tampered download (append a byte to the zip on the server:
    the bootstrap must refuse with "checksum mismatch" and change nothing; append a byte to
    `payload.json`, or remove `payload.json.sig`: the bootstrap must refuse with "couldn't be

@@ -4,7 +4,12 @@
 # (RBSTEMS_TEST_HOME, in place of the account's) points into it, and Pioneer's library is a
 # read-only scratch copy.
 #
-#   bridge/tests/run.sh          KEEP=1 keeps the scratch folder
+#   bridge/tests/run.sh          KEEP=1 keeps the scratch folder; REQUIRE=1 (make bridge-test)
+#                                fails when any test is skipped
+#
+# Chosen locations (cache_dir) are tested on scratch folders (RBSTEMS_TEST_ANY_VOLUME: any volume
+# is accepted) and on disk images attached once per file system with hdiutil (exFAT, FAT32,
+# APFS, HFS+, APFS with owners on), detached at the end.
 #
 # Pioneer's ONNX Runtime 1.18 is copied from (first found, must be signed by team 6BRHGXQ6VU):
 #   $RBSTEMS_REAL_ORT
@@ -19,8 +24,15 @@ here="$(cd "$(dirname "$0")" && pwd)"
 LIB=libonnxruntime.1.18.0.dylib
 TEAM=6BRHGXQ6VU
 
-scratch="$(mktemp -d "${TMPDIR:-/tmp}/rbstems-tests.XXXXXX")"
-if [ "${KEEP:-}" = 1 ]; then echo "scratch: $scratch"; else trap 'rm -rf "$scratch"' EXIT; fi
+scratch="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/rbstems-tests.XXXXXX")" && pwd -P)"   # no link on the way (/var)
+mounts=()
+cleanup() {
+  local mp
+  for mp in ${mounts[@]+"${mounts[@]}"}; do hdiutil detach -quiet -force "$mp" 2> /dev/null; done
+  [ "${KEEP:-}" = 1 ] || rm -rf "$scratch"
+}
+if [ "${KEEP:-}" = 1 ]; then echo "scratch: $scratch"; fi
+trap cleanup EXIT
 mkdir -p "$scratch/ort" "$scratch/pioneer" "$scratch/fake" "$scratch/model"
 target="$scratch/ort/$LIB"                  # the test bridge's "real" library: a symlink per test
 
@@ -44,8 +56,10 @@ for c in "${cands[@]}"; do
 done
 [ -n "$real" ] || echo "real library: none found (tests that need it are skipped)"
 
-echo "building the test bridge"
-"$here/../build.sh" --test "$target" "$scratch/bridge" > "$scratch/build.log" 2>&1 \
+san=
+if [ "${SANITIZE:-}" = 1 ]; then san="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -g"; fi
+echo "building the test bridge${san:+ (ASan and UBSan)}"
+RBSTEMS_SANITIZE="${SANITIZE:-}" "$here/../build.sh" --test "$target" "$scratch/bridge" > "$scratch/build.log" 2>&1 \
   || { cat "$scratch/build.log"; echo "the test bridge didn't build"; exit 1; }
 bridge="$scratch/bridge/$LIB"
 
@@ -54,9 +68,9 @@ clang -dynamiclib -arch arm64 -arch x86_64 -mmacosx-version-min=12.0 -Wall -Wext
 fake="$scratch/fake/$LIB"
 
 archs=(arm64)
-if arch -x86_64 /usr/bin/true 2>/dev/null; then archs+=(x86_64); else skip "x86_64: Rosetta is not installed"; fi
+if [ "${SANITIZE:-}" = 1 ]; then :; elif arch -x86_64 /usr/bin/true 2>/dev/null; then archs+=(x86_64); else skip "x86_64: Rosetta is not installed"; fi
 for a in "${archs[@]}"; do
-  clang -arch "$a" -mmacosx-version-min=12.0 -O1 -Wall -Wextra -I"$here/.." "$here/harness.c" "$bridge" \
+  clang -arch "$a" -mmacosx-version-min=12.0 -O1 -Wall -Wextra $san -I"$here/.." "$here/harness.c" "$bridge" \
     -Wl,-rpath,"$scratch/bridge" -o "$scratch/harness-$a" || exit 1
 done
 
@@ -79,10 +93,17 @@ point() { ln -sfn "$1" "$target"; }                      # what the test bridge 
 # a new home; the cache's disk is 1000 GB with 1000 GB free unless a test says otherwise (free="",
 # disk="": measured; disk=0: its size can't be read); ours: a checksum the test bridge counts as one
 # of our models; clone_fail: its options copy fails
-fresh() { h="$scratch/home-$arch-$1"; th="$h"; free=1000; disk=1000; free_every=; statfs=; ours=; pioneer=; clone_fail=; rm -rf "$h"; mkdir -p "$h"; }
+fresh() { h="$scratch/home-$arch-$1"; th="$h"; free=1000; disk=1000; free_every=; statfs=; ours=; pioneer=; clone_fail=; anyvol=; hcache=; wdelay=; near=1; rm -rf "$h"; mkdir -p "$h"; }
 harness() {                                              # runs the harness with HOME=$h, the bridge's home $th
   local e=(env -u RBSTEMS_TEST_FREE_GB -u RBSTEMS_TEST_DISK_GB -u RBSTEMS_TEST_FREE_SECONDS -u RBSTEMS_TEST_STATFS
-           -u RBSTEMS_TEST_OUR_MODEL -u RBSTEMS_TEST_PIONEER_MODEL -u RBSTEMS_TEST_CLONE_FAIL HOME="$h" RBSTEMS_TEST_HOME="$th")
+           -u RBSTEMS_TEST_OUR_MODEL -u RBSTEMS_TEST_PIONEER_MODEL -u RBSTEMS_TEST_CLONE_FAIL -u RBSTEMS_TEST_ANY_VOLUME
+           -u RBSTEMS_HARNESS_CACHE -u RBSTEMS_TEST_WRITER_DELAY -u RBSTEMS_TEST_NEAR_HITS HOME="$h" RBSTEMS_TEST_HOME="$th")
+  # near hits are off by default (near_hits=0); most tests exercise them, so they turn them on
+  # (near=1, as config.ini's near_hits=1 would); near= tests the default
+  [ -n "$near" ] && e+=(RBSTEMS_TEST_NEAR_HITS="$near")
+  [ -n "$anyvol" ] && e+=(RBSTEMS_TEST_ANY_VOLUME=1)
+  [ -n "$hcache" ] && e+=(RBSTEMS_HARNESS_CACHE="$hcache")
+  [ -n "$wdelay" ] && e+=(RBSTEMS_TEST_WRITER_DELAY="$wdelay")
   [ -n "$free" ] && e+=(RBSTEMS_TEST_FREE_GB="$free")
   [ -n "$disk" ] && e+=(RBSTEMS_TEST_DISK_GB="$disk")
   [ -n "$free_every" ] && e+=(RBSTEMS_TEST_FREE_SECONDS="$free_every")
@@ -185,7 +206,8 @@ configs() {
   config_case not-numbers 'max_gb=nan\nmax_days=inf\nmax_gb=20abc\nmax_gb=\nmax_days=ten\nenabled=maybe\nenabled=\n' 1 20.0 60 7
   # a comment longer than a read: its tail must not count as a line of its own
   config_case long-comment "#$(printf 'x%.0s' {1..254})max_gb=1\nmax_days=5\n" 1 20.0 5 0
-  config_case long-line "max_gb=2 $(printf ' %.0s' {1..300})\nmax_days=5\n" 1 20.0 5 1
+  config_case long-line "max_gb=2 $(printf ' %.0s' {1..1100})\nmax_days=5\n" 1 20.0 5 1
+  config_case line-300 "max_gb=2 $(printf ' %.0s' {1..300})\nmax_days=5\n" 1 2.0 5 0
   fresh config; harness passthrough "$fake" > /dev/null 2>&1
   expect 'has "max_days=60, rekordbox_model=0, rebuild 1"' "config: rekordbox_model is off by default"
   local v given got
@@ -207,7 +229,7 @@ logs() {
   harness passthrough "$fake" > /dev/null 2>&1
   expect '[ "$(stat -f %z "$dir/bridge.log.1")" = 5242881 ]' "log over 5 MB becomes bridge.log.1 (replacing the older one)"
   expect '[ "$(stat -f %z "$dir/bridge.log")" -lt 10000 ] && has "bridge loaded"' "a new bridge.log is started"
-  expect '[ "$(ls "$dir" | wc -l | tr -d " ")" = 2 ]' "only bridge.log and bridge.log.1 are kept"
+  expect '[ "$(ls "$dir" | grep -c "^bridge\.log")" = 2 ]' "only bridge.log and bridge.log.1 are kept"
 
   fresh at-limit; dir="$h/Library/Logs/rbstemsplus"; mkdir -p "$dir"
   head -c 5242880 /dev/zero | tr '\0' a > "$dir/bridge.log"
@@ -492,23 +514,24 @@ rebuilt() {
   sha="$(shasum -a 256 "$scratch/model/hdemucs.onnx" | cut -d' ' -f1)"
   expect '[ "$out" = "a model stored 1 a cache " ] && [ -d "$h/Library/Caches/rbstemsplus/$sha" ]' "rekordbox_model=1: a model with x zero is cached as before, in its own folder: got \"$out\""
 
-  expect 'grep -aq "rbstems-cache: rebuild=1 pioneer=435c987855f7ea74ff5f20090541748cbbce5a2e8e501d07b10f4e703453215a;" "$bridge"' \
-    "the bridge says what it can cache, for the app"
+  expect 'grep -aq "rbstems-cache: rebuild=1 location=1 pioneer=435c987855f7ea74ff5f20090541748cbbce5a2e8e501d07b10f4e703453215a;" "$bridge"' \
+    "the bridge says what it can cache (location=1 before pioneer=), for the app"
 }
 
+. "$here/location.sh"
+
+# ONLY="location losses" runs just those (one case at a time while debugging); SANITIZE=1 runs
+# the storage tests, arm64 only, with the bridge and the harness built with ASan and UBSan
+tests="loading configs fixtures logs homes cache nearoff foreign space memory rebuilt location entries losses faults companions images midway"
+if [ "${SANITIZE:-}" = 1 ]; then tests="configs fixtures cache nearoff foreign location entries losses faults companions images midway"; archs=(arm64); fi
+tests="${ONLY:-$tests}"
+case " $tests " in *" images "*|*" midway "*) attach_images ;; esac
 for arch in "${archs[@]}"; do
   echo "== $arch"
-  loading
-  configs
-  logs
-  homes
-  cache
-  foreign
-  space
-  memory
-  rebuilt
+  for t in $tests; do "$t"; done
 done
 
 echo
 echo "$passed passed, $failures failed${skipped[*]:+, skipped: ${skipped[*]}}"
-[ "$failures" = 0 ]
+[ "$failures" = 0 ] || exit 1
+if [ "${REQUIRE:-}" = 1 ] && [ ${#skipped[@]} -gt 0 ]; then echo "REQUIRE=1: tests were skipped"; exit 1; fi

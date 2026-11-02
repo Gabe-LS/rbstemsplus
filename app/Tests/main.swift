@@ -194,10 +194,10 @@ check(gone(g + "/logs", whole: true), "removes a root when asked for")
 // the real places: decisions only, nothing is removed
 for p in ["/", home, home + "/", home + "/Library", home + "/Library/Caches", home + "/Library/Application Support",
           "/Applications", "/Applications/RB Stems Plus.app", rootDir, support + "/..", support + "/../rbstemsplus",
-          cacheDir + "/../..", modelDir, modelDir + "/hdemucs.onnx", agentPlist + "/", "/Library/LaunchAgents/\(agentLabel).plist"] {
+          defaultCacheDir + "/../..", modelDir, modelDir + "/hdemucs.onnx", agentPlist + "/", "/Library/LaunchAgents/\(agentLabel).plist"] {
     check(!mayRemove(p) && !mayRemove(p, whole: true), "never \(p.replacingOccurrences(of: home, with: "~"))")
 }
-check(!mayRemove(support) && !mayRemove(cacheDir), "never the roots without asking")
+check(!mayRemove(support) && !mayRemove(defaultCacheDir), "never the roots without asking")
 check(mayRemove(payloadRoot + "/0.0.0") && mayRemove(modelDir + "/.hdemucs.new"), "our own paths are allowed")
 check(!deletable.inside.contains(home) && !deletable.roots.contains(home) && deletable.inside.allSatisfy { $0.hasPrefix(home + "/Library/") },
       "every root is inside ~/Library")
@@ -251,6 +251,40 @@ mk(b + "/x")
 check(!selfDelete(b + "/x/../RB Stems Plus.app") && exists(good), "self-delete: not a path with ..")
 check(!selfDelete(translocated), "self-delete: not a translocated app")
 check(selfDelete(b + "/Renamed.app"), "self-delete: a valid app with our bundle ID")
+
+// macOS's preferences of the app, deleted after the wait (a test domain of ours, never the app's)
+func prefsSet(_ d: String) -> Bool { runTool("/usr/bin/defaults", ["read", d]).0 == 0 }
+func prefsFile(_ d: String) -> String { accountHome() + "/Library/Preferences/" + d + ".plist" }   // HOME is "/" here (above)
+func prefsGone(_ d: String) -> Bool { !prefsSet(d) && !exists(prefsFile(d)) }
+func prefsClean(_ d: String) { _ = runTool("/usr/bin/defaults", ["delete", d]); Thread.sleep(forTimeInterval: 2); try? FileManager.default.removeItem(atPath: prefsFile(d)) }
+let testDomain = "io.github.rbstemsplus.tests-\(ProcessInfo.processInfo.processIdentifier)", otherDomain = "com.example.rbsp-tests-\(ProcessInfo.processInfo.processIdentifier)"
+for d in [testDomain, otherDomain] { _ = runTool("/usr/bin/defaults", ["write", d, "k", "v"]) }
+_ = runTool("/bin/sh", ["-c", afterExitWait + ownPrefsDeleteScript + "echo after > \"$3/after\"", "rbsp", String(done.processIdentifier), "0.1", "", testDomain, tmp])
+check(prefsGone(testDomain) && !exists(tmp + "/after"), "uninstall: the app's preferences deleted after it quits, their file too; with no app to delete, nothing more runs")
+_ = runTool("/bin/sh", ["-c", afterExitWait + ownPrefsDeleteScript, "rbsp", String(done.processIdentifier), "0.1", "", otherDomain])
+check(prefsSet(otherDomain), "uninstall: another app's preferences are never deleted")
+prefsClean(otherDomain)
+mk(b + "/Prefs.app/Contents"); try? FileManager.default.copyItem(atPath: good + "/Contents/Info.plist", toPath: b + "/Prefs.app/Contents/Info.plist")
+_ = runTool("/usr/bin/defaults", ["write", testDomain, "k", "v"])
+_ = runTool("/bin/sh", ["-c", afterExitWait + ownPrefsDeleteScript + selfDeleteScript, "rbsp", String(done.processIdentifier), "0.1", b + "/Prefs.app", testDomain])
+check(prefsGone(testDomain) && exists(b + "/Prefs.app"), "uninstall: with an app given, the self-delete runs after the preferences (its own bundle-ID check still applies)")
+prefsClean(testDomain)
+
+// the Dock's kept apps: only entries that are this app go (as the Dock stores them: a file URL,
+// type 15, with a trailing "/"; or a plain path, type 0)
+func tile(_ url: String, type: Int = 15) -> [String: Any] {
+    ["tile-type": "file-tile", "tile-data": ["file-label": "x", "file-data": ["_CFURLString": url, "_CFURLStringType": type]]]
+}
+let ourApp = "/Applications/RB Stems Plus.app", spacer: [String: Any] = ["tile-type": "spacer-tile", "tile-data": [String: Any]()]
+let dockNow: [[String: Any]] = [tile("file:///System/Applications/Utilities/Terminal.app/"), spacer, tile("file:///Applications/RB%20Stems%20Plus.app/"),
+                                tile("file:///Applications/RB%20Stems%20Plus%20copy.app/"), tile("file:///Applications/rekordbox%207/rekordbox.app/")]
+let undocked = dockApps(dockNow, without: ourApp)
+let urls = (undocked ?? []).compactMap { (($0["tile-data"] as? [String: Any])?["file-data"] as? [String: Any])?["_CFURLString"] as? String }
+check(undocked?.count == 4 && !urls.contains("file:///Applications/RB%20Stems%20Plus.app/") && urls.contains("file:///Applications/RB%20Stems%20Plus%20copy.app/"),
+      "Dock: our app's entry removed; Terminal, rekordbox, a spacer and a copy with a longer name kept")
+check(dockApps([tile(ourApp, type: 0), tile("file:///Applications/Other.app/")], without: ourApp)?.count == 1, "Dock: an entry stored as a plain path is matched too")
+check(dockApps([tile("file:///Applications/Other.app/"), spacer], without: ourApp) == nil, "Dock: not kept in the Dock: nothing to change (no Dock restart)")
+check(dockApps(dockNow, without: "/Users/dj/Applications/RB Stems Plus.app") == nil, "Dock: another copy's place doesn't match")
 
 // MARK: the update: staged next to the app, only our own apps replaced (in the temporary folder,
 // with true for lsregister and open: nothing is registered or opened)
@@ -751,6 +785,41 @@ check(parts(missingParts(chosen: (true, false), plusPresent: true, cachePresent:
       && parts(missingParts(chosen: (false, false), plusPresent: false, cachePresent: false)) == [false, false],
       "Reinstall Now: never what wasn't chosen, nothing when nothing chosen went missing")
 
+// MARK: the Stems Cache update: offered when rekordbox's isn't the latest payload.json's
+
+let shaOld = String(repeating: "a", count: 64), shaNew = String(repeating: "b", count: 64)
+func due(present: Bool = true, chosen: Bool = true, installed: String? = shaOld, latest: String = shaNew,
+         appUpdate: Bool = false, blocked: Bool = false) -> Bool {
+    cacheUpdateDue(present: present, chosen: chosen, installed: installed, latest: latest, appUpdatePending: appUpdate, blocked: { blocked })
+}
+check(due(), "Stems Cache update: rekordbox's isn't the latest payload.json's: offered")
+check(!due(installed: shaNew), "Stems Cache update: rekordbox's is the latest: not offered")
+check(!due(present: false) && !due(chosen: false), "Stems Cache update: not in rekordbox, or another account's choice: not offered")
+check(!due(installed: nil), "Stems Cache update: rekordbox's library unreadable: not offered")
+check(!due(latest: "not a checksum"), "Stems Cache update: a payload.json bridge checksum that isn't one: not offered")
+check(!due(appUpdate: true), "Stems Cache update: an RB Stems Plus update waiting: not offered (the new app asks)")
+check(!due(blocked: true), "Stems Cache update: Stems Cache can't be installed here now: not offered")
+var blockedAsked = false
+_ = cacheUpdateDue(present: true, chosen: true, installed: shaNew, latest: shaNew, appUpdatePending: false, blocked: { blockedAsked = true; return false })
+check(!blockedAsked, "Stems Cache update: the slow install check isn't run when there's nothing to update")
+check(!cacheUpdateMessage.contains(appVersion) && !cacheUpdateMessage.contains("drive"), "Stems Cache update: the question names no version or feature")
+
+// MARK: payload.json downloaded at launch (manifestDue)
+
+func fetchDue(age: TimeInterval? = 3600, saved: String? = "1.2.0", app: String = "1.2.0", blocked: Bool = false) -> Bool {
+    manifestDue(age: age, savedApp: saved, app: app, blocked: { blocked })
+}
+check(!fetchDue(), "payload.json: an hour old, from this app's release: not downloaded again")
+check(fetchDue(age: 86_401), "payload.json: a day old: downloaded")
+check(fetchDue(age: nil) && fetchDue(saved: nil), "payload.json: none saved, or none that counts: downloaded")
+check(fetchDue(saved: "1.1.1"), "payload.json: from before this app (the install command put a newer app here): downloaded at once")
+check(fetchDue(saved: "1.1.9", app: "1.1.10"), "payload.json: versions compared as numbers (1.1.10 > 1.1.9)")
+check(!fetchDue(saved: "1.3.0"), "payload.json: from a newer release than this app: not downloaded again (the update notice)")
+check(fetchDue(blocked: true), "payload.json: a feature blocked by its version lists: downloaded")
+var listAsked = false
+_ = manifestDue(age: 86_401, savedApp: "1.2.0", app: "1.2.0", blocked: { listAsked = true; return false })
+check(!listAsked, "payload.json: the version-list check isn't run when a download is due anyway")
+
 // MARK: Stems Cache offline: from a saved payload.json at most 7 days old, with its bridge here
 
 let day: TimeInterval = 86_400
@@ -875,7 +944,7 @@ check(statfs(tmp, &tfs) == 0 && diskBytes(tmp) == Int64(tfs.f_blocks) * Int64(tf
 check((finderFreeBytes(tmp) ?? 0) > 0 && (statfsFreeBytes(tmp) ?? 0) > 0 && abs((freeBytes(tmp) ?? 0) - (finderFreeBytes(tmp) ?? 0)) < gb,   // measured a moment apart
       "the real measures answer for the temporary folder")
 check(statfsFreeBytes(tmp + "/not-there") == nil && finderFreeBytes(tmp + "/not-there") == nil, "a path that isn't there has no count")
-check(FileManager.default.fileExists(atPath: cacheVolumePath()) && cacheDir.hasPrefix(cacheVolumePath()), "the cache's disk is measured at the cache folder or above it")
+check(FileManager.default.fileExists(atPath: cacheVolumePath()) && defaultCacheDir.hasPrefix(cacheVolumePath()), "the cache's disk is measured at the cache folder or above it")
 
 // MARK: the status lights: on, installed but not working right now, off
 
@@ -1120,6 +1189,11 @@ check(lgLines.count == 2 && lgLines[0].hasSuffix("  one") && lgLines[1].hasSuffi
 touch(outside + "/logvictim"); symlink(outside + "/logvictim", tmp + "/logs/link.log")
 appendLog(tmp + "/logs/link.log", "planted")
 check((try? String(contentsOfFile: outside + "/logvictim", encoding: .utf8)) == "x" && fileType(tmp + "/logs/link.log") == S_IFLNK, "a link planted at a log's place is never written through")
+
+// MARK: where Stems Cache saves stems (LocationTests.swift)
+
+locationTests()
+locationFixTests()
 
 // MARK: the watcher helper, its registration and its lock (WatcherTests.swift)
 

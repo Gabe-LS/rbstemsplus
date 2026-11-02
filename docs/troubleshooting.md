@@ -31,6 +31,9 @@ Troubleshooting** opens this page. Nothing here helped?
 - [Reloading a track is still slow](#reloading-a-track-is-still-slow)
 - [Stems Cache's light is yellow](#stems-caches-light-is-yellow)
 - [Saved stems take too much space](#saved-stems-take-too-much-space)
+- [Saved stems on another drive](#saved-stems-on-another-drive)
+- [The drive needs repair or is read-only](#the-drive-needs-repair-or-is-read-only)
+- [config.ini can't be read](#configini-cant-be-read)
 - [rekordbox crashes, or STEMS stops working](#rekordbox-crashes-or-stems-stops-working)
 
 **After updates**
@@ -341,11 +344,14 @@ load of that track takes about 7 seconds.
 
 Other reasons a track gets separated again:
 - its stems were removed: unused for 60 days, over the size limit, or **Clear Saved Stems**
-- you're in another Mac account (each account has its own saved stems)
 - you switched model (Demucs v4 or rekordbox's own): each has its own saved stems, used again
   when you switch back
 - a new Demucs v4 model file came with an RB Stems Plus update (it starts a fresh set)
-- the track's audio was edited
+- the track's audio was edited, or it's another file of the same track (an MP3 and a FLAC of
+  it, a re-encode, another sample rate): stems are matched to the exact audio rekordbox decodes,
+  so each file has its own
+- you're in another Mac account (each account has its own saved stems), unless your stems are on
+  a drive several accounts share
 
 Renaming, re-tagging or moving a track doesn't matter: stems are found by the audio itself. None
 of these fit? [Make a report](#making-a-problem-report): it shows what was found and what wasn't.
@@ -379,6 +385,33 @@ light to see why:
 Installing or reinstalling Stems Cache on a fuller disk says so too: *"Stems Cache will stop
 saving stems while your disk has less than 25 GB free."*
 
+When stems are saved on an external drive (see
+[Saved stems on another drive](#saved-stems-on-another-drive)):
+
+- ***"Stems Cache's drive "GLS" isn't connected..."*** Connect it, then open rekordbox. Until
+  then rekordbox separates tracks as usual and nothing is saved. Renamed the drive, or does it
+  show as "GLS 1"? Choose it again in **Settings…**: the stems on it are kept.
+- ***"Stems Cache isn't using "GLS" right now: ..."*** rekordbox opened without the drive, or
+  lost it while running (unplugged, asleep, ejected). Connect it: Stems Cache checks the drive
+  every 10 seconds and uses it again as soon as it's back, without restarting rekordbox. If it
+  says rekordbox isn't allowed to use the drive: System Settings › Privacy & Security › Files and
+  Folders › rekordbox, turn on *Removable Volumes*, then restart rekordbox.
+- ***"Stems Cache will use "GLS" again in a few seconds."*** The drive is back: Stems Cache
+  picks it up at its next check.
+- ***"Stems Cache is still checking "GLS"..."*** It's checking the drive as rekordbox opens: a
+  moment, or longer while a hard disk spins up.
+- ***"Stems Cache's folder on "GLS" is missing or was replaced."*** The folder *RB Stems Plus
+  Cache* was deleted, moved or replaced. Choose the drive again in **Settings…**.
+- ***"..."GLS" is read-only..."*** See
+  [The drive needs repair or is read-only](#the-drive-needs-repair-or-is-read-only).
+- ***"RB Stems Plus isn't allowed to use "GLS"."*** System Settings › Privacy & Security › Files
+  and Folders › RB Stems Plus, turn on *Removable Volumes*.
+- ***"Stems Cache needs an update to save stems on "GLS"..."*** The Stems Cache in rekordbox is
+  older than this app (for example, another account's older RB Stems Plus reinstalled it after a
+  rekordbox update): it saves on this Mac for now. Click **Reinstall Stems Cache**.
+- ***"Stems Cache can't read its settings (config.ini)."*** or ***"Where Stems Cache saves stems
+  is set wrongly in config.ini."*** See [config.ini can't be read](#configini-cant-be-read).
+
 ### Saved stems take too much space
 
 Open **RB Stems Plus › Settings…** (Cmd+,):
@@ -386,11 +419,82 @@ Open **RB Stems Plus › Settings…** (Cmd+,):
   rekordbox opens and uses STEMS. Lowering the limit frees space only then.
 - **Clear Saved Stems** frees the space now (quit rekordbox first).
 
-The stems are in `~/Library/Caches/rbstemsplus`. Don't move that folder or replace it with a
-link: RB Stems Plus leaves a link alone, and the next time it can't open (see
-[RB Stems Plus can't open](#rb-stems-plus-cant-open-or-already-open)).
+The limit counts the space the stems take on the disk. On an exFAT or FAT32 drive macOS adds a
+small hidden file next to each saved file, which the limit counts too: there a 20 GB limit keeps
+about 17 GB of stems. Settings shows the size as "about": folders aren't counted.
+
+On this Mac the stems are in `~/Library/Caches/rbstemsplus`. Don't move that folder or replace
+it with a link: RB Stems Plus leaves a link alone, and the next time it can't open (see
+[RB Stems Plus can't open](#rb-stems-plus-cant-open-or-already-open)). To keep them on another
+drive, use **Settings…** (see [Saved stems on another drive](#saved-stems-on-another-drive)).
 
 *"Settings not saved"* or *"Saved stems not cleared"*: [make a report](#making-a-problem-report).
+
+### Saved stems on another drive
+
+In **RB Stems Plus › Settings…**, **Change…** next to *Stems Cache location* chooses an external
+drive (one macOS lists as external: USB drives and most Thunderbolt drives; not a network drive, a
+second internal disk or a Time Machine drive). RB
+Stems Plus makes a folder named *RB Stems Plus Cache* in the folder you choose and saves stems
+only there. Quit rekordbox first.
+
+- **Switching starts empty.** The stems saved on this Mac are deleted (the dialog says how much);
+  rekordbox separates those tracks again the next time you load them, and the stems are saved on
+  the drive. If the drive already holds saved stems, they're used.
+- **Use This Mac** goes back. The drive's stems stay on it: choose the drive again later and
+  they're used. To free that space, delete the folder *RB Stems Plus Cache* on the drive in
+  Finder, or choose the drive again and click **Clear Saved Stems** (choosing it again deletes
+  the stems saved on this Mac since).
+- **Without the drive,** rekordbox separates tracks as usual and nothing is saved. Connected
+  later, or again after it was unplugged or went to sleep, it's used again within seconds, also
+  while rekordbox runs.
+- **Quit rekordbox and eject the drive before unplugging it,** especially an exFAT or FAT32 drive
+  (most drives formatted on Windows or a camera): they have no journal, and unplugging during a
+  write can leave damaged files or a drive macOS opens read-only until it's repaired. Damaged
+  saved stems are never played: they're separated again.
+- **A renamed drive** (or one macOS shows as "GLS 1" because another drive has that name):
+  choose it again in **Settings…**. RB Stems Plus finds the stems on it and keeps them.
+- **Several Macs or accounts** can use the same folder, one at a time. Stems saved by one are
+  used by the others (with the same model). Each one's size and day limits clean up the same
+  stems, and **Clear Saved Stems** or a complete uninstall on any of them deletes them for all.
+- **macOS asks** whether rekordbox and RB Stems Plus may access files on a removable volume: click
+  **Allow**. If you clicked Don't Allow: System Settings › Privacy & Security › Files and
+  Folders, turn on *Removable Volumes* for rekordbox and for RB Stems Plus.
+- **Who can change the stems:** drives are set up so any account and any computer they're plugged
+  into can write them. Whoever can write the drive can change the saved stems rekordbox plays,
+  for any track in your library, not only the music on that drive. Damaged and garbage files are
+  refused; a careful forgery isn't. Use a drive you control.
+- **"Choose a folder on an external drive"** for a Thunderbolt or USB4 drive, or an SD card in
+  the Mac's own slot: macOS lists some of these as internal, and RB Stems Plus accepts only
+  drives it lists as external (Disk Utility shows which: *Device Location*). Use a USB drive, or
+  keep the stems on this Mac.
+- **Loading from a hard disk** is slower than from this Mac's own disk, and the first loads after
+  opening rekordbox may take a little longer while Stems Cache reads what's on the drive.
+
+### The drive needs repair or is read-only
+
+macOS opens a drive read-only when it wasn't ejected properly and needs repair, or when its
+format is one macOS only reads (NTFS). Stems Cache then neither saves nor loads stems there.
+
+1. Quit rekordbox.
+2. Open **Disk Utility**, select the drive, click **First Aid**.
+3. Eject and reconnect the drive, then open rekordbox.
+
+An NTFS drive can't be used: choose another drive, or reformat it as exFAT or APFS in Disk
+Utility (that erases it).
+
+### config.ini can't be read
+
+RB Stems Plus keeps its settings in `~/Library/Application Support/rbstemsplus/config.ini`.
+When that file can't be read (damaged, not text, or edited by hand with a mistake), Stems Cache
+saves no stems at all, rather than saving them somewhere you didn't choose, and **Settings…**
+won't overwrite it.
+
+- *"Where Stems Cache saves stems is set wrongly in config.ini."* Open **Settings…** and choose
+  the location again (**Change…** or **Use This Mac**).
+- *"Stems Cache can't read its settings (config.ini)."* Quit rekordbox and RB Stems Plus, move
+  `config.ini` to the Trash, open RB Stems Plus, and set **Settings…** again. The file must be
+  plain UTF-8 text of at most 64 KB, with lines of at most 1024 bytes.
 
 ### rekordbox crashes, or STEMS stops working
 
@@ -486,6 +590,10 @@ the reason.
 that fails, reinstall rekordbox (see [Reinstall rekordbox](#reinstall-rekordbox)), then click
 **Install**.
 
+Stems saved on an external drive move with the drive: on the new Mac, choose the drive in
+**Settings…** and they're used. Time Machine doesn't back up stems saved on an APFS or Mac OS
+Extended drive (RB Stems Plus excludes the folder); they can always be separated again.
+
 ## Removing it
 
 ### Uninstall failed or Uninstall stopped
@@ -536,7 +644,9 @@ copy that verifies.
   that RB Stems Plus doesn't know, a file it can't read or replace): the complete uninstall
   offers **Remove RB Stems Plus Anyway**. That deletes only RB Stems Plus's own files in your
   account: its settings, the stems it saved, its logs, RB Stems Plus Watcher and the app. It
-  never touches rekordbox or `/Library/Application Support/rbstemsplus`.
+  never touches rekordbox or `/Library/Application Support/rbstemsplus`. Stems saved on an
+  external drive are deleted too when the drive is connected (the confirmation says so);
+  otherwise their folder stays on the drive, and the last message says where.
 
 A stems model RB Stems Plus doesn't know may be a newer Demucs v4 model file, so it isn't taken for
 rekordbox's own. RB Stems Plus never deletes a saved copy of rekordbox's own model that verifies:
@@ -564,6 +674,9 @@ copy, see [No saved copy of rekordbox's model](#no-saved-copy-of-rekordboxs-mode
   needs to paste the install command again to get the app back.
 - **To remove everything,** uninstall in each account, ending with the one that installed RB
   Stems Plus.
+- **Saved stems on an external drive** can be shared by several accounts: see
+  [Saved stems on another drive](#saved-stems-on-another-drive). Clear Saved Stems or a complete
+  uninstall in one account deletes the stems in that folder for all of them.
 
 ### I dragged RB Stems Plus to the Trash
 
@@ -580,7 +693,7 @@ install command can't bring it back:
 
 1. Quit rekordbox.
 2. **Stems Cache:** download rekordbox from rekordbox.com and install it over the current one.
-   That puts Pioneer's original app back. **Do this before step 4:** without it, rekordbox's
+   That puts Pioneer's original app back. **Do this before step 5:** without it, rekordbox's
    STEMS stops working.
 3. **Demucs v4:** in Finder, choose Go › Go to Folder, paste
    `~/Library/Application Support/rbstemsplus/originals`. rekordbox's own model is the `.onnx`
@@ -591,7 +704,10 @@ install command can't bring it back:
    `hdemucs.onnx`, replacing the file there. Never use a file whose name starts with `ours-`:
    that's the Demucs v4 model. No such file? See
    [No saved copy of rekordbox's model](#no-saved-copy-of-rekordboxs-model).
-4. **The rest,** in Terminal:
+4. **Saved stems on an external drive:** if `config.ini` (in
+   `~/Library/Application Support/rbstemsplus`) has a `cache_dir=` line, that's the folder on the
+   drive: delete it in Finder **before** step 5 removes `config.ini`.
+5. **The rest,** in Terminal:
 
    ```sh
    launchctl bootout gui/$(id -u)/io.github.rbstemsplus.watcher
@@ -601,7 +717,7 @@ install command can't bring it back:
    rm -rf /Applications/RB\ Stems\ Plus.app /Applications/.RB\ Stems\ Plus.update.app /Applications/.RB\ Stems\ Plus.old.app /Applications/.RB\ Stems\ Plus.new.app /Applications/.RB\ Stems\ Plus.bootstrap-old.app
    ```
 
-5. **The App Management entries (optional):** the complete uninstall removes RB Stems Plus's
+6. **The App Management entries (optional):** the complete uninstall removes RB Stems Plus's
    own. rekordbox's entry (added when you allowed an update) stays, and it's harmless. To remove
    an entry: System Settings › Privacy & Security › App Management, select it, then click the
    minus button.

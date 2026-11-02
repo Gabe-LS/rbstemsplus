@@ -80,8 +80,11 @@ func buildReport(_ log: (String) -> Void) -> (zip: String, title: String, detail
     log("report: \(reports.count) crash or hang report\(reports.count == 1 ? "" : "s") from the last 7 days, \(min(reports.count, 5)) included")
     // the issue's title and details: the last problem, then the short lines, masked
     let problem = lastProblem(appLog: tail(logPath, 500_000), bridgeLog: tail(bridgeLogPath, 500_000))
-    let details = issueDetails(problem: mask(problem.text), facts: facts.filter(\.link).map { mask($0.line) })
-    let title = problem.title.map { "Problem report: " + mask($0) } ?? "Problem report"
+    // the issue's link and title name no drive and no path on one (the zip keeps them)
+    let stemsDir = readConfigState().location.chosenDir, mounts = currentMounts()
+    func linkMask(_ s: String) -> String { mask(maskLocation(s, dir: stemsDir, mounts: mounts)) }
+    let details = issueDetails(problem: linkMask(problem.text), facts: facts.filter(\.link).map { linkMask($0.line) })
+    let title = problem.title.map { "Problem report: " + linkMask($0) } ?? "Problem report"
     let zip = tmp + "/" + name + ".zip"
     let r = runTool("/usr/bin/ditto", ["-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--keepParent", dir, zip])
     guard r.0 == 0 else { log("report: zip failed: \(r.1)"); return nil }
@@ -126,14 +129,18 @@ func reportFacts() -> [(line: String, link: Bool)] {
     let fm = FileManager.default
     func sha(_ p: String) -> String { fm.fileExists(atPath: p) ? (sha256(p) ?? "unreadable") : "missing" }
     func run(_ exe: String, _ args: String...) -> String { runTool(exe, args).1.trimmingCharacters(in: .whitespacesAndNewlines) }
-    let plus = stemsPlusPresent(), cache = stemsCachePresent(), c = chosen(), cfg = readConfig(), stems = savedStemsSize()
+    let plus = stemsPlusPresent(), cache = stemsCachePresent(), c = chosen(), cfg = readConfig()
+    // where the stems are saved, measured now (the report runs in the background)
+    let loc = LocationMonitor.shared.current(size: true), stems = loc.size.text
+    let inUse = loc.status.flatMap(folderInUse)
     // the lights, as the window's refresh() shows them
-    let paused = cache && cfg.enabled ? cachePausedFloor() : nil
+    let paused = cache && cfg.enabled ? inUse.flatMap { cachePausedFloor($0) } : nil
     let model = modelDir + "/hdemucs.onnx", modelSha = sha(model), bridgeModels = cache ? bridgeCacheModels() : nil
     let lights = (plusLight(installed: plus),
                   cacheLight(installed: cache, plusOn: plus, chosen: c.cache, rekordboxModel: cfg.rekordboxModel, bridgeModels: bridgeModels,
-                             model: isSHA256(modelSha) ? modelSha : nil, engine: engineVersion(), pausedFloor: paused))
-    let volume = cacheVolumePath(), disk = diskBytes(volume)
+                             model: isSHA256(modelSha) ? modelSha : nil, engine: engineVersion(), pausedFloor: paused,
+                             location: loc.lightTip, drive: loc.drive))
+    let volume = cacheVolumePath(inUse ?? defaultCacheDir), disk = diskBytes(volume)
     let rbPid = runTool("/usr/bin/pgrep", ["-f", "rekordbox\\.app/Contents/MacOS/rekordbox"]).1.split(separator: "\n").first.flatMap { pid_t($0) }
     let verify = runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", rbApp])
     let signer = runTool("/usr/bin/codesign", ["-dv", rbApp]).1.split(separator: "\n").map(String.init)
@@ -141,7 +148,10 @@ func reportFacts() -> [(line: String, link: Bool)] {
     let m = savedManifest()
     var s: [(line: String, link: Bool)] = []
     func add(_ line: String, link: Bool = true) { s.append((line, link)) }
-    add(appLine(version: appVersion, build: appBuild, plus: lights.0, cache: lights.1))
+    // the light's location text names the drive: in the link, its state's code instead
+    let linkCache = loc.lightTip != nil && lights.1.tip == loc.lightTip ? (lights.1.look, "location: " + locationCode(loc)) : lights.1
+    add(appLine(version: appVersion, build: appBuild, plus: lights.0, cache: linkCache))
+    if linkCache.1 != lights.1.tip { add("Stems Cache light: \(lights.1.tip)", link: false) }
     add(macLine(os: ProcessInfo.processInfo.operatingSystemVersionString, model: run("/usr/sbin/sysctl", "-n", "hw.model"),
                 chip: run("/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"), arch: run("/usr/bin/uname", "-m"),
                 memory: ProcessInfo.processInfo.physicalMemory, language: Locale.current.identifier))
@@ -161,7 +171,9 @@ func reportFacts() -> [(line: String, link: Bool)] {
         add("payload.json: payload \(m.payloadVersion), app \(m.app.version), model \(m.model.sha256.prefix(12)), bridge \(m.bridge.sha256.prefix(12))")
         add("compatible: rekordbox \(m.compatible.rekordbox.joined(separator: " ")), ONNX Runtime \(m.compatible.ortVersionPrefix)x, STEMS Engine \(m.compatible.stemsEngine.joined(separator: " "))")
     }
-    add("settings: enabled=\(cfg.enabled ? 1 : 0) max_gb=\(configNumber(cfg.maxGB)) max_days=\(configNumber(cfg.maxDays)); saved stems\(stems.isEmpty ? " under 0.1 GB" : stems)")
+    add("settings: enabled=\(cfg.enabled ? 1 : 0) max_gb=\(configNumber(cfg.maxGB)) max_days=\(configNumber(cfg.maxDays)); saved stems\(stems.isEmpty ? " none" : stems)")
+    add("saved stems location: \(locationCode(loc))\(loc.status?.dir.flatMap { volumeFacts($0) }.map { ", \($0.fsType), \($0.deviceProtocol ?? "?")" } ?? "")")
+    if let d = loc.status?.dir { add("saved stems folder: \(d)", link: false) }
     if cacheIsLink() { add("saved stems folder: a link, never cleared or deleted (\(cacheLinkLine))") }
     add("administrator: \(userIsAdmin ? "yes" : "no"); app at \(Bundle.main.bundlePath)")
     let saved = installedModels { _ in }.savedOriginals().map { "\($0.sha.prefix(12)) (engine \($0.engine.isEmpty ? "?" : $0.engine))" }
@@ -176,6 +188,29 @@ func reportFacts() -> [(line: String, link: Bool)] {
     add("root folder: \(run("/bin/ls", "-R", rootDir).replacingOccurrences(of: "\n", with: " "))", link: false)
     add("rekordbox signature, whole: \((verify.1 + (verify.0 == 0 ? "\nvalid" : "")).trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: " | ")) || \(signer.joined(separator: " "))", link: false)
     return s
+}
+
+/// The location's state as a code for the issue's link: "thisMac", "notConnected", …, and the
+/// bridge's state while rekordbox runs ("bridge unavailable/not-connected").
+func locationCode(_ s: LocationSnapshot) -> String {
+    (s.status?.code ?? "unknown") + (s.bridge.map { " (bridge \($0.state)\($0.reason.isEmpty ? "" : "/" + $0.reason))" } ?? "")
+}
+
+/// Takes the stems' folder, every path on a mounted drive and the drives' names out of `s` (the
+/// issue's link and title): `dir` config.ini's cache_dir, `mounts` getmntinfo's list.
+func maskLocation(_ s: String, dir: String?, mounts: [Mount]) -> String {
+    var out = s
+    if let d = dir { out = out.replacingOccurrences(of: d, with: "<stems folder>") }
+    let drives = mounts.filter { $0.path.hasPrefix("/Volumes/") }
+    for m in drives.sorted(by: { $0.path.count > $1.path.count }) { out = out.replacingOccurrences(of: m.path, with: "/Volumes/<drive>") }
+    if let d = dir, let c = pathComponents(d), c.count > 2, c[0] == "Volumes" { out = out.replacingOccurrences(of: "/Volumes/" + c[1], with: "/Volumes/<drive>") }
+    // what is left of a path below a drive, up to a quote, a parenthesis or the end of the line
+    out = out.replacingOccurrences(of: "/Volumes/<drive>/[^\"'()\n]*", with: "/Volumes/<drive>/<path>", options: .regularExpression)
+    out = out.replacingOccurrences(of: "/Volumes/(?!<drive>)[^\"'()\n]*", with: "/Volumes/<drive>", options: .regularExpression)
+    var names = drives.map { ($0.path as NSString).lastPathComponent }
+    if let d = dir { names.append(driveName(d, mounts: mounts)) }
+    for n in Set(names) where !n.isEmpty { out = out.replacingOccurrences(of: "\"\(n)\"", with: "\"<drive>\"") }
+    return out
 }
 
 /// Whether process `pid` runs under Rosetta (the kernel's P_TRANSLATED flag); nil if unknown.

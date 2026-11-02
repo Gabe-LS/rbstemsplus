@@ -315,7 +315,7 @@ extension Controller {
 
     @objc func installCacheAction() {
         // Stems Cache would start paused (its disk under the floor): said before it is installed
-        guard preflight(), confirm(installCacheBtn.title, "Install", installNote(installCacheBtn.title, reinstall: false, paused: cachePausedFloor())) else { return }
+        guard preflight(), confirm(installCacheBtn.title, "Install", installNote(installCacheBtn.title, reinstall: false, paused: cachePausedNow(), drive: LocationMonitor.shared.snapshot().drive)) else { return }
         startInstall("install-cache", installCacheBtn.title, model: false, cache: true)
     }
 
@@ -325,7 +325,7 @@ extension Controller {
     }
 
     @objc func reinstallAction() {
-        guard preflight(), confirm(reinstallBtn.title, "Reinstall", installNote(reinstallBtn.title, reinstall: true, paused: cachePausedFloor())) else { return }
+        guard preflight(), confirm(reinstallBtn.title, "Reinstall", installNote(reinstallBtn.title, reinstall: true, paused: cachePausedNow(), drive: LocationMonitor.shared.snapshot().drive)) else { return }
         reinstallChosen()
     }
 
@@ -393,12 +393,21 @@ extension Controller {
         // the stems it saved, so the user sees what is freed
         let othersCache = cacheTraces() && !chosen().cache
         let noSavedModel = stemsPlusPresent() && installedModels { _ in }.savedOriginals().isEmpty
-        guard alert("Uninstall RB Stems Plus?", uninstallEverythingMessage(othersCache: othersCache, noSavedModel: noSavedModel, stems: savedStemsSize()),
+        // where the stems are, checked now (a drive may have come or gone since the background
+        // measurement): the confirmation names what will be deleted, and the uninstall deletes no
+        // more (driveDeletionAllowed). The size is the background one, if it is of that folder.
+        let loc = inBackground("Checking where stems are saved…") { LocationMonitor.shared.current() }
+        let snap = LocationMonitor.shared.snapshot(), gate = loc.deletableGate
+        let size = loc.status.flatMap(folderInUse) == snap.status.flatMap(folderInUse) ? snap.size.text : ""
+        guard alert("Uninstall RB Stems Plus?", uninstallEverythingMessage(othersCache: othersCache, noSavedModel: noSavedModel, stems: size,
+                                                                           drive: loc.status?.dir != nil ? loc.drive : nil, driveConnected: gate != nil),
                     ["Uninstall", "Cancel"]) == "Uninstall" else { return }
-        startUninstallEverything()
+        startUninstallEverything(confirmed: gate)
     }
 
-    func startUninstallEverything() {
+    /// `confirmed`: the chosen folder the confirmation said would be deleted (nil: none, also
+    /// when an interrupted uninstall is finished at the next launch: then a drive's folder stays).
+    func startUninstallEverything(confirmed: LocationGate? = nil) {
         start("uninstall-all", "Uninstall RB Stems Plus Completely", "Uninstalling RB Stems Plus…") {
             // Stems Cache, or only what it left in /Library after a rekordbox update removed it
             // (another account's may stay)
@@ -434,7 +443,7 @@ extension Controller {
             setChosen(model: false, cache: chosen().cache)
             self.removeOwnFiles("RB Stems Plus is uninstalled",
                                 keepCache ? "rekordbox has its own stems model again. Stems Cache stays for the other account." : "rekordbox is back to how it was.",
-                                help: nil, keepOriginals: false)
+                                help: nil, keepOriginals: false, confirmed: confirmed)
         }
     }
 
@@ -451,11 +460,15 @@ extension Controller {
     /// own model couldn't be put back (`r`): says why, and offers to remove this account's own
     /// files anyway (removeAnywayChoice). Work queue.
     func offerRemoveAnyway(_ r: Outcome, _ models: Models) {
-        switch removeAnywayChoice(r, models, ask: { self.alert($0, $1, $2) }, log: log) {
+        // checked now, as for the uninstall's confirmation: this dialog says what goes
+        let loc = LocationMonitor.shared.current(), snap = LocationMonitor.shared.snapshot(), gate = loc.deletableGate
+        let size = loc.status.flatMap(folderInUse) == snap.status.flatMap(folderInUse) ? snap.size.text : ""
+        switch removeAnywayChoice(r, models, ask: { self.alert($0, $1, $2) }, log: log,
+                                  stemsNote: locationRemovalNote(drive: loc.status?.dir != nil ? loc.drive : nil, connected: gate != nil, size: size)) {
         case .stop: busy(nil)
         case .help(let url): busy(nil); openHelp(url)
         case .remove(let about, let keep):
-            removeOwnFiles("RB Stems Plus is removed", about, help: keep ? removeAnywayHelpURL : noSavedModelHelpURL, keepOriginals: keep)
+            removeOwnFiles("RB Stems Plus is removed", about, help: keep ? removeAnywayHelpURL : noSavedModelHelpURL, keepOriginals: keep, confirmed: gate)
         }
     }
 
@@ -466,18 +479,44 @@ extension Controller {
     /// is a valid app this account owns and can delete; otherwise the user is told. The final
     /// alert says `about` (what rekordbox has now) and what stays (ownFilesRemovedText), with
     /// "Open Help" (opening `help`) if there is one. Then quits.
-    func removeOwnFiles(_ title: String, _ about: String, help: String?, keepOriginals: Bool) {
+    /// `confirmed`: the chosen folder the user was told would be deleted; only that one is, and
+    /// only if the probe now finds it again (driveDeletionAllowed).
+    func removeOwnFiles(_ title: String, _ about: String, help: String?, keepOriginals: Bool, confirmed: LocationGate? = nil) {
         removeWatcher()
         log("final state: \(state())")
         // Stems Cache still here though this account didn't choose it: another account's
         let othersCache = cacheTraces() && !chosen().cache, cacheLink = cacheIsLink()
-        removeOwnFolders(keepOriginals: keepOriginals)                    // nothing is logged after this
+        // the stems' location, worked out before config.ini goes with support: the chosen folder
+        // is deleted through verified descriptors (LocationGate); one that isn't connected stays
+        var left: [String] = []
+        let loc = LocationMonitor.shared.current()
+        if let dir = loc.status?.dir {
+            let drive = driveName(dir), fresh = loc.deletableGate
+            if let g = fresh, driveDeletionAllowed(confirmed: confirmed, fresh: fresh) {
+                setStatus("Deleting the stems saved on \"\(drive)\"…")
+                let r = removeInLocation(g, wholeFolder: true) { n in self.setStatus("Deleting the stems saved on \"\(drive)\"… \(n) files") }
+                log("stems on \(redact(dir)) deleted: \(r.ok ? "ok" : "FAILED (\(r.why ?? "?"))")")
+                if !r.ok { left.append("Some of the stems saved on \"\(drive)\" couldn't be deleted: delete the folder \"\(dir)\" in Finder.") }
+            } else if fresh == nil {
+                left.append("The stems saved on \"\(drive)\" stay: it isn't connected. To delete them, delete the folder \"\(dir)\" in Finder.")
+            } else {
+                // connected, but not the folder the confirmation named (connected only since)
+                log("stems on \(redact(dir)) kept: the confirmation didn't name them")
+                left.append("The stems saved on \"\(drive)\" stay. To delete them, delete the folder \"\(dir)\" in Finder.")
+            }
+        }
+        if !removeOwnFolders(keepOriginals: keepOriginals, others: [defaultCacheDir, logDir]) {   // nothing is logged after this
+            left.append("Some of its files in your Library folder couldn't be deleted.")
+        }
         let bundle = ownBundle(), owned = bundle.map { ownedByThisAccount($0) } ?? false
         let me = bundle.flatMap { b in owned && access((b as NSString).deletingLastPathComponent, W_OK) == 0 && access(b, W_OK) == 0 ? b : nil }
         let fate: AppFate = me != nil ? .deleted : bundle != nil && !owned ? .otherAccount : .cantDelete
-        let b = alert(title, ownFilesRemovedText(about, app: fate, othersCache: othersCache, cacheLink: cacheLink), help != nil ? ["Done", "Open Help"] : ["Done"])
+        let b = alert(title, ownFilesRemovedText(about, app: fate, othersCache: othersCache, cacheLink: cacheLink, left: left), help != nil ? ["Done", "Open Help"] : ["Done"])
         if b == "Open Help", let u = help { openHelp(u) }
-        if let me = me { afterExit(poll: "0.5", selfDeleteScript, [me, bundleID]) }
+        // macOS's preferences of this app go too, once it has quit; the app with them when it can,
+        // and its icon kept in the Dock (the Dock restarts once the app is gone)
+        let undocked = me.map { removeFromDock($0) } ?? false
+        afterExit(poll: "0.5", ownPrefsDeleteScript + (me != nil ? selfDeleteScript + (undocked ? dockRestartScript : "") : ""), [me ?? "", bundleID])
         ownQuit = true                                  // this quit waits for nothing
         DispatchQueue.main.async { NSApp.terminate(nil) }
     }
@@ -535,6 +574,7 @@ extension Controller {
         case "install-cache": startInstall(left.id, left.label, model: false, cache: true)
         case "reinstall": reinstallChosen()
         case "reinstall-missing": if !reinstallMissing() { setBusyMarker(nil); return false }
+        case "update-cache": startCacheUpdate()
         case "uninstall-plus": startUninstallStemsPlus(left.label)
         case "uninstall-cache": startUninstallCache(left.label)
         case "uninstall-all": startUninstallEverything()
@@ -566,6 +606,43 @@ extension Controller {
         guard go else { return }
         reinstallMissing()                           // what is missing now (rekordbox may have changed meanwhile)
     }
+
+    // MARK: the Stems Cache update
+
+    /// At launch, after any resumed action or watcher request, and again once a payload.json is
+    /// downloaded (checkForUpdate): when the Stems Cache in rekordbox isn't the latest
+    /// payload.json's bridge (cacheUpdateDue), asks to update it now. At most once a run, never
+    /// over another sheet. Not Now changes nothing; the next launch asks again. Main thread.
+    func offerCacheUpdate() {
+        guard startupDone, !actionRunning, !requestWaiting, !cacheUpdateAsked, window.attachedSheet == nil,
+              let m = savedManifest() else { return }
+        let installed = sha256(rbLib)
+        guard cacheUpdateDue(present: stemsCachePresent(), chosen: chosen().cache, installed: installed, latest: m.bridge.sha256,
+                             appUpdatePending: newerThanApp(m.app.version), blocked: { stemsCacheBlocked() != nil }) else { return }
+        log("Stems Cache: an update is available (in rekordbox \(installed?.prefix(12) ?? "?"), payload \(m.payloadVersion) \(m.bridge.sha256.prefix(12)))")
+        cacheUpdateAsked = true
+        let b = alert("Stems Cache update", cacheUpdateMessage, ["Update", "Not Now"])
+        log("  user chose: \(b)")
+        guard b == "Update", readyForQueuedAction() else { return }
+        startCacheUpdate()
+    }
+
+    /// Stems Cache alone, replaced by the latest payload.json's (install fetches it first).
+    func startCacheUpdate() {
+        start("update-cache", "Update Stems Cache", "Updating Stems Cache…") { self.install(model: false, cache: true, force: true, reinstall: true) }
+    }
+}
+
+/// The Stems Cache update's question, the same for every release.
+let cacheUpdateMessage = "An update for Stems Cache is available. Updating it asks for your password, and rekordbox needs to be closed. Until then, Stems Cache keeps working as it is."
+
+/// Whether to offer the Stems Cache update: this account chose Stems Cache, it is in rekordbox, and
+/// its checksum isn't the latest payload.json's bridge (the install copies that file as it is).
+/// Not while an RB Stems Plus update is waiting (the new app asks once it is open), nor when Stems
+/// Cache can't be installed here now (`blocked`, checked last: it runs codesign).
+func cacheUpdateDue(present: Bool, chosen: Bool, installed: String?, latest: String, appUpdatePending: Bool, blocked: () -> Bool) -> Bool {
+    guard present, chosen, !appUpdatePending, let i = installed, isSHA256(latest), i != latest else { return false }
+    return !blocked()
 }
 
 // MARK: - the watcher's Reinstall Now
@@ -704,7 +781,7 @@ enum AnywayChoice: Equatable { case stop, help(url: String), remove(about: Strin
 /// stops, nothing deleted: the page ends with "uninstall again"). The user's answer comes from
 /// `ask`: title, text, buttons. It never deletes a saved copy of Pioneer's model that verifies:
 /// then it keeps the originals folder and says where it is.
-func removeAnywayChoice(_ r: Outcome, _ m: Models, ask: (String, String, [String]) -> String, log: (String) -> Void) -> AnywayChoice {
+func removeAnywayChoice(_ r: Outcome, _ m: Models, ask: (String, String, [String]) -> String, log: (String) -> Void, stemsNote: String = "") -> AnywayChoice {
     if r.noSpace {
         _ = ask("Uninstall stopped", "\(r.message) Nothing was deleted. Free up some space and try again.", ["OK"])
         return .stop
@@ -712,7 +789,7 @@ func removeAnywayChoice(_ r: Outcome, _ m: Models, ask: (String, String, [String
     let stays = modelLeftBehind(m), keep = !m.verifiedOriginals().isEmpty
     let b = ask("Uninstall stopped",
                 "\(r.message) Nothing was deleted.\n\n\(removeAnywayButton) deletes only its own files"
-                + (keep ? " and keeps its saved copy of rekordbox's own stems model. " : ". ")
+                + stemsNote + (keep ? (stemsNote.isEmpty ? "" : ",") + " and keeps its saved copy of rekordbox's own stems model. " : ". ")
                 + (r.message == unknownModelMessage ? "" : stays + " ")          // said just before
                 + "To get rekordbox's own stems model back, click Open Help.",
                 ["Cancel", removeAnywayButton, "Open Help"])
@@ -726,6 +803,14 @@ func removeAnywayChoice(_ r: Outcome, _ m: Models, ask: (String, String, [String
 
 let removeAnywayButton = "Remove RB Stems Plus Anyway"
 
+/// What "Remove RB Stems Plus Anyway" says of the stems on a chosen drive (`drive`; nil: this
+/// Mac, nothing to add): deleted with the rest when `connected`, else left.
+func locationRemovalNote(drive: String?, connected: Bool, size: String) -> String {
+    guard let d = drive else { return "" }
+    return connected ? ", including all stems saved in its folder on \"\(d)\"\(size), also any saved there by other Macs or accounts"
+                     : " (its stems on \"\(d)\", which isn't connected, stay)"
+}
+
 /// The troubleshooting section for rekordbox's own stems model not going back: putting the
 /// saved copy back by hand when one verifies, else getting rekordbox's model without one.
 func modelHelpURL(_ m: Models) -> String { m.verifiedOriginals().isEmpty ? noSavedModelHelpURL : removeAnywayHelpURL }
@@ -733,7 +818,7 @@ func modelHelpURL(_ m: Models) -> String { m.verifiedOriginals().isEmpty ? noSav
 /// The Install and Reinstall confirmations' text, for the button's `label` (which names the
 /// features): what the command does. `paused`: Stems Cache's floor when its disk is under it,
 /// else nil (said only when the label names Stems Cache).
-func installNote(_ label: String, reinstall: Bool, paused: Int64?) -> String {
+func installNote(_ label: String, reinstall: Bool, paused: Int64?, drive: String? = nil) -> String {
     let plus = label.contains("Demucs v4"), cache = label.contains("Stems Cache")
     var s: String
     if reinstall {
@@ -745,7 +830,7 @@ func installNote(_ label: String, reinstall: Bool, paused: Int64?) -> String {
     } else {
         s = "Replaces rekordbox's stems model with Demucs v4. rekordbox's own model is kept, so it can be put back."
     }
-    if cache, let floor = paused { s += " " + cachePausedAtInstall(floor) }
+    if cache, let floor = paused { s += " " + cachePausedAtInstall(floor, drive: drive) }
     return s
 }
 
@@ -759,7 +844,9 @@ func uninstallNote(_ label: String) -> String {
 /// The complete uninstall's confirmation. Normally rekordbox goes back to exactly how it was;
 /// not when Stems Cache is another account's, or when there's no saved copy of rekordbox's own
 /// stems model to put back: then it states that fact only (the uninstall asks when it gets there). `stems`: the saved stems' size, e.g. " (1.2 GB)", or "".
-func uninstallEverythingMessage(othersCache: Bool, noSavedModel: Bool, stems: String) -> String {
+/// `drive`: the chosen drive's name (nil: this Mac), `driveConnected`: whether its folder can be
+/// deleted now.
+func uninstallEverythingMessage(othersCache: Bool, noSavedModel: Bool, stems: String, drive: String? = nil, driveConnected: Bool = true) -> String {
     var about: String
     if !othersCache && !noSavedModel {
         about = "rekordbox goes back to exactly how it was."
@@ -768,7 +855,14 @@ func uninstallEverythingMessage(othersCache: Bool, noSavedModel: Bool, stems: St
                              : "rekordbox gets its own stems model back."
         if othersCache { about += " Stems Cache was installed from another account on this Mac." }
     }
-    return about + " Your music and rekordbox library aren't touched.\n\nRB Stems Plus will be deleted, including the stems it saved\(stems)."
+    let deleted: String
+    if let d = drive {
+        deleted = driveConnected ? "RB Stems Plus will be deleted, including all stems saved in its folder on \"\(d)\"\(stems), also any saved there by other Macs or accounts."
+                                 : "RB Stems Plus will be deleted. Its stems on \"\(d)\", which isn't connected, stay: connect it first to delete them too."
+    } else {
+        deleted = "RB Stems Plus will be deleted, including the stems it saved\(stems)."
+    }
+    return about + " Your music and rekordbox library aren't touched.\n\n" + deleted
 }
 
 /// Deletes this account's own folders: support, the saved stems and the logs. With
@@ -776,7 +870,7 @@ func uninstallEverythingMessage(othersCache: Bool, noSavedModel: Bool, stems: St
 /// everything else in support goes. Returns whether all went.
 @discardableResult
 func removeOwnFolders(keepOriginals: Bool, support: String = support, originals: String = originalsDir,
-                      others: [String] = [cacheDir, logDir], _ gate: Deletable = deletable) -> Bool {
+                      others: [String] = [defaultCacheDir, logDir], _ gate: Deletable = deletable) -> Bool {
     var ok = true
     if keepOriginals && fileType(originals) == S_IFDIR {
         for name in (try? FileManager.default.contentsOfDirectory(atPath: support)) ?? [] where support + "/" + name != originals {
@@ -794,8 +888,9 @@ enum AppFate { case deleted, otherAccount, cantDelete }
 
 /// The final alert's text: `about` (what rekordbox has now), then what stays. `othersCache`:
 /// Stems Cache is still installed for another account, which loses the app it uses.
-/// `cacheLink`: the saved stems folder is a link, which RB Stems Plus never deletes.
-func ownFilesRemovedText(_ about: String, app: AppFate, othersCache: Bool, cacheLink: Bool) -> String {
+/// `cacheLink`: the saved stems folder is a link, which RB Stems Plus never deletes. `left`: what
+/// stayed (the stems on a drive that isn't connected, files that couldn't be deleted).
+func ownFilesRemovedText(_ about: String, app: AppFate, othersCache: Bool, cacheLink: Bool, left: [String] = []) -> String {
     var s = about
     switch app {
     case .deleted: if othersCache { s += " Other accounts on this Mac that use RB Stems Plus need to paste the install command again." }
@@ -803,5 +898,6 @@ func ownFilesRemovedText(_ about: String, app: AppFate, othersCache: Bool, cache
     case .cantDelete: s += " RB Stems Plus couldn't delete itself: drag it to the Trash."
     }
     if cacheLink { s += " " + cacheLinkLine }
+    for l in left { s += " " + l }
     return s
 }

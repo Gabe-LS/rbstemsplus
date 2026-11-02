@@ -1,0 +1,23 @@
+# The marker (.rbstemsplus-cache in "RB Stems Plus Cache.noindex") as both readers must judge it:
+# the bridge (marker_ok, bridge/tests/location.sh) and the app (markerID, app/Tests). One fixture
+# per line: name, TAB, valid or invalid, TAB, content (escapes as in config-fixtures.txt: \n \r
+# \t \\ \xHH \*COUNT.C). Valid means: a regular file of at most 4096 bytes, no NUL, lines split at
+# "\n" with nothing trimmed, at least one id= line and one format= line, every id= equal to
+# 0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F ignoring case, every format= exactly rbstems-v1.
+written	valid	id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\nformat=rbstems-v1\n
+lowercase-id	valid	id=0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f\nformat=rbstems-v1\n
+no-newline	valid	format=rbstems-v1\nid=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F
+other-lines	valid	# made by RB Stems Plus\nid=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\nnote=x\nformat=rbstems-v1\n
+same-id-twice	valid	id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\nid=0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f\nformat=rbstems-v1\n
+other-id	invalid	id=1F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\nformat=rbstems-v1\n
+conflicting-ids	invalid	id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\nid=1F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\nformat=rbstems-v1\n
+conflicting-formats	invalid	id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\nformat=rbstems-v1\nformat=rbstems-v2\n
+other-format	invalid	id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\nformat=rbstems-v2\n
+no-format	invalid	id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+no-id	invalid	format=rbstems-v1\n
+empty	invalid
+crlf	invalid	id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\r\nformat=rbstems-v1\r\n
+nul	invalid	id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\nformat=rbstems-v1\n\x00
+spaces	invalid	id = 0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\nformat=rbstems-v1\n
+short-id	invalid	id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6\nformat=rbstems-v1\n
+too-big	invalid	id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\nformat=rbstems-v1\n#\*4100.x\n

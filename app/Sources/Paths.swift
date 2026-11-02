@@ -77,7 +77,7 @@ let logDir = home + "/Library/Logs/rbstemsplus"
 let logPath = logDir + "/app.log"
 let watcherLogPath = logDir + "/watcher.log"
 let bridgeLogPath = logDir + "/bridge.log"
-let cacheDir = home + "/Library/Caches/rbstemsplus"   // the stems Stems Cache saved
+let defaultCacheDir = home + "/Library/Caches/rbstemsplus"   // the stems Stems Cache saves on this Mac (and the model-hash memos)
 
 // root files (Stems Cache only): Pioneer's real library in ort/, the three originals in pioneer/<version>/
 let rootDir = "/Library/Application Support/rbstemsplus"

@@ -60,17 +60,13 @@ func takeReinstallRequest(_ path: String = requestFile, _ gate: Deletable = dele
 
 // MARK: - the stems Stems Cache saved
 
-/// Their size, e.g. " (1.2 GB)", or "" under 0.1 GB.
-func savedStemsSize() -> String {
-    // the last line is the total; any line before it is a warning (an unreadable folder)
-    let kb = runTool("/usr/bin/du", ["-sk", cacheDir]).1.split(separator: "\n").last?.split(separator: "\t").first.map(String.init) ?? ""
-    let gb = (Double(kb) ?? 0) / 1_048_576
-    return gb >= 0.1 ? String(format: " (%.1f GB)", gb) : ""
-}
+/// The size of the stems this Mac's folder holds, measured now (the bridge's entry-size rule,
+/// Location.swift): " (about 1.2 GB)", or "" for none. Off the main thread: LocationMonitor.
+func savedStemsSize() -> String { entriesSize(defaultCacheDir).map(aboutSize) ?? "" }
 
 /// Whether the saved stems folder is a link. The app doesn't open with one (startupProblem), but
 /// one may be made while it runs: then nothing clears or deletes it, nor what it points to.
-func cacheIsLink() -> Bool { fileType(cacheDir) == S_IFLNK }
+func cacheIsLink() -> Bool { fileType(defaultCacheDir) == S_IFLNK }
 let cacheLinkLine = "~/Library/Caches/rbstemsplus is a link, so RB Stems Plus leaves it and what it points to alone."
 
 // MARK: - free space
@@ -117,8 +113,8 @@ func cacheFloorGB(_ floor: Int64) -> Int64 { (floor + 500_000_000) / 1_000_000_0
 
 /// The folder whose disk the bridge measures: the cache folder, or the nearest folder above it
 /// while there is none yet.
-func cacheVolumePath() -> String {
-    var p = cacheDir
+func cacheVolumePath(_ folder: String = defaultCacheDir) -> String {
+    var p = folder
     while p.count > 1 && !FileManager.default.fileExists(atPath: p) { p = (p as NSString).deletingLastPathComponent }
     return p
 }
@@ -130,16 +126,22 @@ func cachePausedFloor(free: Int64?, disk: Int64?) -> Int64? {
     return free.map { $0 < floor } == true ? floor : nil
 }
 
-/// The same, measured on the cache's disk as the bridge measures it.
-func cachePausedFloor() -> Int64? {
-    let path = cacheVolumePath()
+/// The same, measured on the disk of the folder in use (`folder`) as the bridge measures it. On
+/// the main thread only through LocationMonitor's cached value: a drive may be slow to answer.
+func cachePausedFloor(_ folder: String = defaultCacheDir) -> Int64? {
+    let path = cacheVolumePath(folder)
     return cachePausedFloor(free: freeBytes(path), disk: diskBytes(path))
 }
 
 /// The Stems Cache light's tip while it is installed and paused under `floor` (Controller.swift, cacheLight).
-func cachePausedTip(_ floor: Int64) -> String { "Stems Cache stopped saving stems: your disk has less than \(cacheFloorGB(floor)) GB free." }
+/// `drive`: the chosen drive's name, nil on this Mac.
+func cachePausedTip(_ floor: Int64, drive: String? = nil) -> String {
+    "Stems Cache stopped saving stems: \(drive.map { "\"\($0)\"" } ?? "your disk") has less than \(cacheFloorGB(floor)) GB free."
+}
 /// Said when installing or reinstalling Stems Cache while it would be paused under `floor`.
-func cachePausedAtInstall(_ floor: Int64) -> String { "Stems Cache will stop saving stems while your disk has less than \(cacheFloorGB(floor)) GB free." }
+func cachePausedAtInstall(_ floor: Int64, drive: String? = nil) -> String {
+    "Stems Cache will stop saving stems while \(drive.map { "\"\($0)\"" } ?? "your disk") has less than \(cacheFloorGB(floor)) GB free."
+}
 
 // MARK: - busy: the app is half-way through a change
 

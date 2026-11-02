@@ -37,8 +37,8 @@ struct Deletable {
     var apps: [String]          // exactly these, and only if they are an app with our bundle ID
 }
 
-let deletable = Deletable(inside: [support, cacheDir, logDir, payloadRoot, updateDir],
-                          roots: [support, cacheDir, logDir],
+let deletable = Deletable(inside: [support, defaultCacheDir, logDir, payloadRoot, updateDir],
+                          roots: [support, defaultCacheDir, logDir],
                           files: [agentPlist, modelDir + "/.hdemucs.new", modelDir + "/.hdemucs.restore"],
                           apps: [updateStagingApp, updateOldApp, bootstrapNewApp, bootstrapOldApp])
 
@@ -100,7 +100,7 @@ func writeAtomically(_ data: Data, to path: String) -> Bool {
 /// folder every path above would be wrong. A folder of ours that is a link or a file would
 /// send what the app writes elsewhere.
 func startupProblem(uid: uid_t = getuid(), euid: uid_t = geteuid(), home: String = home,
-                    folders: [String] = [support, cacheDir, logDir]) -> String? {
+                    folders: [String] = [support, defaultCacheDir, logDir]) -> String? {
     if uid == 0 || euid == 0 { return "RB Stems Plus can't run as root. Open it from your own account." }
     var isDir: ObjCBool = false
     guard let c = pathComponents(home), c.count >= 2, FileManager.default.fileExists(atPath: home, isDirectory: &isDir), isDir.boolValue else {
@@ -229,6 +229,22 @@ func agentDecision(target: String?, own: String?, recorded: String?, current: St
 /// The watcherRegisteredFile's text for the watcher `exe` with code `identity`.
 func registrationRecord(exe: String, identity: String) -> String { exe + "\n" + identity + "\n" }
 
+/// Deletes this app's preferences (macOS's own, e.g. the folder chooser's last folder) once this
+/// process has exited, so nothing writes them back: `defaults delete` empties them (through
+/// cfprefsd), then, once cfprefsd has written that out, the file it leaves empty goes (deleted at
+/// once, cfprefsd writes it back) (run by afterExit before selfDeleteScript:
+/// $2 our bundle ID: only a domain of ours is deleted, io.github.rbstemsplus.*, so the tests use
+/// their own). Then, with no app given ($1 empty), nothing more.
+let ownPrefsDeleteScript = """
+    case "$2" in io.github.rbstemsplus.*)
+        /usr/bin/defaults delete "$2" >/dev/null 2>&1
+        /bin/sleep 2
+        [ -n "$HOME" ] && /bin/rm -f "$HOME/Library/Preferences/$2.plist" ;;
+    esac
+    [ -n "$1" ] || exit 0
+
+    """
+
 /// Deletes the app once this process has exited (run by afterExit: $1 the app, $2 our bundle
 /// ID). It checks again what it deletes: an absolute plain path ending in .app, not
 /// translocated, a real folder (not a link) with our bundle ID.
@@ -239,3 +255,35 @@ let selfDeleteScript = """
     [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null)" = "$2" ] || exit 1
     /bin/rm -rf "$1"
     """
+
+/// After selfDeleteScript, when the app was taken out of the Dock (removeFromDock): the Dock
+/// restarts, so its icon goes (a running Dock keeps the icons it shows).
+let dockRestartScript = """
+
+    /usr/bin/killall Dock >/dev/null 2>&1
+    """
+
+// MARK: - the Dock
+
+/// The Dock's kept apps (com.apple.dock persistent-apps) without those that are `app` (by their
+/// file URL's path; the app as a plain path, as ownBundle gives it), or nil when none is.
+func dockApps(_ apps: [[String: Any]], without app: String) -> [[String: Any]]? {
+    let target = (app as NSString).standardizingPath
+    let kept = apps.filter { entry in
+        guard let tile = entry["tile-data"] as? [String: Any], let file = tile["file-data"] as? [String: Any],
+              let s = file["_CFURLString"] as? String else { return true }
+        let path = (file["_CFURLStringType"] as? Int) == 0 ? s : URL(string: s).flatMap { $0.isFileURL ? $0.path : nil }
+        return path.map { ($0 as NSString).standardizingPath } != target
+    }
+    return kept.count == apps.count ? nil : kept
+}
+
+/// Takes `app` out of the Dock's kept apps (Keep in Dock), for the complete uninstall that
+/// deletes it: only entries that are this app, nothing else of the Dock's. Whether one was
+/// removed (the Dock then restarts once the app has quit: dockRestartScript).
+func removeFromDock(_ app: String) -> Bool {
+    let key = "persistent-apps" as CFString, dock = "com.apple.dock" as CFString
+    guard let apps = CFPreferencesCopyAppValue(key, dock) as? [[String: Any]], let kept = dockApps(apps, without: app) else { return false }
+    CFPreferencesSetAppValue(key, kept as CFArray, dock)
+    return CFPreferencesAppSynchronize(dock)
+}

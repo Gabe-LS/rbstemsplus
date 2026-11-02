@@ -6,6 +6,9 @@
 #   bridge/build.sh [OUT]                 release build into OUT (default: build/bridge)
 #   bridge/build.sh --test REAL_PATH OUT  for bridge/tests only: the bridge loads the real library
 #                                         from REAL_PATH instead of the contract path
+#                                         (RBSTEMS_SANITIZE=1: with ASan and UBSan)
+#   bridge/build.sh --fuzz OUT            bridge/tests/fuzz.c with ASan and UBSan, for this Mac's
+#                                         architecture only, into OUT/fuzz
 #
 # libFLAC's tarball is downloaded once into build/flac/ (gitignored) and checked against its
 # sha256 (the same on downloads.xiph.org, GitHub's xiph/flac release and Homebrew's formula) on
@@ -25,7 +28,13 @@ REAL_PATH="/Library/Application Support/rbstemsplus/ort/libonnxruntime.1.18.0.dy
 LIB=libonnxruntime.1.18.0.dylib
 
 test_path=
-if [ "${1:-}" = "--test" ]; then
+fuzz=
+if [ "${1:-}" = "--fuzz" ]; then
+  [ $# -eq 2 ] || { echo "usage: $0 --fuzz OUT" >&2; exit 2; }
+  fuzz=1
+  ARCHS="$(uname -m)"
+  shift
+elif [ "${1:-}" = "--test" ]; then
   [ $# -eq 3 ] || { echo "usage: $0 --test REAL_PATH OUT" >&2; exit 2; }
   test_path="$2"
   case "$test_path" in *'"'*|*'\'*) echo "REAL_PATH can't contain \" or \\" >&2; exit 2 ;; esac
@@ -53,6 +62,12 @@ if [ ! -f "$tarball" ] || [ "$(shasum -a 256 "$tarball" | cut -d' ' -f1)" != "$F
 fi
 
 jobs="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+# the fuzz build and a sanitized test build instrument libFLAC too: the FLAC decoder is what reads
+# files anyone who can write a chosen drive may control
+flac_san=
+if [ -n "$fuzz" ] || { [ -n "$test_path" ] && [ "${RBSTEMS_SANITIZE:-}" = 1 ]; }; then
+  flac_san="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
+fi
 # built in a scratch folder: libtool breaks on the space in the repository's path
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/rbstems-flac.XXXXXX")"
 trap 'rm -rf "${scratch:?}"' EXIT
@@ -68,13 +83,25 @@ for arch in $ARCHS; do
     ./configure --quiet --host="$host" \
       --enable-static --disable-shared --with-pic --disable-ogg --disable-programs \
       --disable-examples --disable-cpplibs --disable-doxygen-docs --disable-version-from-git \
-      CC="clang -arch $arch" CFLAGS="-O2 -mmacosx-version-min=$MIN_MACOS"
+      CC="clang -arch $arch" CFLAGS="-O2 -mmacosx-version-min=$MIN_MACOS $flac_san" LDFLAGS="$flac_san"
     make -s -j"$jobs" -C src/libFLAC
   ) > "$flac_root/build-$arch.log" 2>&1 || { tail -30 "$flac_root/build-$arch.log" >&2; exit 1; }
   mkdir -p "$prefix/lib" "$prefix/include/FLAC"
   cp "$src/flac-$FLAC_VERSION/include/FLAC/"*.h "$prefix/include/FLAC/"
   cp "$src/flac-$FLAC_VERSION/src/libFLAC/.libs/libFLAC.a" "$prefix/lib/libFLAC.a"
 done
+
+# ---------------------------------------------------------------- the fuzz targets
+
+sanitize="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined -g"
+if [ -n "$fuzz" ]; then
+  prefix="$scratch/$FLAC_VERSION-$ARCHS"
+  clang -O1 -arch "$ARCHS" -mmacosx-version-min=$MIN_MACOS -Wall -Wextra $sanitize \
+    -DRBSTEMS_TEST_REAL_PATH='"/nonexistent/libonnxruntime.1.18.0.dylib"' -I"$here" -I"$prefix/include" \
+    "$here/tests/fuzz.c" "$prefix/lib/libFLAC.a" -framework CoreFoundation -framework Accelerate -o "$out/fuzz"
+  echo "built $out/fuzz ($ARCHS, ASan and UBSan)"
+  exit 0
+fi
 
 # ---------------------------------------------------------------- the bridge
 
@@ -86,7 +113,9 @@ if [ -n "$test_path" ]; then
 fi
 for arch in $ARCHS; do
   prefix="$scratch/$FLAC_VERSION-$arch"
-  clang -dynamiclib -O2 -arch "$arch" -mmacosx-version-min=$MIN_MACOS -Wall -Wextra -fvisibility=hidden \
+  extra=
+  if [ -n "$test_path" ] && [ "${RBSTEMS_SANITIZE:-}" = 1 ]; then extra="$sanitize"; fi
+  clang -dynamiclib -O2 -arch "$arch" -mmacosx-version-min=$MIN_MACOS -Wall -Wextra -fvisibility=hidden $extra \
     ${defines:+"$defines"} -I"$here" -I"$prefix/include" \
     "$here/rbstems_bridge.c" "$prefix/lib/libFLAC.a" -framework CoreFoundation -framework Accelerate \
     -Wl,-exported_symbol,_OrtGetApiBase \
@@ -113,7 +142,7 @@ for arch in $ARCHS; do
   minos="$(otool -l -arch "$arch" "$lib" | awk '/LC_BUILD_VERSION/{b=1} b&&/minos/{print $2; exit}')"
   [ "$minos" = "$MIN_MACOS" ] || fail "$arch minos $minos, expected $MIN_MACOS"
   for d in $(otool -L -arch "$arch" "$lib" | tail -n +2 | awk '{print $1}'); do
-    case "$d" in /usr/lib/*|/System/*|"@rpath/$LIB") ;; *) fail "$arch links $d" ;; esac
+    case "$d" in /usr/lib/*|/System/*|"@rpath/$LIB") ;; @rpath/libclang_rt.*) [ -n "$extra" ] || fail "$arch links $d" ;; *) fail "$arch links $d" ;; esac
   done
 done
 grep -aq "rbstems bridge: " "$lib" || fail "the \"rbstems bridge: \" marker string is missing"

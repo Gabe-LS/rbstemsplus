@@ -33,6 +33,23 @@ func bridgeCacheModels(data d: Data) -> [String]? {
     return line[p.upperBound...].split(separator: ",").map(String.init).filter(isSHA256)
 }
 
+/// Whether the installed bridge can save stems on a drive: its line says location=1 (among the
+/// tokens before pioneer=, "rbstems-cache: rebuild=1 location=1 pioneer=<sha>;"). False without
+/// a bridge, and for 1.0's and 1.1's.
+func bridgeSaysLocation(_ path: String = rbLib) -> Bool {
+    guard let d = FileManager.default.contents(atPath: path) else { return false }
+    return bridgeSaysLocation(data: d)
+}
+
+func bridgeSaysLocation(data d: Data) -> Bool {
+    guard d.range(of: Data("rbstems bridge: ".utf8)) != nil, let start = d.range(of: Data("rbstems-cache: ".utf8)) else { return false }
+    let rest = d[start.upperBound...].prefix(4096)
+    guard let end = rest.firstIndex(of: UInt8(ascii: ";")) else { return false }
+    let line = String(decoding: rest[rest.startIndex..<end], as: UTF8.self)
+    let tokens = line.components(separatedBy: "pioneer=")[0].split(separator: " ")
+    return tokens.contains("location=1")
+}
+
 /// The checksum of rekordbox's model as it is now, if it was worked out already (else nil, and it
 /// is worked out in the background, then `done` runs on the main thread). Remembered per path,
 /// size and modification time: the model is about 300 MB, too slow to hash on the main thread.

@@ -11,10 +11,11 @@ final class Sheet: NSObject {
     let field: NSSecureTextField?
     var inputs: [NSTextField] = []       // the labelled fields, in order
     var buttonViews: [NSButton] = []
+    var rowButtons: [NSButton] = []      // the small buttons of the rows (Settings' location), in order
     var choice = ""
 
     init(title: String, message: String, buttons: [String], password placeholder: String? = nil,
-         fields: [(label: String, value: String)] = [], inline: Bool = false) {
+         fields: [(label: String, value: String)] = [], rows: [(label: String, buttons: [String])] = [], inline: Bool = false) {
         let width: CGFloat = inline ? 520 : 320
         panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: width, height: 10), styleMask: [.titled], backing: .buffered, defer: true)
         field = placeholder == nil ? nil : NSSecureTextField()
@@ -24,6 +25,29 @@ final class Sheet: NSObject {
         var views: [NSView] = [titleLabel]
         if !message.isEmpty { views.append(NSTextField(wrappingLabelWithString: message)) }
         if let f = field { f.placeholderString = placeholder; views.append(f) }
+        // a label and small buttons under it (e.g. "Stems Cache location: GLS", Change… and Use
+        // This Mac):
+        // each button ends the sheet like the others (choice: its title)
+        for (label, titles) in rows {
+            let name = NSTextField(wrappingLabelWithString: label)
+            let small: [NSButton] = titles.map { t in
+                let b = NSButton(title: t, target: self, action: #selector(pressed(_:)))
+                b.controlSize = .small
+                b.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+                return b
+            }
+            rowButtons += small
+            let rowGap = NSView(); rowGap.setContentHuggingPriority(.init(1), for: .horizontal)
+            let buttonsRow = NSStackView(views: small + [rowGap])
+            buttonsRow.spacing = 8
+            let block = NSStackView(views: [name, buttonsRow])
+            block.orientation = .vertical
+            block.alignment = .leading
+            block.spacing = 4
+            buttonsRow.translatesAutoresizingMaskIntoConstraints = false
+            buttonsRow.widthAnchor.constraint(equalTo: block.widthAnchor).isActive = true
+            views.append(block)
+        }
         for (label, value) in fields {
             // the label on the left, a short field on the right
             let input = NSTextField(string: value)
@@ -44,7 +68,7 @@ final class Sheet: NSObject {
         views.append(gap)
         let made: [NSButton] = buttons.enumerated().map { i, t in
             let b = NSButton(title: t, target: self, action: #selector(pressed(_:)))   // same style as the window's
-            if i == 0 { b.keyEquivalent = "\r" } else if t == "Cancel" || t == "Remind Me Later" { b.keyEquivalent = "\u{1b}" }
+            if i == 0 { b.keyEquivalent = "\r" } else if t == "Cancel" || t == "Remind Me Later" || t == "Not Now" { b.keyEquivalent = "\u{1b}" }
             return b
         }
         buttonViews = made

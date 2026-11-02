@@ -1,5 +1,6 @@
-// Settings… (Cmd+,): a sheet in the app's style with Stems Cache's two limits, written to
-// config.ini, and "Clear saved stems" with the size they take.
+// Settings… (Cmd+,): a sheet in the app's style with where Stems Cache saves stems (This Mac or
+// a folder on an external drive: Change…, Use This Mac; LocationActions.swift), its two limits,
+// written to config.ini, and "Clear saved stems" with the size they take there.
 import AppKit
 
 extension Controller {
@@ -8,12 +9,27 @@ extension Controller {
         let c = readConfig(log)
         var gb = configNumber(c.maxGB), days = configNumber(c.maxDays)
         while true {
-            let size = savedStemsSize()
+            let st = readConfigState()
+            let loc = LocationMonitor.shared.snapshot()           // measured in the background, never here
+            let installed = stemsCachePresent(), canChoose = !installed || bridgeSaysLocation()
+            // the stems in use (this Mac's folder, also while an older bridge saves there, or the
+            // chosen folder when it can be used now) and what Clear clears; "measuring…" while the
+            // background measurement is of another folder (just after a change or a Clear)
+            let stems = settingsStems(st, loc)
+            let size = stems.size, target = stems.clear
             let clear = "Clear Saved Stems" + size
-            let sheet = Sheet(title: "Settings", message: "Stems Cache uses these settings the next time rekordbox opens.",
+            var message = "Stems Cache uses these settings the next time rekordbox opens."
+            if st.unreadable != nil { message = "Stems Cache can't read its settings (config.ini), so nothing can be changed here. See Help › RB Stems Plus Troubleshooting." }
+            else if !canChoose { message += " Reinstall Stems Cache to choose where stems are saved." }
+            let sheet = Sheet(title: "Settings", message: message,
                               buttons: ["Save", clear, "Cancel"],
-                              fields: [("Stems Cache size limit (GB)", gb), ("Remove stems unused for (days)", days)])
-            sheet.buttonViews[1].isEnabled = FileManager.default.fileExists(atPath: cacheDir)
+                              fields: [("Stems Cache size limit (GB)", gb), ("Remove stems unused for (days)", days)],
+                              rows: [(locationLabel(st), ["Change…", "Use This Mac"])])
+            let readable = st.unreadable == nil
+            sheet.buttonViews[0].isEnabled = readable
+            sheet.buttonViews[1].isEnabled = readable && (target == .thisMac ? fileType(defaultCacheDir) == S_IFDIR : target != nil)
+            sheet.rowButtons[0].isEnabled = readable && canChoose
+            sheet.rowButtons[1].isEnabled = readable && st.location != .thisMac
             let choice = sheet.run(on: window).choice
             gb = sheet.inputs[0].stringValue.trimmingCharacters(in: .whitespaces)
             days = sheet.inputs[1].stringValue.trimmingCharacters(in: .whitespaces)
@@ -33,13 +49,28 @@ extension Controller {
                     _ = alert("Settings not saved", "RB Stems Plus couldn't write its settings file. See the log in this window.", ["OK"])
                 }
                 return
+            case "Change…":
+                changeLocation()
+                continue                                        // back to the settings, with the fields as they were
+            case "Use This Mac":
+                useThisMac()
+                continue
             case clear:
+                if case .drive(let g)? = target {
+                    let drive = loc.drive ?? driveName(g.dir)
+                    guard confirm("Clear saved stems" + size, "Clear", clearLocationMessage(drive: drive)) else { continue }
+                    guard preflight() else { continue }        // the bridge works in that folder while rekordbox runs
+                    clearLocation(g, drive: drive)
+                    return                                      // it runs in the background; the window shows it
+                }
                 guard confirm("Clear saved stems" + size, "Clear", "Deletes the saved stems. rekordbox separates those tracks again the next time you load them.") else { continue }
                 // the bridge works in that folder while rekordbox runs
                 guard preflight() else { continue }
-                let ok = safeRemove(cacheDir, whole: true)
+                let ok = safeRemove(defaultCacheDir, whole: true)
                 log("saved stems cleared\(size): \(ok ? "ok" : cacheIsLink() ? "FAILED (the folder is a link)" : "FAILED")")
                 if !ok { _ = alert("Saved stems not cleared", cacheIsLink() ? cacheLinkLine : "Some saved stems couldn't be deleted. See the log in this window.", ["OK"]) }
+                LocationMonitor.shared.invalidateSize()
+                LocationMonitor.shared.update(size: true)
                 continue                                        // back to the settings, now without stems
             default:
                 return

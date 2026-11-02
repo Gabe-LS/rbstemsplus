@@ -1,0 +1,68 @@
+# config.ini fixtures shared by both readers: the bridge (bridge/tests/run.sh) and the app
+# (app/Tests). One fixture per line: name, TAB, expected, TAB, content.
+#
+# expected: space-separated key=value: enabled (0/1), max_gb, max_days (numbers), location
+# (thismac, chosen, malformed or unreadable), dir (chosen only: the path, spaces as %20).
+# Unreadable: nothing is cached (bridge) and Settings won't write (app); the other values aren't
+# compared then.
+#
+# content escapes: \n \r \t \\ \xHH (a byte), \*COUNT.C (the character C repeated COUNT times).
+# The id below is any valid UUID.
+none	enabled=1 max_gb=20 max_days=60 location=thismac
+plain	enabled=0 max_gb=5 max_days=7 location=thismac	enabled=0\nmax_gb=5\nmax_days=7\n
+chosen	enabled=1 max_gb=20 max_days=60 location=chosen dir=/Volumes/GLS/RB%20Stems%20Plus%20Cache.noindex	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+chosen-in-cache	enabled=1 max_gb=3 max_days=60 location=chosen dir=/Volumes/GLS/RB%20Stems%20Plus%20Cache.noindex	max_gb=3\n[cache]\ncache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f\n
+chosen-spaced-key	enabled=1 max_gb=20 max_days=60 location=chosen dir=/Volumes/GLS/RB%20Stems%20Plus%20Cache.noindex	  Cache_Dir = "/Volumes/GLS/RB Stems Plus Cache.noindex"  # where\n\tCACHE_ID\t=\t0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+djs-ssd	enabled=1 max_gb=20 max_days=60 location=chosen dir=/Volumes/DJ's%20SSD/Sets%20#1/RB%20Stems%20Plus%20Cache.noindex	cache_dir="/Volumes/DJ's SSD/Sets #1/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+single-quotes	enabled=1 max_gb=20 max_days=60 location=chosen dir=/Volumes/GLS/RB%20Stems%20Plus%20Cache.noindex	cache_dir='/Volumes/GLS/RB Stems Plus Cache.noindex'\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+crlf	enabled=0 max_gb=20 max_days=60 location=chosen dir=/Volumes/GLS/RB%20Stems%20Plus%20Cache.noindex	enabled=0\r\ncache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\r\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\r\n
+no-newline	enabled=1 max_gb=20 max_days=60 location=chosen dir=/Volumes/GLS/RB%20Stems%20Plus%20Cache.noindex	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F
+dir-only	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\n
+id-only	enabled=1 max_gb=20 max_days=60 location=malformed	cache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+empty-dir	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir=\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+same-twice	enabled=1 max_gb=20 max_days=60 location=chosen dir=/Volumes/GLS/RB%20Stems%20Plus%20Cache.noindex	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n[cache]\ncache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f\n
+dir-conflict	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_dir="/Volumes/GLS 2/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+id-conflict	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\ncache_id=1F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+bad-id	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A1B2C4D5E8F901A2B3C4D5E6F\n
+bad-id-hex	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6G\n
+relative	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+dot-dot	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS/../RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+dot	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS/./RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+double-slash	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes//GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+trailing-slash	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex/"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+other-folder	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+folder-case	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS/rb stems plus cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+control-char	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/G\tLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+unquoted-space	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir=/Volumes/GLS 2/RB Stems Plus Cache.noindex\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+unclosed-quote	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+path-700	enabled=1 max_gb=20 max_days=60 location=chosen dir=/Volumes/\*663.a/RB%20Stems%20Plus%20Cache.noindex	cache_dir="/Volumes/\*663.a/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+path-701	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/\*664.a/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+watcher-section	enabled=1 max_gb=20 max_days=60 location=thismac	[watcher]\nenabled=0\ncache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+cache-dot-old	enabled=1 max_gb=20 max_days=60 location=thismac	[cache.old]\ncache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+cache-space-x	enabled=1 max_gb=20 max_days=60 location=thismac	[cache x]\nmax_gb=2\ncache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+cache-unclosed	enabled=1 max_gb=20 max_days=60 location=thismac	[cache\nmax_gb=2\ncache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+cache-spaced	enabled=1 max_gb=2 max_days=60 location=thismac	[watcher]\nmax_gb=1\n[ Cache ]  # ours\nmax_gb=2\n
+split-across-sections	enabled=1 max_gb=20 max_days=60 location=chosen dir=/Volumes/GLS/RB%20Stems%20Plus%20Cache.noindex	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\n[watcher]\nenabled=0\n[cache]\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+line-1023	enabled=1 max_gb=20 max_days=60 location=chosen dir=/Volumes/GLS/RB%20Stems%20Plus%20Cache.noindex	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\*971. \ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+line-1024	enabled=1 max_gb=20 max_days=60 location=chosen dir=/Volumes/GLS/RB%20Stems%20Plus%20Cache.noindex	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\*972. \ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+line-1025	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\*973. \ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+line-1024-crlf	enabled=1 max_gb=20 max_days=60 location=chosen dir=/Volumes/GLS/RB%20Stems%20Plus%20Cache.noindex	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\*971. \r\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+spaces-before-key	enabled=1 max_gb=20 max_days=60 location=malformed	\*1100. cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+long-other-line	enabled=1 max_gb=20 max_days=5 location=thismac	max_gb=2 \*1100. \nmax_days=5\n
+long-comment	enabled=1 max_gb=20 max_days=5 location=thismac	#\*1100.xmax_gb=1\nmax_days=5\n
+long-key	enabled=1 max_gb=20 max_days=60 location=thismac	\*1100.x=1\n
+long-section-with-location	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n[\*1100.a]\nenabled=0\n
+long-section-without	enabled=1 max_gb=3 max_days=60 location=thismac	max_gb=3\n[\*1100.a]\nmax_gb=4\n
+long-section-location-elsewhere	enabled=1 max_gb=20 max_days=60 location=malformed	[\*1100.a]\n[watcher]\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+bom-at-start	enabled=0 max_gb=20 max_days=60 location=chosen dir=/Volumes/GLS/RB%20Stems%20Plus%20Cache.noindex	\xEF\xBB\xBFenabled=0\ncache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+bom-later	enabled=1 max_gb=20 max_days=60 location=malformed	enabled=1\n\xEF\xBB\xBFcache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+nul	location=unreadable	max_gb=3\n\x00\n
+invalid-utf8	location=unreadable	max_gb=3\n# caf\xE9\n
+overlong-utf8	location=unreadable	# \xC0\xAF\n
+surrogate-utf8	location=unreadable	# \xED\xA0\x80\n
+truncated-utf8	location=unreadable	# \xE2\x82
+valid-utf8	enabled=1 max_gb=3 max_days=60 location=thismac	# caf\xC3\xA9 \xE2\x82\xAC \xF0\x9F\x8E\xA7\nmax_gb=3\n
+too-big	location=unreadable	#\*70000.x\n
+number-leading-space	enabled=1 max_gb=20 max_days=60 location=thismac	max_gb=" 5"\n
+number-leading-tab	enabled=1 max_gb=20 max_days=60 location=thismac	max_days="\t9"\n
+root-folder	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n

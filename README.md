@@ -176,13 +176,28 @@ one, the line under the buttons says *"RB Stems Plus X is available"*, and **Upd
 Plus** appears in the RB Stems Plus menu. The new version replaces the old one in one step. If
 the update can't finish, RB Stems Plus stays as it was and tells you why the next time it opens.
 
+When an update includes a new Stems Cache, RB Stems Plus asks when it opens: **Update** (it asks
+for your password, and rekordbox needs to be closed) or **Not Now** (Stems Cache keeps working as
+it is, and RB Stems Plus asks again the next time it opens).
+
 ## Settings
 
 **RB Stems Plus › Settings…** (Cmd+,) sets how much space saved stems may use (20 GB by default)
 and after how many days unused stems are removed (60 by default). They apply the next time
 rekordbox opens. **Clear Saved Stems** frees the space now.
 
-<img src="docs/images/settings.png" width="368" alt="RB Stems Plus's Settings: Stems Cache size limit 20 GB, remove stems unused for 60 days, and the buttons Save, Clear Saved Stems and Cancel.">
+Saved stems take about 13 MB per minute of music: 1 GB holds about 85 minutes on this Mac.
+
+**Where stems are saved:** on this Mac by default, or on an external drive: click **Change…**
+next to *Stems Cache location*, choose the drive (or a folder on it), and RB Stems Plus makes a
+folder named *RB Stems Plus Cache* there. Switching starts empty: the stems saved on this Mac are
+deleted, and rekordbox separates those tracks again the next time you load them. If the drive
+already holds saved stems (from this Mac, another Mac or another account), they're used.
+**Use This Mac** goes back; the drive's stems stay on it. Without the drive, rekordbox separates
+tracks as usual; connect it, also while rekordbox runs, and it's used again within seconds. Quit
+rekordbox and eject the drive before unplugging it. More in [Troubleshooting](docs/troubleshooting.md#saved-stems-on-another-drive).
+
+<img src="docs/images/settings.png" width="700" alt="RB Stems Plus's Settings over its window: Stems Cache location: This Mac, with the buttons Change… and Use This Mac; Stems Cache size limit 20 GB; remove stems unused for 60 days; and the buttons Save, Clear Saved Stems and Cancel.">
 
 ## Uninstall
 
@@ -191,7 +206,8 @@ Open RB Stems Plus and click:
 - **Uninstall Demucs v4:** rekordbox gets its own stems model back. Stems Cache, if you have it,
   goes on saving stems with that model.
 - **Uninstall RB Stems Plus Completely:** rekordbox goes back to exactly how it was, and RB Stems
-  Plus deletes itself, its settings, its logs and the stems it saved.
+  Plus deletes itself, its settings, its logs and the stems it saved, and takes its icon out of
+  the Dock if you kept it there.
 
 Your music and your rekordbox library are never touched. The complete uninstall ends with this:
 
@@ -302,8 +318,20 @@ then open it after rekordbox updates.
 asks when the update is done (one click). Demucs v4 survives rekordbox
 updates, but not a new STEMS Engine download.
 
-**Can I change how much space saved stems use?** Yes, in [Settings](#settings). The stems are in
-`~/Library/Caches/rbstemsplus`. Don't move that folder or replace it with a link.
+**Can I change how much space saved stems use?** Yes, in [Settings](#settings). The limit counts
+the space the stems take on the disk. On this Mac they're in `~/Library/Caches/rbstemsplus`.
+Don't move that folder or replace it with a link: to save them elsewhere, use Settings.
+
+**Can I keep saved stems on an external drive?** Yes: in [Settings](#settings), **Change…**
+next to *Stems Cache location*. Only drives connected to this Mac that macOS lists as external
+(USB drives, most Thunderbolt drives), not network drives or a second internal disk. While the
+drive isn't connected, rekordbox separates tracks as usual and nothing is saved. On an exFAT or FAT32 drive macOS adds a small hidden file next to each
+saved file, so 1 GB holds about 72 minutes on a drive like an exFAT one with 128 KB clusters.
+Loading from a hard disk is slower than the 7 seconds measured on this Mac's own disk.
+
+Anyone who can write to that drive (another account, another Mac, any computer you plug it
+into) can change the saved stems rekordbox plays, for any track in your library, not only the
+music on that drive. Use a drive you control.
 
 **Something's wrong.** See [Troubleshooting](docs/troubleshooting.md), also in the app under
 **Help › RB Stems Plus Troubleshooting**.
