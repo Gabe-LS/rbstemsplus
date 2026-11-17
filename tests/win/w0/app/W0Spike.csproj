@@ -1,0 +1,51 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The W0 spike (app.md §3 S0, mac-core §9 G1.5, G1.9, G1.10): a net481 WPF app built on the
+       Mac with the pinned .NET SDK (release.md §3.6, T6), loading x64\ or arm64\rbsp-core.dll and
+       driving the core through P/Invoke with a C# host table. Test only, never shipped.
+       Built by tests/win/w0/build.sh, which passes W0Ids (the folder of the generated CoreIds.cs)
+       and W0Arch (AnyCPU, or x64 for the x64-forced build). -->
+  <PropertyGroup>
+    <W0Arch Condition="'$(W0Arch)' == ''">AnyCPU</W0Arch>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net481</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <PlatformTarget>$(W0Arch)</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <!-- Without this an AnyCPU net481 exe runs as x64 under emulation on ARM64 Windows (W0's first
+         run): it adds supportedArchitectures "amd64 arm64" to the embedded manifest, which Windows
+         reads to start the process natively on Arm64 -->
+    <PreferNativeArm64 Condition="'$(W0Arch)' == 'AnyCPU'">true</PreferNativeArm64>
+    <AssemblyName>RB Stems Plus W0</AssemblyName>
+    <AssemblyName Condition="'$(W0Arch)' == 'x64'">RB Stems Plus W0 x64</AssemblyName>
+    <RootNamespace>RbStemsPlus.W0</RootNamespace>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- our own Main (Program.cs): SetDefaultDllDirectories and the core preload come before WPF;
+         App.xaml stays XAML, compiled as a Page -->
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <StartupObject>RbStemsPlus.W0.Program</StartupObject>
+    <OutputPath>bin/$(W0Arch)/</OutputPath>
+    <IntermediateOutputPath>obj/$(W0Arch)/</IntermediateOutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <!-- reproducible, no commit in the bytes (release.md §3.6, R4.I92) -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <PathMap>$(MSBuildProjectDirectory)=.</PathMap>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <EnableSourceLink>false</EnableSourceLink>
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- locked restore (release.md §3.6, §9.1 rule 6) -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(W0Unlock)' != '1'">true</RestoreLockedMode>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="$(W0Ids)/CoreIds.cs" Link="CoreIds.cs" />
+  </ItemGroup>
+</Project>

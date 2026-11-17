@@ -1,0 +1,127 @@
+# The performance gate's rows (the private Windows plan §8.2, release.md §6.2), parsed by tests/perf/rules.py
+# for tests/perf/stats.py (the Mac app, baseline mac-A) and tests/perf/perfstats.py (the bridge's
+# and helper's GP, baseline B0):
+#   metric  stat  limit  floor  tag  baseline
+# Owner decided, 2026-11-12: "This whole speed test thing is becoming a joke. One thing is to
+# ensure we are not losing performance, another is spending 20 hours testing the speed to the
+# millisecond." Only what a user could notice is gated: a slowdown counts only when it is BOTH
+# over 10% AND over the floor, 20 ms for a time, 20 MB for memory (about what anyone reading
+# Activity Monitor next to the app's 30-90 MB would notice, far above footprint's own jitter).
+# Every other number both sides measure is printed for information and never blocks; a change
+# within 25% of its allowance is printed BORDERLINE for a human to judge. Rows are written before
+# B is measured: tightening is free, loosening needs the owner.
+# P16.children (tests/perf/stats.py) counts every child the app reaps in a Create Report round,
+# LocationMonitor's pgrep runs set off by the report's temporary folder included, and sums
+# overlapping children twice: P16.own (P16 less it) is biased low, the same way in A and B.
+
+# ---- the Mac app (mac-core.md §2.1), B against mac-A in one session; times in ms, memory in MB
+# start-up: launch to the window drawn, and to every light decided
+P1            median  10%  20ms  first    mac-A
+P2            median  10%  20ms  first    mac-A
+# refresh: a trigger to its refresh's end
+P3            median  10%  20ms  first    mac-A
+# click response: a click to its first visible reaction
+P5            median  10%  20ms  first    mac-A
+# list and playlist loading: a 5,000-track playlist chosen to the whole list drawn, and to the
+# streamed estimate's last row drawn (full speed)
+P6            median  10%  20ms  Prepare  mac-A
+P7.done.full  median  10%  20ms  Prepare  mac-A
+# memory use: phys_footprint idle 60 s after the start, and after a playlist and a scroll
+P10.idle      median  10%  20MB  first    mac-A
+P10.after7    median  10%  20MB  Prepare  mac-A
+# update: "Update" to the new app's window; report: Create Report to "Report saved" less the
+# report's waits on its children (log show, codesign, ditto…: the same tools with the same
+# arguments in A and B, whose time follows the host's load), the tight row; P16, the report's
+# wall time, a backstop above G0's per-launch spread (the worst launch 32% over the median) for
+# what P16.own leaves out: a tool added or slowed, work moved into a child. Owner decided
+# 2026-11-13: backstop +35%. core/tests/report-tools.py holds the tool calls to 1.3.0's.
+P14           median  10%  20ms  first    mac-A
+P16.own       median  10%  20ms  first    mac-A
+P16           median  35%  20ms  first    mac-A
+# The session (mac-core.md §2.2): A and B interleaved launch by launch, these launches per side
+# (about 14 min per side, about 40 min for both with a warm-up launch per side and scenario), each gating metric
+# taken from the scenarios that name it
+#         baseline scenario            per side  gating metrics
+@launches mac-A    perf-start          4         P1 P2 P10.idle P10.after7
+@launches mac-A    perf-update         6         P14
+@launches mac-A    perf-activation     2         P1 P2 P3
+@launches mac-A    perf-click          2         P1 P2 P5
+@launches mac-A    perf-playlist-5000  2         P1 P2 P6 P7.done.full
+@launches mac-A    perf-report         1         P1 P2 P16.own P16
+
+# ---- the Mac bridge (bridge.md §0b), against B0; samples in ns and bytes
+# the bridge's response time on rekordbox's thread: hits warm and cold, near hits, a miss's own
+# time, its start, its own time in hook_CreateSession
+P-B1.warm          median  10%  20ms  first B0
+P-B1.warm-drive    median  10%  20ms  first B0
+P-B1.cold          median  10%  20ms  first B0
+P-B2.near2k        median  10%  20ms  first B0
+P-B2.near20k       median  10%  20ms  first B0
+P-B3.miss          median  10%  20ms  first B0
+P-B3.miss-rebuilt  median  10%  20ms  first B0
+P-B6.start         median  10%  20ms  first B0
+P-B8.memo          median  10%  20ms  first B0
+P-B8.nomemo        median  10%  20ms  first B0
+# rekordbox's stems load time (tart, real rekordbox): bridge.log, not these scripts
+P-B5.*             median  10%  20ms  first B0
+# memory: the harness's peak over 1,000 hits
+P-B7.rss1000       median  10%  20MB  first B0
+
+# ---- the Mac helper (helper.md §2a), against B0
+# Prepare's time per track, the estimate's first and last line, the playlist and track lists
+P-H1.*             median  10%  20ms  Prepare  B0
+P-H3.first         median  10%  20ms  Prepare  B0
+P-H3.last          median  10%  20ms  Prepare  B0
+P-H5.playlists     median  10%  20ms  Prepare  B0
+P-H5.tracks        median  10%  20ms  Prepare  B0
+# memory: peak footprint of a run
+P-H4.rss           median  10%  20MB  Prepare  B0
+
+# ---- the Windows app (app.md §6, W11): the same user-visible rows as the Mac's, gated from the
+# second Windows-app release on, B against WB (first-tagged) and WP (Prepare-tagged) in one
+# session with mac-core §2.2's method; the probe's records are the same (perf-<pid>.tsv,
+# shell=wpf), P1 and P2 from the stub's start when the probe has it (stub_launch_ns), P10 the private
+# bytes (memory-*.txt, GetProcessMemoryInfo)
+P1            median  10%  20ms  first    WB
+P2            median  10%  20ms  first    WB
+P3            median  10%  20ms  first    WB
+P10.idle      median  10%  20MB  first    WB
+P14           median  10%  20ms  first    WB
+P16           median  10%  20ms  first    WB
+# P5 on Windows: every click perf-click times is a Prepare click (scenarios-win.tsv), so an app
+# with only the Manage tab has no P5 to time
+P5            median  10%  20ms  Prepare  WP
+P6            median  10%  20ms  Prepare  WP
+P7.done.full  median  10%  20ms  Prepare  WP
+P10.after7    median  10%  20MB  Prepare  WP
+# the elevated worker (J13): its start (after consent, not timed) to its first pipe line, ABAB against W0
+W.worker      median  10%  20ms  first    W0
+# WB's plan holds only scenarios the Manage-only app runs (scenarios-win.tsv's "run"; selftest.sh
+# checks it); P10.after7 from perf-start, the only scenario that writes both memory files
+#         baseline scenario            per side  gating metrics
+@launches WB       perf-start-first    4         P1 P2 P10.idle
+@launches WB       perf-update         6         P14
+@launches WB       perf-activation     2         P1 P2 P3
+@launches WB       perf-report         1         P1 P2 P16
+@launches WP       perf-start          4         P10.after7
+@launches WP       perf-click          2         P5
+@launches WP       perf-playlist-5000  2         P6 P7.done.full
+@launches W0       perf-worker         6         W.worker
+# The absolute limits (app.md §6's table, first proposals; the first Windows release passes on
+# these alone, the first Prepare release on its Prepare rows): B alone, every release
+#      metric          stat    max     tag      baseline   (share>Q: the fraction of samples over Q)
+@limit P1              median  1s      first    WB     # start, warm: the stub's launch to the first full snapshot on screen
+@limit P1.cold         median  2.5s    first    WB     # the same after a VM restart
+@limit P4              p95     100ms   first    WB     # activation to every cheap-fact value applied
+@limit W.item          max     16ms    first    WB     # the longest warm UI-thread item after the first snapshot
+@limit W.interop       p95     1ms     first    WB     # accessor calls and apply per render
+@limit W.interop.row   p95     50us    first    WB     # per-row delta, carried as the row's p95 (§6 names no statistic)
+@limit P10.idle        max     80MB    first    WB     # private bytes, idle
+@limit W.watcher.mem   max     5MB     first    WB     # the watcher's private bytes
+@limit W.worker        median  300ms   first    W0     # the elevated action overhead (J13)
+@limit P10.rows        max     40MB    Prepare  WP     # private bytes with 5,000 rows over idle
+@limit P7.stall.full   max     16700us Prepare  WP     # the longest UI-thread turn (perf mode's stand-in for §6's Rendering-tick gap), the stream at full speed (or the Mac's P7.stall if above, judged with the runner)
+@limit P7.stall.paced  max     16700us Prepare  WP     # the longest UI-thread turn (perf mode's stand-in for §6's Rendering-tick gap), the stream at 1 line/ms (or the Mac's P7.stall if above, judged with the runner)
+@limit P5.stream       max     16700us Prepare  WP     # a click during the stream to its first visible reaction
+@limit P8.late         share>16700us 1% Prepare WP     # scrolling and expanding: frames over 16.7 ms
+@limit W.item.prepare  max     16ms    Prepare  WP     # the longest warm UI-thread item in Prepare's scenarios

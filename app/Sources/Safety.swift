@@ -21,6 +21,16 @@ func fileType(_ path: String) -> mode_t? {
     return lstat(path, &st) == 0 ? st.st_mode & S_IFMT : nil
 }
 
+/// What lstat says of a path: its type, nothing there (ENOENT only), or unreadable (any other
+/// error, which is never taken for "nothing there": the model steps fail closed on it).
+enum Lookup: Equatable { case type(mode_t), missing, unreadable(Int32) }
+
+func fileLookup(_ path: String) -> Lookup {
+    var st = stat()
+    if lstat(path, &st) == 0 { return .type(st.st_mode & S_IFMT) }
+    return errno == ENOENT ? .missing : .unreadable(errno)
+}
+
 /// The bundle ID of an app folder: a real folder (not a link) and its Contents/Info.plist.
 func bundleIDOf(_ app: String) -> String? {
     guard fileType(app) == S_IFDIR else { return nil }
@@ -51,6 +61,7 @@ var refusedRemoval: (String) -> Void = { appendLog(logPath, "refused to delete \
 ///   ~/Library/Caches, so its parents aren't checked), and so must every folder between it and
 ///   the path: a link there would lead outside.
 /// - The last component may be a link: safeRemove removes the link, never what it points to.
+/// - Only ENOENT means "not there": a folder, root or app that can't be looked up is refused.
 func mayRemove(_ path: String, whole: Bool = false, _ d: Deletable = deletable) -> Bool {
     guard let c = pathComponents(path) else { return false }
     for root in d.inside {
@@ -58,22 +69,33 @@ func mayRemove(_ path: String, whole: Bool = false, _ d: Deletable = deletable) 
         var p = root
         for name in [""] + Array(c[r.count..<(c.count - 1)]) {
             if !name.isEmpty { p += "/" + name }
-            guard let t = fileType(p) else { return true }            // not there: nothing to delete
-            guard t == S_IFDIR else { return false }
+            switch fileLookup(p) {
+            case .missing: return true                              // not there: nothing to delete
+            case .type(S_IFDIR): continue
+            case .type, .unreadable: return false
+            }
         }
         return true
     }
-    if whole, d.roots.contains(where: { pathComponents($0) == c }) { return fileType(path).map { $0 == S_IFDIR } ?? true }
+    if whole, d.roots.contains(where: { pathComponents($0) == c }) {
+        switch fileLookup(path) { case .missing, .type(S_IFDIR): return true; default: return false }
+    }
     if d.files.contains(where: { pathComponents($0) == c }) { return true }
-    if d.apps.contains(where: { pathComponents($0) == c }) { return fileType(path) == nil || bundleIDOf(path) == bundleID }
+    if d.apps.contains(where: { pathComponents($0) == c }) { return fileLookup(path) == .missing || bundleIDOf(path) == bundleID }
     return false
 }
 
-/// The only way the app deletes anything. Returns whether nothing is left at `path`.
+/// The only way the app deletes anything. Returns whether nothing is left at `path`: only
+/// ENOENT counts as already gone, any other lookup error is "not removed".
 @discardableResult
 func safeRemove(_ path: String, whole: Bool = false, _ d: Deletable = deletable) -> Bool {
     guard mayRemove(path, whole: whole, d) else { refusedRemoval(path); return false }
-    guard let t = fileType(path) else { return true }
+    let t: mode_t
+    switch fileLookup(path) {
+    case .missing: return true
+    case .unreadable: return false
+    case .type(let found): t = found
+    }
     // removefile walks without following links; a link or a file is unlinked itself
     if t == S_IFDIR { return removefile(path, nil, removefile_flags_t(REMOVEFILE_RECURSIVE)) == 0 }
     return unlink(path) == 0
@@ -177,9 +199,6 @@ func ownedByThisAccount(_ path: String, uid: uid_t = getuid()) -> Bool {
     var st = stat()
     return lstat(path, &st) == 0 && st.st_uid == uid
 }
-
-/// The status line's request when ownBundle is nil.
-let moveToApplications = "Move RB Stems Plus to the Applications folder, then open it from there."
 
 /// The watcher helper inside the app `bundle`.
 func watcherHelper(_ bundle: String) -> String { bundle + "/" + watcherHelperPath }

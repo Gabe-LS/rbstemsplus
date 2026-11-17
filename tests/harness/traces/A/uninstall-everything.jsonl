@@ -1,0 +1,249 @@
+{"k":"start","t":0,"mode":"trace","pid":95302,"launch_ns":-11285667,"arch":"arm64"}
+{"k":"set","t":89289541,"f":"status.againBtn","s":"setTitle","v":"Prepare Again"}
+{"k":"set","t":89314458,"f":"status.stopBtn","s":"setTitle","v":"Stop Keeping…"}
+{"k":"ev","t":99091333,"e":"tabShown","v":"Status"}
+{"k":"ev","t":129949375,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":130473625,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":130487916,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":130866291,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":130877458,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":130946291,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":130960041,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":131197833,"f":"c.cacheIcon","s":"setImage","v":"installed, not working right now"}
+{"k":"set","t":131208791,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ffcc00"}
+{"k":"set","t":131226708,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":131237000,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"ev","t":139486500,"e":"cmd","v":"event 15000 windowDrawn 1"}
+{"k":"set","t":1117337791,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1117363416,"f":"c.installCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1117419333,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1117436416,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":1117450166,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1117462125,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1117464208,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1117469291,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1117471125,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1117474375,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1117475750,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1117614041,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":1117623291,"e":"tp","v":"refresh.end"}
+{"k":"set","t":1121292541,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1121314625,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1121321125,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"set","t":1122598791,"f":"status.table","s":"reloadData","v":"0"}
+{"k":"ev","t":1157987416,"e":"windowDrawn","v":""}
+{"k":"frame","t":1157986041,"n":2,"busy":999106291,"d":{"app.active":"1","app.modal":"","c.cacheIcon.hid":"0","c.cacheIcon.img":"installed, not working right now","c.cacheIcon.tint":"#ffcc00","c.cacheIcon.tip":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here.","c.cacheLabel.hid":"0","c.cacheLabel.str":"Stems Cache","c.cacheLabel.tip":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here.","c.installCacheBtn.en":"1","c.installCacheBtn.hid":"0","c.installCacheBtn.title":"Install Stems Cache","c.installPlusBtn.en":"1","c.installPlusBtn.hid":"0","c.installPlusBtn.title":"Install Demucs v4","c.plusIcon.hid":"0","c.plusIcon.img":"off","c.plusIcon.tint":"#ff383c","c.plusIcon.tip":"Demucs v4 is off.","c.plusLabel.hid":"0","c.plusLabel.str":"Demucs v4","c.plusLabel.tip":"Demucs v4 is off.","c.reinstallBtn.en":"0","c.reinstallBtn.hid":"0","c.reinstallBtn.title":"Reinstall Demucs v4","c.reinstallCacheBtn.en":"0","c.reinstallCacheBtn.hid":"0","c.reinstallCacheBtn.title":"Reinstall Stems Cache","c.reinstallPlusBtn.en":"0","c.reinstallPlusBtn.hid":"0","c.reinstallPlusBtn.title":"Reinstall Demucs v4","c.settingsBtn.en":"1","c.settingsBtn.hid":"0","c.settingsBtn.title":"Settings…","c.spinner.anim":"0","c.spinner.hid":"0","c.status.hid":"0","c.status.str":"","c.uninstallAllBtn.en":"1","c.uninstallAllBtn.hid":"0","c.uninstallAllBtn.title":"Uninstall RB Stems Plus Completely","c.uninstallCacheBtn.en":"1","c.uninstallCacheBtn.hid":"0","c.uninstallCacheBtn.title":"Uninstall Stems Cache","c.uninstallPlusBtn.en":"0","c.uninstallPlusBtn.hid":"0","c.uninstallPlusBtn.title":"Uninstall Demucs v4","c.updateItem.en":"1","c.updateItem.hid":"1","c.updateItem.title":"Update RB Stems Plus…","c.view0.hid":"0","c.view0.str":"Demucs v4","c.view1.hid":"0","c.view1.str":"Stems Cache","menu.App.About RB Stems Plus.en":"1","menu.App.About RB Stems Plus.hid":"0","menu.App.About RB Stems Plus.title":"About RB Stems Plus","menu.App.Hide RB Stems Plus.en":"1","menu.App.Hide RB Stems Plus.hid":"0","menu.App.Hide RB Stems Plus.title":"Hide RB Stems Plus","menu.App.Quit RB Stems Plus.en":"1","menu.App.Quit RB Stems Plus.hid":"0","menu.App.Quit RB Stems Plus.title":"Quit RB Stems Plus","menu.App.Settings….en":"1","menu.App.Settings….hid":"0","menu.App.Settings….title":"Settings…","menu.App.Uninstall RB Stems Plus….en":"1","menu.App.Uninstall RB Stems Plus….hid":"0","menu.App.Uninstall RB Stems Plus….title":"Uninstall RB Stems Plus…","menu.App.en":"1","menu.App.hid":"0","menu.App.title":"NSMenuItem","menu.Edit.AutoFill.Contact….en":"0","menu.Edit.AutoFill.Contact….hid":"0","menu.Edit.AutoFill.Contact….title":"Contact…","menu.Edit.AutoFill.Credit Card….en":"0","menu.Edit.AutoFill.Credit Card….hid":"0","menu.Edit.AutoFill.Credit Card….title":"Credit Card…","menu.Edit.AutoFill.Passwords….en":"0","menu.Edit.AutoFill.Passwords….hid":"0","menu.Edit.AutoFill.Passwords….title":"Passwords…","menu.Edit.AutoFill.en":"1","menu.Edit.AutoFill.hid":"0","menu.Edit.AutoFill.title":"AutoFill","menu.Edit.Copy.en":"0","menu.Edit.Copy.hid":"0","menu.Edit.Copy.title":"Copy","menu.Edit.Cut.en":"0","menu.Edit.Cut.hid":"0","menu.Edit.Cut.title":"Cut","menu.Edit.Emoji & Symbols#2.en":"1","menu.Edit.Emoji & Symbols#2.hid":"1","menu.Edit.Emoji & Symbols#2.title":"Emoji & Symbols","menu.Edit.Emoji & Symbols#3.en":"1","menu.Edit.Emoji & Symbols#3.hid":"1","menu.Edit.Emoji & Symbols#3.title":"Emoji & Symbols","menu.Edit.Emoji & Symbols.en":"1","menu.Edit.Emoji & Symbols.hid":"0","menu.Edit.Emoji & Symbols.title":"Emoji & Symbols","menu.Edit.Paste.en":"0","menu.Edit.Paste.hid":"0","menu.Edit.Paste.title":"Paste","menu.Edit.Select All.en":"0","menu.Edit.Select All.hid":"0","menu.Edit.Select All.title":"Select All","menu.Edit.Start Dictation…#2.en":"1","menu.Edit.Start Dictation…#2.hid":"1","menu.Edit.Start Dictation…#2.title":"Start Dictation…","menu.Edit.Start Dictation….en":"1","menu.Edit.Start Dictation….hid":"0","menu.Edit.Start Dictation….title":"Start Dictation…","menu.Edit.en":"1","menu.Edit.hid":"0","menu.Edit.title":"NSMenuItem","menu.Help.Create Report.en":"1","menu.Help.Create Report.hid":"0","menu.Help.Create Report.title":"Create Report","menu.Help.RB Stems Plus Help.en":"1","menu.Help.RB Stems Plus Help.hid":"0","menu.Help.RB Stems Plus Help.title":"RB Stems Plus Help","menu.Help.RB Stems Plus Troubleshooting.en":"1","menu.Help.RB Stems Plus Troubleshooting.hid":"0","menu.Help.RB Stems Plus Troubleshooting.title":"RB Stems Plus Troubleshooting","menu.Help.Report an Issue.en":"1","menu.Help.Report an Issue.hid":"0","menu.Help.Report an Issue.title":"Report an Issue","menu.Help.en":"1","menu.Help.hid":"0","menu.Help.title":"NSMenuItem","menu.Manage.Demucs v4.Install.en":"1","menu.Manage.Demucs v4.Install.hid":"0","menu.Manage.Demucs v4.Install.title":"Install","menu.Manage.Demucs v4.Reinstall.en":"0","menu.Manage.Demucs v4.Reinstall.hid":"0","menu.Manage.Demucs v4.Reinstall.title":"Reinstall","menu.Manage.Demucs v4.Uninstall….en":"0","menu.Manage.Demucs v4.Uninstall….hid":"0","menu.Manage.Demucs v4.Uninstall….title":"Uninstall…","menu.Manage.Demucs v4.en":"1","menu.Manage.Demucs v4.hid":"0","menu.Manage.Demucs v4.title":"Demucs v4","menu.Manage.Show Log.en":"1","menu.Manage.Show Log.hid":"0","menu.Manage.Show Log.title":"Show Log","menu.Manage.Stems Cache.Install.en":"1","menu.Manage.Stems Cache.Install.hid":"0","menu.Manage.Stems Cache.Install.title":"Install","menu.Manage.Stems Cache.Reinstall.en":"0","menu.Manage.Stems Cache.Reinstall.hid":"0","menu.Manage.Stems Cache.Reinstall.title":"Reinstall","menu.Manage.Stems Cache.Uninstall….en":"1","menu.Manage.Stems Cache.Uninstall….hid":"0","menu.Manage.Stems Cache.Uninstall….title":"Uninstall…","menu.Manage.Stems Cache.en":"1","menu.Manage.Stems Cache.hid":"0","menu.Manage.Stems Cache.title":"Stems Cache","menu.Manage.en":"1","menu.Manage.hid":"0","menu.Manage.title":"NSMenuItem","menu.Prepare.Check Again.en":"0","menu.Prepare.Check Again.hid":"0","menu.Prepare.Check Again.title":"Check Again","menu.Prepare.Pause.en":"0","menu.Prepare.Pause.hid":"0","menu.Prepare.Pause.title":"Pause","menu.Prepare.Prepare Playlist….en":"1","menu.Prepare.Prepare Playlist….hid":"0","menu.Prepare.Prepare Playlist….title":"Prepare Playlist…","menu.Prepare.Stop.en":"0","menu.Prepare.Stop.hid":"0","menu.Prepare.Stop.title":"Stop","menu.Prepare.en":"1","menu.Prepare.hid":"0","menu.Prepare.title":"NSMenuItem","menu.View.Manage.en":"1","menu.View.Manage.hid":"0","menu.View.Manage.title":"Manage","menu.View.Prepare.en":"1","menu.View.Prepare.hid":"0","menu.View.Prepare.title":"Prepare","menu.View.Status.en":"1","menu.View.Status.hid":"0","menu.View.Status.title":"Status","menu.View.en":"1","menu.View.hid":"0","menu.View.title":"NSMenuItem","menu.Window.Close All.en":"1","menu.Window.Close All.hid":"0","menu.Window.Close All.title":"Close All","menu.Window.Close.en":"1","menu.Window.Close.hid":"0","menu.Window.Close.title":"Close","menu.Window.Minimize.en":"1","menu.Window.Minimize.hid":"0","menu.Window.Minimize.title":"Minimize","menu.Window.en":"1","menu.Window.hid":"0","menu.Window.title":"NSMenuItem","prepare.bar.hid":"0","prepare.bar.val":"0.000","prepare.checkBtn.en":"1","prepare.checkBtn.hid":"0","prepare.checkBtn.title":"Button","prepare.info.hid":"0","prepare.info.str":"","prepare.nameLabel.hid":"0","prepare.nameLabel.str":"Choose a playlist","prepare.outline.en":"1","prepare.outline.hid":"0","prepare.outline.rows":"0","prepare.outline.sel":"-1","prepare.pauseBtn.en":"1","prepare.pauseBtn.hid":"0","prepare.pauseBtn.title":"Button","prepare.prepareBtn.en":"1","prepare.prepareBtn.hid":"0","prepare.prepareBtn.title":"Button","prepare.runGap.hid":"0","prepare.stopBtn.en":"1","prepare.stopBtn.hid":"0","prepare.stopBtn.title":"Button","prepare.tracksTable.en":"1","prepare.tracksTable.hid":"0","prepare.tracksTable.rows":"0","prepare.tracksTable.sel":"-1","prepare.until.days":"-9444","prepare.until.en":"1","prepare.until.hid":"0","status.againBtn.en":"0","status.againBtn.hid":"0","status.againBtn.title":"Prepare Again","status.cacheTip.hid":"0","status.cacheTip.str":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here.","status.plusTip.hid":"0","status.plusTip.str":"Demucs v4 is off.","status.runLine.hid":"0","status.runLine.str":"","status.stopBtn.en":"0","status.stopBtn.hid":"0","status.stopBtn.title":"Stop Keeping…","status.table.en":"1","status.table.hid":"0","status.table.rows":"0","status.table.sel":"-1","status.view0.hid":"0","status.view0.str":"Prepared playlists","status.view1.hid":"0","status.view1.str":"Up to 5 playlists, each kept until its date. Stems Cache leaves their stems alone until then.","tab.sel":"0","win.key":"1","win.mini":"0","win.sheet":"","win.title":"Status - TEST BUILD, downloads from http://192.168.64.1:8765/","win.vis":"1"}}
+{"k":"ev","t":1161228166,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":1161722166,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":1161731291,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1161923625,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":1161931500,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":1161952291,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1161956125,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1162039541,"f":"c.cacheIcon","s":"setImage","v":"installed, not working right now"}
+{"k":"set","t":1162046541,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ffcc00"}
+{"k":"set","t":1162055166,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1162059208,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1162454375,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1162463291,"f":"c.installCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1162465208,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1162468500,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":1162471125,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1162472416,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1162473708,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1162474875,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1162476208,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1162480791,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1162482125,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1162562708,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":1162568791,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":1162640416,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":1162953416,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":1162961541,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1163070666,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":1163078541,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":1163088250,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1163090333,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1163167375,"f":"c.cacheIcon","s":"setImage","v":"installed, not working right now"}
+{"k":"set","t":1163175125,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ffcc00"}
+{"k":"set","t":1163182625,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1163186416,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1163545666,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1163554375,"f":"c.installCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1163556166,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1163557916,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":1163560208,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1163561458,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1163562708,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1163563791,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1163565000,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1163566916,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1163568041,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1163627416,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":1163633625,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":1163793708,"e":"tp","v":"trigger.location"}
+{"k":"ev","t":1163800250,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":1164106541,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":1164113708,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1164210833,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":1164220666,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":1164229708,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1164231625,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1164307625,"f":"c.cacheIcon","s":"setImage","v":"installed, not working right now"}
+{"k":"set","t":1164314583,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ffcc00"}
+{"k":"set","t":1164321458,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1164325541,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1164672708,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1164680833,"f":"c.installCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1164682458,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1164684083,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":1164686166,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1164687375,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1164688625,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1164689583,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1164690791,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1164692750,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1164693833,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1164749541,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":1164755708,"e":"tp","v":"refresh.end"}
+{"k":"set","t":1164783750,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1164791416,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1164794625,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"set","t":1165799625,"f":"status.table","s":"reloadData","v":"0"}
+{"k":"ev","t":1165808333,"e":"tp","v":"trigger.location"}
+{"k":"ev","t":1165809750,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":1166115791,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":1166123458,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1166230166,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":1166237208,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":1166246541,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1166248333,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1166324958,"f":"c.cacheIcon","s":"setImage","v":"installed, not working right now"}
+{"k":"set","t":1166332000,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ffcc00"}
+{"k":"set","t":1166338625,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1166342583,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1166682541,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1166691083,"f":"c.installCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1166692708,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1166694333,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":1166696375,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1166697625,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1166698875,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1166699875,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1166701083,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1166702875,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1166704000,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1166759833,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":1166765750,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":1169034250,"e":"didBecomeActive","v":""}
+{"k":"ev","t":1169045875,"e":"tp","v":"trigger.activate"}
+{"k":"set","t":1180199166,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1180210750,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1180217500,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"set","t":1181493333,"f":"status.table","s":"reloadData","v":"0"}
+{"k":"ev","t":1181507500,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":1181838791,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":1181850541,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1182016750,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":1182029541,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":1182045291,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1182047791,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1182138125,"f":"c.cacheIcon","s":"setImage","v":"installed, not working right now"}
+{"k":"set","t":1182147250,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ffcc00"}
+{"k":"set","t":1182155791,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1182159750,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1182613208,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1182625000,"f":"c.installCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1182627000,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1182629708,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":1182632458,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1182633958,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1182635416,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1182636541,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1182638166,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1182641166,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1182642333,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1182719791,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":1182726125,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":1186198291,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":1619056666,"e":"cmd","v":"menu menu.App.Uninstall RB Stems Plus…"}
+{"k":"ev","t":1631059916,"e":"cmd","v":"event 10000 dialog 1"}
+{"k":"set","t":1777848041,"f":"c.status","s":"setStringValue","v":"Checking where stems are saved…"}
+{"k":"set","t":1777889166,"f":"c.spinner","s":"startAnimation","v":"1"}
+{"k":"set","t":1777946166,"f":"c.installPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1777957541,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1777959750,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1777969708,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1777971416,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1777976916,"f":"c.settingsBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1777980916,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"frame","t":1778011875,"n":75,"busy":703500,"d":{"c.installCacheBtn.en":"0","c.installPlusBtn.en":"0","c.settingsBtn.en":"0","c.spinner.anim":"1","c.status.str":"Checking where stems are saved…","c.uninstallCacheBtn.en":"0","c.updateItem.en":"0","menu.App.Settings….en":"0","menu.App.Uninstall RB Stems Plus….en":"0","menu.Help.Create Report.en":"0","menu.Manage.Demucs v4.Install.en":"0","menu.Manage.Stems Cache.Install.en":"0","menu.Manage.Stems Cache.Uninstall….en":"0","menu.Prepare.Prepare Playlist….en":"0"}}
+{"k":"ev","t":1778700250,"e":"tp","v":"trigger.actionEnd"}
+{"k":"set","t":1778721500,"f":"c.status","s":"setStringValue","v":""}
+{"k":"set","t":1778742541,"f":"c.spinner","s":"stopAnimation","v":"0"}
+{"k":"ev","t":1778744791,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":1779139666,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":1779154125,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1779341875,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":1779350750,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":1779366041,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1779368375,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1779455250,"f":"c.cacheIcon","s":"setImage","v":"installed, not working right now"}
+{"k":"set","t":1779463166,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ffcc00"}
+{"k":"set","t":1779471500,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1779475416,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."}
+{"k":"set","t":1779939291,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1779962750,"f":"c.installCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1779964875,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1779968375,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":1779972375,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1779973666,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1779979666,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1779980875,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1779984625,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1779986750,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1779987791,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1780076125,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":1780085708,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":2060395625,"e":"workQueueFree","n":1,"v":"35875"}
+{"k":"ev","t":2060406625,"e":"dialog","n":1,"v":"Uninstall RB Stems Plus? / rekordbox gets its own stems model back. Stems Cache was installed from another account on this Mac. Your music and rekordbox library aren't touched.\n\nRB Stems Plus will be deleted, including the stems it saved. {Uninstall*, Cancel}","origin":"event"}
+{"k":"frame","t":2064120291,"n":76,"busy":285436750,"d":{"app.modal":"Uninstall RB Stems Plus? / rekordbox gets its own stems model back. Stems Cache was installed from another account on this Mac. Your music and rekordbox library aren't touched.\n\nRB Stems Plus will be deleted, including the stems it saved. {Uninstall*, Cancel}","c.installCacheBtn.en":"1","c.installPlusBtn.en":"1","c.settingsBtn.en":"1","c.spinner.anim":"0","c.status.str":"","c.uninstallCacheBtn.en":"1","menu.App.About RB Stems Plus.en":"0","menu.App.Quit RB Stems Plus.en":"0","menu.Edit.Start Dictation…#2.en":"0","menu.Edit.Start Dictation….en":"0","menu.Help.RB Stems Plus Help.en":"0","menu.Help.RB Stems Plus Troubleshooting.en":"0","menu.Help.Report an Issue.en":"0","menu.Manage.Show Log.en":"0","menu.View.Manage.en":"0","menu.View.Prepare.en":"0","menu.View.Status.en":"0","menu.Window.Close All.en":"0","menu.Window.Close.en":"0","win.key":"0","win.sheet":"Uninstall RB Stems Plus? / rekordbox gets its own stems model back. Stems Cache was installed from another account on this Mac. Your music and rekordbox library aren't touched.\n\nRB Stems Plus will be deleted, including the stems it saved. {Uninstall*, Cancel}"}}
+{"k":"ev","t":2067924750,"e":"cmd","v":"wait 10000 app.modal!="}
+{"k":"ev","t":2074350250,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":2505600541,"e":"cmd","v":"wait 10000 app.modal!="}
+{"k":"ev","t":2511693916,"e":"cmd","v":"count dialog"}
+{"k":"ev","t":2518200083,"e":"cmd","v":"answer Uninstall"}
+{"k":"ev","t":2518634541,"e":"dialogEnd","n":1,"v":"Uninstall RB Stems Plus? / rekordbox gets its own stems model back. Stems Cache was installed from another account on this Mac. Your music and rekordbox library aren't touched.\n\nRB Stems Plus will be deleted, including the stems it saved. {Uninstall*, Cancel}","origin":""}
+{"k":"ev","t":2800134666,"e":"tabShown","v":"Manage"}
+{"k":"set","t":2800780750,"f":"c.status","s":"setStringValue","v":"Uninstalling RB Stems Plus…"}
+{"k":"set","t":2800798083,"f":"c.spinner","s":"startAnimation","v":"1"}
+{"k":"set","t":2800822083,"f":"c.installPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2800824500,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2800825916,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2800833250,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2800840416,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2800849833,"f":"c.settingsBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2800856541,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"ev","t":2805441875,"e":"cmd","v":"event 30000 dialog 2"}
+{"k":"ev","t":3081066625,"e":"dialog","n":2,"v":"Stems Cache from another account / Stems Cache was installed from another account on this Mac. Removing it turns it off in every account. {Remove*, Keep}","origin":"main-queue-block"}
+{"k":"frame","t":3084351875,"n":115,"busy":566403083,"d":{"app.modal":"Stems Cache from another account / Stems Cache was installed from another account on this Mac. Removing it turns it off in every account. {Remove*, Keep}","c.installCacheBtn.en":"0","c.installPlusBtn.en":"0","c.settingsBtn.en":"0","c.spinner.anim":"1","c.status.str":"Uninstalling RB Stems Plus…","c.uninstallCacheBtn.en":"0","tab.sel":"2","win.sheet":"Stems Cache from another account / Stems Cache was installed from another account on this Mac. Removing it turns it off in every account. {Remove*, Keep}","win.title":"Manage - TEST BUILD, downloads from http://192.168.64.1:8765/"}}
+{"k":"ev","t":3100853625,"e":"cmd","v":"wait 30000 app.modal!="}
+{"k":"ev","t":3107294041,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":3516821750,"e":"cmd","v":"wait 10000 app.modal!="}
+{"k":"ev","t":3523399541,"e":"cmd","v":"count dialog"}
+{"k":"ev","t":3530893666,"e":"cmd","v":"answer Keep"}
+{"k":"ev","t":3531301166,"e":"dialogEnd","n":2,"v":"Stems Cache from another account / Stems Cache was installed from another account on this Mac. Removing it turns it off in every account. {Remove*, Keep}","origin":""}
+{"k":"ev","t":3798162500,"e":"cmd","v":"event 30000 dialog 3"}
+{"k":"frame","t":3801628583,"n":150,"busy":271012291,"d":{"app.modal":"","menu.App.About RB Stems Plus.en":"1","menu.App.Quit RB Stems Plus.en":"1","menu.Edit.Select All.en":"1","menu.Edit.Start Dictation…#2.en":"1","menu.Edit.Start Dictation….en":"1","menu.Help.RB Stems Plus Help.en":"1","menu.Help.RB Stems Plus Troubleshooting.en":"1","menu.Help.Report an Issue.en":"1","menu.Manage.Show Log.en":"1","menu.View.Manage.en":"1","menu.View.Prepare.en":"1","menu.View.Status.en":"1","menu.Window.Close All.en":"1","menu.Window.Close.en":"1","win.key":"1","win.sheet":""}}
+{"k":"ev","t":4336394666,"e":"dialog","n":3,"v":"RB Stems Plus is uninstalled / rekordbox has its own stems model again. Stems Cache stays for the other account. Other accounts on this Mac that use RB Stems Plus need to paste the install command again. {Done*}","origin":"main-queue-block"}
+{"k":"frame","t":4339377791,"n":175,"busy":277810416,"d":{"app.modal":"RB Stems Plus is uninstalled / rekordbox has its own stems model again. Stems Cache stays for the other account. Other accounts on this Mac that use RB Stems Plus need to paste the install command again. {Done*}","menu.App.About RB Stems Plus.en":"0","menu.App.Quit RB Stems Plus.en":"0","menu.Edit.Select All.en":"0","menu.Edit.Start Dictation…#2.en":"0","menu.Edit.Start Dictation….en":"0","menu.Help.RB Stems Plus Help.en":"0","menu.Help.RB Stems Plus Troubleshooting.en":"0","menu.Help.Report an Issue.en":"0","menu.Manage.Show Log.en":"0","menu.View.Manage.en":"0","menu.View.Prepare.en":"0","menu.View.Status.en":"0","menu.Window.Close All.en":"0","menu.Window.Close.en":"0","win.key":"0","win.sheet":"RB Stems Plus is uninstalled / rekordbox has its own stems model again. Stems Cache stays for the other account. Other accounts on this Mac that use RB Stems Plus need to paste the install command again. {Done*}"}}
+{"k":"ev","t":4344798958,"e":"cmd","v":"wait 30000 app.modal!="}
+{"k":"ev","t":4350632083,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":4786533166,"e":"cmd","v":"wait 10000 app.modal!="}
+{"k":"ev","t":4792711000,"e":"cmd","v":"count dialog"}
+{"k":"ev","t":4798202250,"e":"cmd","v":"answer Done"}
+{"k":"ev","t":4798578875,"e":"dialogEnd","n":3,"v":"RB Stems Plus is uninstalled / rekordbox has its own stems model again. Stems Cache stays for the other account. Other accounts on this Mac that use RB Stems Plus need to paste the install command again. {Done*}","origin":""}
+{"k":"ev","t":5064201791,"e":"workQueueFree","n":2,"v":"1983158084"}
+{"k":"ev","t":5064213416,"e":"workQueueFree","n":3,"v":"727833000"}
+{"k":"frame","t":5068773375,"n":208,"busy":270802500,"d":{"app.modal":"","menu.App.About RB Stems Plus.en":"1","menu.App.Quit RB Stems Plus.en":"1","menu.Edit.Select All.en":"1","menu.Edit.Start Dictation…#2.en":"1","menu.Edit.Start Dictation….en":"1","menu.Help.RB Stems Plus Help.en":"1","menu.Help.RB Stems Plus Troubleshooting.en":"1","menu.Help.Report an Issue.en":"1","menu.Manage.Show Log.en":"1","menu.View.Manage.en":"1","menu.View.Prepare.en":"1","menu.View.Status.en":"1","menu.Window.Close All.en":"1","menu.Window.Close.en":"1","win.key":"1","win.sheet":""}}
+{"k":"ev","t":5070532625,"e":"willTerminate","v":""}

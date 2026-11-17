@@ -1,0 +1,73 @@
+/* menus.def: every menu item (mac-core §3.8), in menu order (a parent before its children).
+ *
+ *   MENU(id, os, menu, kind, title, key_mac, key_win, mods_mac, mods_win, event)
+ *     menu:  the parent item's id (an item, at any depth: Manage › Demucs v4 › Install), or NONE
+ *            for a top-level menu
+ *     kind:  item | separator | native   (native: the OS's own item, About/Hide/Quit/Edit/Window on
+ *            the Mac; drawn by the shell, so the Mac objects don't change)
+ *     title: a texts.def id, or NONE
+ *     mods_mac, mods_win: 0, or CORE_MOD_* bits, per OS (Help is ⌘? on the Mac, plain F1 on Windows)
+ *     event: the "id" of the {"ev":"menu"} event it sends, "" for none
+ * The enable/hidden/title rules are code (menu_rule in menus.c), moved unchanged from
+ * main.swift:71-91. The Mac rows are today's menus (main.swift makeMenu, extraAppMenuItems,
+ * windowMenus, helpMenuItems), in today's order; the Windows keys of the shared rows are
+ * app.md §4.5's (Ctrl for ⌘, F1 for Help). W-core writes the win rows (About in Help, Exit, Edit,
+ * the first Windows release's hidden items).
+ */
+#ifndef MENU
+#define MENU(id, os, menu, kind, title, key_mac, key_win, mods_mac, mods_win, event)
+#endif
+
+/* the app menu */
+MENU(M_APP,           all, NONE,      item,      T_APP_NAME,         "",  "",   0,                    0,                    "")
+MENU(M_APP_ABOUT,     mac, M_APP,     native,    T_MENU_ABOUT,       "",  "",   0,                    0,                    "")
+MENU(M_APP_SEP0,      mac, M_APP,     separator, NONE,               "",  "",   0,                    0,                    "")
+MENU(M_APP_UPDATE,    all, M_APP,     item,      T_MENU_UPDATE,      "",  "",   0,                    0,                    "update")
+MENU(M_APP_SETTINGS,  all, M_APP,     item,      T_MENU_SETTINGS,    ",", ",",  CORE_MOD_CMD_OR_CTRL, CORE_MOD_CMD_OR_CTRL, "settings")
+MENU(M_APP_UNINSTALL, all, M_APP,     item,      T_MENU_UNINSTALL,   "",  "",   0,                    0,                    "uninstall_all")
+MENU(M_APP_SEP1,      all, M_APP,     separator, NONE,               "",  "",   0,                    0,                    "")
+MENU(M_APP_HIDE,      mac, M_APP,     native,    T_MENU_HIDE,        "h", "",   CORE_MOD_CMD_OR_CTRL, 0,                    "")
+MENU(M_APP_SEP2,      mac, M_APP,     separator, NONE,               "",  "",   0,                    0,                    "")
+MENU(M_APP_QUIT,      mac, M_APP,     native,    T_MENU_QUIT,        "q", "",   CORE_MOD_CMD_OR_CTRL, 0,                    "")
+
+/* Edit and Window: AppKit's own menus on the Mac (Cut, Copy, Paste, Select All; Close, Minimize):
+ * one native row each; W-core's Windows Edit rows are drawn from the table (T_MENU_CUT, ...) */
+MENU(M_EDIT,          mac, NONE,      native,    T_MENU_EDIT,        "",  "",   0,                    0,                    "")
+
+/* View */
+MENU(M_VIEW,          all, NONE,      item,      T_MENU_VIEW,        "",  "",   0,                    0,                    "")
+MENU(M_VIEW_STATUS,   all, M_VIEW,    item,      T_MENU_STATUS,      "1", "1",  CORE_MOD_CMD_OR_CTRL, CORE_MOD_CMD_OR_CTRL, "tab_status")
+MENU(M_VIEW_PREPARE,  all, M_VIEW,    item,      T_MENU_PREPARE,     "2", "2",  CORE_MOD_CMD_OR_CTRL, CORE_MOD_CMD_OR_CTRL, "tab_prepare")
+MENU(M_VIEW_MANAGE,   all, M_VIEW,    item,      T_MENU_MANAGE,      "3", "3",  CORE_MOD_CMD_OR_CTRL, CORE_MOD_CMD_OR_CTRL, "tab_manage")
+
+/* Prepare */
+MENU(M_PREPARE,       all, NONE,      item,      T_MENU_PREPARE,     "",  "",   0,                    0,                    "")
+MENU(M_PREP_PLAYLIST, all, M_PREPARE, item,      T_MENU_PREPARE_PLAYLIST, "", "", 0,                  0,                    "prepare_playlist")
+MENU(M_PREP_CHECK,    all, M_PREPARE, item,      T_MENU_CHECK_AGAIN, "r", "r",  CORE_MOD_CMD_OR_CTRL, CORE_MOD_CMD_OR_CTRL, "check_again")
+MENU(M_PREP_SEP,      all, M_PREPARE, separator, NONE,               "",  "",   0,                    0,                    "")
+MENU(M_PREP_PAUSE,    all, M_PREPARE, item,      T_MENU_PAUSE,       "",  "",   0,                    0,                    "pause")
+MENU(M_PREP_STOP,     all, M_PREPARE, item,      T_MENU_STOP,        ".", ".",  CORE_MOD_CMD_OR_CTRL, CORE_MOD_CMD_OR_CTRL, "stop")
+
+/* Manage */
+MENU(M_MANAGE,        all, NONE,      item,      T_MENU_MANAGE,      "",  "",   0,                    0,                    "")
+MENU(M_MANAGE_PLUS,   all, M_MANAGE,  item,      T_MENU_DEMUCS,      "",  "",   0,                    0,                    "")
+MENU(M_MANAGE_PLUS_INSTALL, all, M_MANAGE_PLUS, item, T_MENU_INSTALL, "", "",   0,                    0,                    "install_plus")
+MENU(M_MANAGE_PLUS_REINSTALL, all, M_MANAGE_PLUS, item, T_MENU_REINSTALL, "", "", 0,                  0,                    "reinstall_plus")
+MENU(M_MANAGE_PLUS_UNINSTALL, all, M_MANAGE_PLUS, item, T_MENU_UNINSTALL_PART, "", "", 0,             0,                    "uninstall_plus")
+MENU(M_MANAGE_CACHE,  all, M_MANAGE,  item,      T_MENU_STEMS_CACHE, "",  "",   0,                    0,                    "")
+MENU(M_MANAGE_CACHE_INSTALL, all, M_MANAGE_CACHE, item, T_MENU_INSTALL, "", "", 0,                    0,                    "install_cache")
+MENU(M_MANAGE_CACHE_REINSTALL, all, M_MANAGE_CACHE, item, T_MENU_REINSTALL, "", "", 0,                0,                    "reinstall_cache")
+MENU(M_MANAGE_CACHE_UNINSTALL, all, M_MANAGE_CACHE, item, T_MENU_UNINSTALL_PART, "", "", 0,           0,                    "uninstall_cache")
+MENU(M_MANAGE_SEP,    all, M_MANAGE,  separator, NONE,               "",  "",   0,                    0,                    "")
+MENU(M_MANAGE_SHOW_LOG, all, M_MANAGE, item,     T_MENU_SHOW_LOG,    "",  "",   0,                    0,                    "show_log")
+
+MENU(M_WINDOW,        mac, NONE,      native,    T_MENU_WINDOW,      "",  "",   0,                    0,                    "")
+
+/* Help */
+MENU(M_HELP,          all, NONE,      item,      T_MENU_HELP,        "",  "",   0,                    0,                    "")
+MENU(M_HELP_HOME,     all, M_HELP,    item,      T_MENU_HELP_HOME,   "?", "F1", CORE_MOD_CMD_OR_CTRL, 0,                    "help")
+MENU(M_HELP_TROUBLESHOOTING, all, M_HELP, item,  T_MENU_TROUBLESHOOTING, "", "", 0,                   0,                    "troubleshooting")
+MENU(M_HELP_ISSUES,   all, M_HELP,    item,      T_MENU_REPORT_ISSUE, "", "",   0,                    0,                    "issues")
+MENU(M_HELP_REPORT,   all, M_HELP,    item,      T_MENU_REPORT,      "",  "",   0,                    0,                    "create_report")
+
+#undef MENU

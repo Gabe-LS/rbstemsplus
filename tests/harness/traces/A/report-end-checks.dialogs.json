@@ -1,0 +1,16 @@
+[
+ {
+  "n": 1,
+  "dialog": "Report saved / It's saved as ~/Desktop/RB Stems Plus <masked>.zip. To get help, click Open GitHub Issue, then drag the report into the issue. {Open GitHub Issue*, Done}",
+  "origin": "main-queue-block",
+  "work_queue": "blocked (asked from the work queue, or busy)",
+  "window_changed_under_it": [
+   "c.installPlusBtn.en",
+   "c.reinstallCacheBtn.en",
+   "c.settingsBtn.en",
+   "c.spinner.anim",
+   "c.status.str",
+   "c.uninstallCacheBtn.en"
+  ]
+ }
+]

@@ -1,0 +1,11 @@
+[
+ {
+  "n": 1,
+  "dialog": "Install Demucs v4? / Replaces rekordbox's stems model with Demucs v4. rekordbox's own model is kept, so it can be put back. {Install*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ }
+]

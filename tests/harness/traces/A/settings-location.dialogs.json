@@ -1,0 +1,27 @@
+[
+ {
+  "n": 1,
+  "dialog": "Settings / Stems Cache uses these settings the next time rekordbox opens. / Stems Cache location: RBSPSTICK / Stems Cache size limit (GB) / [20] / Remove stems unused for (days) / [60] {Change…, Use This Mac, Save*, Clear Saved Stems, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ },
+ {
+  "n": 2,
+  "dialog": "Use This Mac? / Stems Cache will save stems on this Mac. The stems saved on \"RBSPSTICK\" stay there. {Use This Mac*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ },
+ {
+  "n": 3,
+  "dialog": "Settings / Stems Cache uses these settings the next time rekordbox opens. / Stems Cache location: This Mac / Stems Cache size limit (GB) / [20] / Remove stems unused for (days) / [60] {Change…, Use This Mac (off), Save*, Clear Saved Stems (measuring…) (off), Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": []
+ }
+]

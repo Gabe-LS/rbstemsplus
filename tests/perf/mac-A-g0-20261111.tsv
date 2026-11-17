@@ -1,0 +1,48 @@
+# mac-A's reference: tests/perf/stats.py baselines of g0-aa-20261111-1948, side A, 210 clean launches; medians over every per-event sample (ms, MB, %); owner decided, 2026-11-12
+# noted: its A/A checks before the last (aa-1.txt, aa-2.txt, aa-3.txt) called NOISY: P3.longest.actionEnd median, P3.longest.location median, P5 median, P7.stall.full max
+# noted: its last A/A check (aa-final.txt) called NOISY: none
+# noted: perf mode's overhead (overhead-charges.tsv.refused: KEY STAT ms charged, information): P7.stall.full median 4.576; P7.stall.full max 4.959; P7.lastrow.full median 7.331; P7.done.full median 6.014; P7.stall.full@first median 1.296; P7.stall.full@first max 1.296; P7.lastrow.full@first median 3.682; P7.done.full@first median 3.157
+metric	kind	A	n	launches	per-launch medians
+P1	gate	1257.607	92	92	1201.8-1421.6
+P2	gate	1257.607	92	92	1201.8-1421.6
+P3	gate	7.547	130	10	7.1-7.8
+P5	gate	15.662	600	20	14.1-17.1
+P6	gate	112.516	40	10	98.2-117.8
+P7.done.full	gate	622.213	40	10	603.4-657.3
+P10.idle	gate	29.000	20	20	28.0-30.0
+P10.after7	gate	90.000	20	20	87.0-101.0
+P14	gate	1599.141	20	20	1372.7-1686.8
+P16	gate	19002.754	160	32	18787.8-24990.5
+P11.cpu	info	31.569	96	-	-
+P11.peak	info	4.564	96	-	-
+P11.run	info	420.005	96	-	-
+P12	info	0.000	120	-	-
+P12.start	info	0.000	240	-	-
+P12.wakeups	info	0.000	120	-	-
+P12.wakeups.start	info	0.000	240	-	-
+P13	info	7.240	1	-	-
+P15.swift	info	1.979	1	-	-
+P3.actionEnd	info	1.774	720	-	-
+P3.activate	info	13.503	394	-	-
+P3.busy	info	1.672	1702	-	-
+P3.busy.actionEnd	info	1.681	720	-	-
+P3.busy.activate	info	1.611	394	-	-
+P3.busy.location	info	1.683	588	-	-
+P3.location	info	1.684	588	-	-
+P3.longest	info	9.188	1702	-	-
+P3.longest.actionEnd	info	7.144	720	-	-
+P3.longest.activate	info	11.790	394	-	-
+P3.longest.location	info	10.198	588	-	-
+P4	info	22.403	394	-	-
+P7.busy.full	info	559.736	60	-	-
+P7.busy.paced	info	1939.569	40	-	-
+P7.done.paced	info	10417.423	40	-	-
+P7.lastrow.full	info	504.605	60	-	-
+P7.lastrow.paced	info	133.641	40	-	-
+P7.stall.full	info	333.975	60	-	-
+P7.stall.paced	info	32.016	40	-	-
+P8.draw	info	34.383	420	-	-
+P8.fetch	info	0.083	106662	-	-
+P8.stall	info	34.383	420	-	-
+P9.main	info	137.623	640	-	-
+P9.none	info	138.368	640	-	-

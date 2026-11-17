@@ -1,0 +1,21 @@
+# T17/T11: the complete uninstall end to end, with the trace audit around it (release.md section 8;
+# app.md 5.9 "As built (T11)" and its VM cases). From "clean Windows", x64 and arm64:
+#   tests/win/vm-run.sh stage
+#   tests/win/vm-run.sh run "clean Windows" uninstall
+# The share's dist-test/ is a TEST build with w6/win-uninstaller's shell at 9184d2c or later in it:
+# its --uninstall sends uninstall_from_settings, which the core holds until the start-up flow (the
+# welcome) is done; an older shell's uninstall_all is dropped after the welcome. Without Stems
+# Cache (that one needs rekordbox and UAC). The cases a run can't drive, that one included, are
+# in by-hand.md, for the VM lane by hand.
+include lib/vmlib.ps1
+need http
+need file repo/core/texts.def
+need file dist-test/bootstrap.ps1
+# MODE       SECS NAME                     SCRIPT
+user         120  audit-before             audit/snapshot.ps1
+user         600  install                  bootstrap/install.ps1
+user         60   stub-after-exit-refused  uninstall/stub-refusal.ps1
+user         180  second-copy              uninstall/second-copy.ps1
+user         600  complete                 uninstall/complete.ps1
+sys          120  defender                 uninstall/defender.ps1
+user         180  audit-after              audit/after-uninstall.ps1

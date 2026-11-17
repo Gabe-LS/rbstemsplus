@@ -10,32 +10,30 @@
 // first), under the user's own text, so an issue is useful even without the zip.
 import AppKit
 
-extension Controller {
-    @objc func createReport() {
-        guard !actionRunning else { return }
-        busyInFront("Creating a report…")                       // no action: no busy marker
-        work.async {
-            let made = buildReport(self.log)
-            self.busy(nil)
-            guard let made = made else {
-                _ = self.alert("Report failed", "The report couldn't be created. See the log in this window.", ["OK"]); return
-            }
-            self.log("report: \(redact(made.zip))")
-            let b = self.alert("Report saved",
-                               "It's saved as \(redact(made.zip)). To get help, click Open GitHub Issue, then drag the report into the issue.",
-                               ["Open GitHub Issue", "Done"])
-            guard b == "Open GitHub Issue" else { return }
-            DispatchQueue.main.async {
-                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: made.zip)])   // to drag into the issue
-                if let url = issueURL(title: made.title, details: made.details) { NSWorkspace.shared.open(url) }
-            }
-        }
-    }
+/// What the report measures before its lights are decided (the REPORT_FACTS step): where the stems
+/// are saved, measured now with its size, and the model's sha256 now ("missing", "unreadable").
+struct ReportMeasure {
+    var loc: LocationSnapshot
+    var modelSha: String
+}
+
+func reportMeasure() -> ReportMeasure {
+    let model = modelDir + "/hdemucs.onnx"
+    return ReportMeasure(loc: LocationMonitor.shared.current(size: true),
+                         modelSha: FileManager.default.fileExists(atPath: model) ? (sha256(model) ?? "unreadable") : "missing")
+}
+
+/// The report's two lights, as the core decided them from the measurement (REPORT_ZIP's
+/// arguments): their looks and texts, and whether Stems Cache's text is the location's.
+struct ReportLights {
+    var plus: (look: LightLook, tip: String)
+    var cache: (look: LightLook, tip: String)
+    var cacheIsLocation: Bool
 }
 
 /// Writes the report and zips it. Returns the zip's path, and the issue's title and technical
 /// details (issueDetails, masked), or nil.
-func buildReport(_ log: (String) -> Void) -> (zip: String, title: String, details: String)? {
+func buildReport(_ log: (String) -> Void, lights: ReportLights, measure: ReportMeasure) -> (zip: String, title: String, details: String)? {
     let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HHmmss"
     let name = "RB Stems Plus report \(f.string(from: Date()))"
     // made next to the logs (a folder safeRemove may clear), zipped, then moved out
@@ -43,7 +41,7 @@ func buildReport(_ log: (String) -> Void) -> (zip: String, title: String, detail
     let dir = tmp + "/" + name
     defer { safeRemove(tmp) }
     guard (try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)) != nil else { return nil }
-    let facts = reportFacts()
+    let facts = reportFacts(lights: lights, measure: measure)
     // the checksums this report prints itself, and payload.json's (public): never masked
     let manifestText = (try? String(contentsOfFile: manifestFile, encoding: .utf8)) ?? ""
     let keep = knownChecksums(facts.map(\.line).joined(separator: "\n") + "\n" + manifestText)
@@ -125,21 +123,15 @@ func reportSummary(_ facts: [(line: String, link: Bool)]) -> String {
 /// the watcher and the last update check, rekordbox's signature, then the rest. `link`: also in
 /// the issue's link; the long ones (full checksums, the folders' listings, rekordbox's whole
 /// signature check) are only in summary.txt, in the zip.
-func reportFacts() -> [(line: String, link: Bool)] {
+func reportFacts(lights: ReportLights, measure: ReportMeasure) -> [(line: String, link: Bool)] {
     let fm = FileManager.default
     func sha(_ p: String) -> String { fm.fileExists(atPath: p) ? (sha256(p) ?? "unreadable") : "missing" }
     func run(_ exe: String, _ args: String...) -> String { runTool(exe, args).1.trimmingCharacters(in: .whitespacesAndNewlines) }
     let plus = stemsPlusPresent(), cache = stemsCachePresent(), c = chosen(), cfg = readConfig()
-    // where the stems are saved, measured now (the report runs in the background)
-    let loc = LocationMonitor.shared.current(size: true), stems = loc.size.text
-    let inUse = loc.status.flatMap(folderInUse)
-    // the lights, as the window's refresh() shows them
-    let paused = cache && cfg.enabled ? inUse.flatMap { cachePausedFloor($0) } : nil
-    let model = modelDir + "/hdemucs.onnx", modelSha = sha(model), bridgeModels = cache ? bridgeCacheModels() : nil
-    let lights = (plusLight(installed: plus),
-                  cacheLight(installed: cache, plusOn: plus, chosen: c.cache, rekordboxModel: cfg.rekordboxModel, bridgeModels: bridgeModels,
-                             model: isSHA256(modelSha) ? modelSha : nil, engine: engineVersion(), pausedFloor: paused,
-                             location: loc.lightTip, drive: loc.drive))
+    // where the stems are saved and the model's checksum, measured now (the report runs in the
+    // background; REPORT_FACTS measured them, the core decided the lights from them)
+    let loc = measure.loc, stems = loc.size.text, inUse = loc.status.flatMap(folderInUse)
+    let model = modelDir + "/hdemucs.onnx", modelSha = measure.modelSha
     let volume = cacheVolumePath(inUse ?? defaultCacheDir), disk = diskBytes(volume)
     let rbPid = runTool("/usr/bin/pgrep", ["-f", "rekordbox\\.app/Contents/MacOS/rekordbox"]).1.split(separator: "\n").first.flatMap { pid_t($0) }
     let verify = runTool("/usr/bin/codesign", ["--verify", "--deep", "--strict", rbApp])
@@ -149,9 +141,9 @@ func reportFacts() -> [(line: String, link: Bool)] {
     var s: [(line: String, link: Bool)] = []
     func add(_ line: String, link: Bool = true) { s.append((line, link)) }
     // the light's location text names the drive: in the link, its state's code instead
-    let linkCache = loc.lightTip != nil && lights.1.tip == loc.lightTip ? (lights.1.look, "location: " + locationCode(loc)) : lights.1
-    add(appLine(version: appVersion, build: appBuild, plus: lights.0, cache: linkCache))
-    if linkCache.1 != lights.1.tip { add("Stems Cache light: \(lights.1.tip)", link: false) }
+    let linkCache = lights.cacheIsLocation ? (lights.cache.look, "location: " + locationCode(loc)) : lights.cache
+    add(appLine(version: appVersion, build: appBuild, shown: currentShownVersion(), plus: lights.plus, cache: linkCache))
+    if linkCache.1 != lights.cache.tip { add("Stems Cache light: \(lights.cache.tip)", link: false) }
     add(macLine(os: ProcessInfo.processInfo.operatingSystemVersionString, model: run("/usr/sbin/sysctl", "-n", "hw.model"),
                 chip: run("/usr/sbin/sysctl", "-n", "machdep.cpu.brand_string"), arch: run("/usr/bin/uname", "-m"),
                 memory: ProcessInfo.processInfo.physicalMemory, language: Locale.current.identifier))
@@ -227,8 +219,9 @@ func lightColour(_ look: LightLook) -> String {
     switch look { case .on: return "green"; case .limited: return "yellow"; case .off: return "red" }
 }
 
-func appLine(version: String, build: String, plus: (look: LightLook, tip: String), cache: (look: LightLook, tip: String)) -> String {
-    "RB Stems Plus: \(version) (\(build)); lights: Demucs v4 \(lightColour(plus.look)) (\(plus.tip)), Stems Cache \(lightColour(cache.look)) (\(cache.tip))"
+/// `shown`: the release's version when it isn't the app's own (versionText).
+func appLine(version: String, build: String, shown: String? = nil, plus: (look: LightLook, tip: String), cache: (look: LightLook, tip: String)) -> String {
+    "RB Stems Plus: \(versionText(own: version, build: build, shown: shown ?? version)); lights: Demucs v4 \(lightColour(plus.look)) (\(plus.tip)), Stems Cache \(lightColour(cache.look)) (\(cache.tip))"
 }
 
 func macLine(os: String, model: String, chip: String, arch: String, memory: UInt64, language: String) -> String {

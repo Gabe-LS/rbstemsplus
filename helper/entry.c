@@ -5,13 +5,10 @@
  * (helper/tests/same-as-bridge.sh checks). The FLAC also names the helper's version
  * (RBSTEMS_HELPER: the bridge ignores other tags), so a later helper replaces older entries. */
 #include <errno.h>
-#include <fcntl.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 #include <Accelerate/Accelerate.h>
 #include <FLAC/metadata.h>
 #include <FLAC/stream_encoder.h>
@@ -104,7 +101,11 @@ static int rebuild_spec(const float *x, size_t L, size_t F, float *out) {
     if (F != (L + HOP - 1) / HOP) return 1;
     const size_t frames = F + 4, full = NFFT + HOP * (frames - 1);
     if (start + L > full) return 1;
+#if defined(_WIN32)
+    plat_irfft *setup = plat_irfft_new(12);                 /* pocketfft: vDSP's packing and sum (irfft_cmp.c) */
+#else
     FFTSetup setup = vDSP_create_fftsetup(12, kFFTRadix2);    /* per call: no shared state between threads */
+#endif
     float *win = malloc(sizeof(float) * NFFT), *env = calloc(full, sizeof(float)), *y = malloc(sizeof(float) * full);
     float *re = malloc(sizeof(float) * BINS), *im = malloc(sizeof(float) * BINS), *frame = malloc(sizeof(float) * NFFT);
     int ok = setup && win && env && y && re && im && frame;
@@ -115,7 +116,9 @@ static int rebuild_spec(const float *x, size_t L, size_t F, float *out) {
         /* vDSP's inverse real FFT returns the plain sum (no 1/NFFT): times sqrt(NFFT) for
          * "normalized", over NFFT for the inverse DFT */
         const float scale = (float)(sqrt((double)NFFT) / NFFT);
+#if !defined(_WIN32)
         DSPSplitComplex sc = {re, im};
+#endif
         for (int s = 0; s < 4; s++)
             for (int c = 0; c < 2; c++) {
                 memset(y, 0, sizeof(float) * full);
@@ -124,8 +127,12 @@ static int rebuild_spec(const float *x, size_t L, size_t F, float *out) {
                     /* packed: re[0] = DC, im[0] = Nyquist (the restored top bin, zero) */
                     for (size_t k = 0; k < BINS; k++) { re[k] = xr[k * F + f]; im[k] = xi[k * F + f]; }
                     im[0] = 0.0f;
+#if defined(_WIN32)
+                    plat_irfft_run(setup, re, im, frame);
+#else
                     vDSP_fft_zrip(setup, &sc, 1, 12, kFFTDirection_Inverse);
                     vDSP_ztoc(&sc, 1, (DSPComplex *)frame, 2, BINS);
+#endif
                     const size_t off = (f + 2) * HOP;
                     for (int n = 0; n < NFFT; n++) y[off + n] += frame[n] * scale * win[n];
                 }
@@ -133,7 +140,11 @@ static int rebuild_spec(const float *x, size_t L, size_t F, float *out) {
                 for (size_t n = 0; n < L; n++) o[n] = y[start + n] / env[start + n];
             }
     }
+#if defined(_WIN32)
+    if (setup) plat_irfft_free(setup);
+#else
     if (setup) vDSP_destroy_fftsetup(setup);
+#endif
     free(win); free(env); free(y); free(re); free(im); free(frame);
     return ok ? 0 : 1;
 }
@@ -144,47 +155,49 @@ static void hex(const unsigned char *d, int n, char *out) {
     for (int i = 0; i < n; i++) snprintf(out + 2 * i, 3, "%02x", d[i]);
 }
 
-void rebuilt_id(const char *fp, char out[65]) {           /* the bridge's rebuilt_id */
+int rebuilt_id(const char *fp, char out[65]) {            /* the bridge's rebuilt_id */
     unsigned char d[32];
-    CC_SHA256_CTX c;
-    CC_SHA256_Init(&c);
-    CC_SHA256_Update(&c, "rbstems-rebuild-" REBUILD_VERSION ":", (CC_LONG)strlen("rbstems-rebuild-" REBUILD_VERSION ":"));
-    CC_SHA256_Update(&c, fp, 64);
-    CC_SHA256_Final(d, &c);
+    plat_sha256_ctx c;
+    if (plat_sha256_init(&c)) return -1;
+    plat_sha256_update(&c, "rbstems-rebuild-" REBUILD_VERSION ":", strlen("rbstems-rebuild-" REBUILD_VERSION ":"));
+    plat_sha256_update(&c, fp, 64);
+    if (plat_sha256_final(&c, d)) return -1;
     hex(d, 32, out);
+    return 0;
 }
 
+/* a model file (it may be a link: rekordbox's copy), read whole */
 int file_sha256(const char *path, char out[65]) {
-    int fd = open(path, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) return -1;
+    plat_file f;
+    if (plat_file_open_path(path, &f)) return -1;
     unsigned char *buf = malloc(1 << 20);
-    if (!buf) { close(fd); return -1; }
-    CC_SHA256_CTX c;
-    CC_SHA256_Init(&c);
-    ssize_t n;
-    while ((n = read(fd, buf, 1 << 20)) > 0) CC_SHA256_Update(&c, buf, (CC_LONG)n);
+    plat_sha256_ctx c;
+    if (!buf || plat_sha256_init(&c)) { free(buf); plat_file_close(f); return -1; }
+    size_t n = 0;
+    int e;
+    while (!(e = plat_read(f, buf, 1 << 20, &n)) && n > 0) plat_sha256_update(&c, buf, n);
     free(buf);
-    close(fd);
-    if (n < 0) return -1;
+    plat_file_close(f);
     unsigned char d[32];
-    CC_SHA256_Final(d, &c);
+    if (plat_sha256_final(&c, d) || e) return -1;
     hex(d, 32, out);
     return 0;
 }
 
 /* the exact key, as the bridge's hook_Run: format, model, shapes and the audio itself */
-void chunk_key(const char *model, const float *mix, size_t L, size_t F, char key[65]) {
+int chunk_key(const char *model, const float *mix, size_t L, size_t F, char key[65]) {
     int64_t mixdims[3] = {1, 2, (int64_t)L}, magdims[4] = {1, 4, BINS_, (int64_t)F};
     unsigned char dg[32];
-    CC_SHA256_CTX c;
-    CC_SHA256_Init(&c);
-    CC_SHA256_Update(&c, FORMAT, sizeof FORMAT);
-    CC_SHA256_Update(&c, model, 64);
-    CC_SHA256_Update(&c, mixdims, sizeof mixdims);
-    CC_SHA256_Update(&c, magdims, sizeof magdims);
-    CC_SHA256_Update(&c, mix, (CC_LONG)(2 * L * sizeof(float)));
-    CC_SHA256_Final(dg, &c);
+    plat_sha256_ctx c;
+    if (plat_sha256_init(&c)) return -1;
+    plat_sha256_update(&c, FORMAT, sizeof FORMAT);
+    plat_sha256_update(&c, model, 64);
+    plat_sha256_update(&c, mixdims, sizeof mixdims);
+    plat_sha256_update(&c, magdims, sizeof magdims);
+    plat_sha256_update(&c, mix, 2 * L * sizeof(float));
+    if (plat_sha256_final(&c, dg)) return -1;
     hex(dg, 32, key);
+    return 0;
 }
 
 void mean_std(const float *mix, size_t count, double *mean, double *std) {   /* the bridge's, on an array */
@@ -235,16 +248,17 @@ int rebuilt_pcm(const float *x, size_t F, const float *xt, const float *mix, siz
 
 /* <key>.flac in the folder x, through a temporary file renamed when complete (the bridge's
  * write_flac, plus the helper's version tag); -1 with *err */
-static int write_flac(int x, const char *key, const int16_t *pcm, size_t frames, const char *helper, int *err) {
+static int write_flac(plat_dir x, const char *key, const int16_t *pcm, size_t frames, const char *helper, int *err) {
     char name[80], tmp[96];
+    plat_file fd;
     snprintf(name, sizeof name, "%s.flac", key);
-    snprintf(tmp, sizeof tmp, "%s.%d.tmp", name, getpid());
-    unlinkat(x, tmp, 0);
-    int fd = openat(x, tmp, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
-    FILE *f = fd >= 0 ? fdopen(fd, "w+b") : NULL;
-    if (!f) { *err = errno; if (fd >= 0) { close(fd); unlinkat(x, tmp, 0); } return -1; }
+    snprintf(tmp, sizeof tmp, "%s.%d.tmp", name, plat_pid());
+    plat_unlink_at(x, tmp);
+    FILE *f = NULL;
+    if ((*err = plat_file_create_at(x, tmp, 1, &fd))) return -1;
+    if (!(f = plat_file_stdio(fd, "w+b"))) { *err = errno; plat_file_close(fd); plat_unlink_at(x, tmp); return -1; }
     FLAC__StreamEncoder *enc = FLAC__stream_encoder_new();
-    if (!enc) { fclose(f); unlinkat(x, tmp, 0); *err = ENOMEM; return -1; }
+    if (!enc) { fclose(f); plat_unlink_at(x, tmp); *err = ENOMEM; return -1; }
     FLAC__StreamMetadata *vc = FLAC__metadata_object_new(FLAC__METADATA_TYPE_VORBIS_COMMENT);
     FLAC__StreamMetadata_VorbisComment_Entry ent;
     FLAC__metadata_object_vorbiscomment_entry_from_name_value_pair(&ent, "RBSTEMS_KEY", key);
@@ -274,35 +288,36 @@ static int write_flac(int x, const char *key, const int16_t *pcm, size_t frames,
     *err = ok ? 0 : errno ? errno : EIO;
     FLAC__stream_encoder_delete(enc);
     FLAC__metadata_object_delete(vc);
-    if (ok && renameat(x, tmp, x, name) != 0) { ok = 0; *err = errno; }
+    if (ok && (*err = plat_rename_at(x, tmp, x, name)) != 0) ok = 0;
     if (ok) return 0;
-    unlinkat(x, tmp, 0);
+    plat_unlink_at(x, tmp);
     return -1;
 }
 
-static int write_desc(int x, const char *key, const float *d, int frames, float r0, float g0, const float *rt,
+static int write_desc(plat_dir x, const char *key, const float *d, int frames, float r0, float g0, const float *rt,
                       const float *rf, int *err) {           /* the bridge's write_desc */
     char name[80], tmp[96];
+    plat_file fd;
     snprintf(name, sizeof name, "%s.desc", key);
-    snprintf(tmp, sizeof tmp, "%s.%d.tmp", name, getpid());
-    unlinkat(x, tmp, 0);
-    int fd = openat(x, tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
-    FILE *f = fd >= 0 ? fdopen(fd, "wb") : NULL;
-    if (!f) { *err = errno; if (fd >= 0) { close(fd); unlinkat(x, tmp, 0); } return -1; }
+    snprintf(tmp, sizeof tmp, "%s.%d.tmp", name, plat_pid());
+    plat_unlink_at(x, tmp);
+    FILE *f = NULL;
+    if ((*err = plat_file_create_at(x, tmp, 0, &fd))) return -1;
+    if (!(f = plat_file_stdio(fd, "wb"))) { *err = errno; plat_file_close(fd); plat_unlink_at(x, tmp); return -1; }
     size_t n = 2 * (size_t)frames;
     int ok = fwrite("RBD2", 1, 4, f) == 4 && fwrite(&frames, 4, 1, f) == 1 && fwrite(&r0, 4, 1, f) == 1
              && fwrite(&g0, 4, 1, f) == 1 && fwrite(d, sizeof(float), n, f) == n
              && fwrite(rt, sizeof(float), 2, f) == 2 && fwrite(rf, sizeof(float), n, f) == n;
     if (!ok) *err = errno;
     if (fclose(f) != 0 && ok) { ok = 0; *err = errno; }
-    if (ok && renameat(x, tmp, x, name) != 0) { ok = 0; *err = errno; }
-    if (!ok) { unlinkat(x, tmp, 0); return -1; }
+    if (ok && (*err = plat_rename_at(x, tmp, x, name)) != 0) ok = 0;
+    if (!ok) { plat_unlink_at(x, tmp); return -1; }
     return 0;
 }
 
 /* the bridge's store_entry, without its location and space checks (the helper's own): 0 written,
  * 1 refused (*why), -1 a write failed (*err) */
-int store(int x, const char *key, const int16_t *pcm, const float *mix, size_t L, int rebuilt, int chosen,
+int store(plat_dir x, const char *key, const int16_t *pcm, const float *mix, size_t L, int rebuilt, int chosen,
           const char *helper, const char **why, int *err) {
     int frames = 0;
     float *d = malloc(sizeof(float) * 2 * DESC_MAX_FRAMES), *s = malloc(L * sizeof(float)), *m = malloc(L * sizeof(float));

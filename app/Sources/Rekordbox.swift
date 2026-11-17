@@ -50,30 +50,6 @@ func bridgeSaysLocation(data d: Data) -> Bool {
     return tokens.contains("location=1")
 }
 
-/// The checksum of rekordbox's model as it is now, if it was worked out already (else nil, and it
-/// is worked out in the background, then `done` runs on the main thread). Remembered per path,
-/// size and modification time: the model is about 300 MB, too slow to hash on the main thread.
-func currentModelSHA(_ path: String = modelDir + "/hdemucs.onnx", done: @escaping () -> Void) -> String? {
-    let a = try? FileManager.default.attributesOfItem(atPath: path)
-    guard let size = a?[.size] as? Int else { return nil }
-    let key = "\(path) \(size) \((a?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"
-    modelSHALock.lock(); let known = modelSHAMemo[key], working = modelSHAWorking.contains(key)
-    if known == nil && !working { modelSHAWorking.insert(key) }
-    modelSHALock.unlock()
-    if let k = known { return k }
-    if !working {
-        DispatchQueue.global(qos: .utility).async {
-            let s = sha256(path)
-            modelSHALock.lock(); if let s = s { modelSHAMemo[key] = s }; modelSHAWorking.remove(key); modelSHALock.unlock()
-            if s != nil { DispatchQueue.main.async(execute: done) }
-        }
-    }
-    return nil
-}
-
-private var modelSHAMemo: [String: String] = [:], modelSHAWorking = Set<String>()
-private let modelSHALock = NSLock()
-
 /// Whether anything of Stems Cache is on this Mac: the bridge in rekordbox, or the root folder
 /// (Pioneer's originals and library copy), which stays behind when a rekordbox update removed the
 /// bridge. Uninstalling removes either.

@@ -1,0 +1,11 @@
+[
+ {
+  "n": 1,
+  "dialog": "Update RB Stems Plus to <masked>? / Replaces this version with RB Stems Plus 1.3.1. {Update*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ }
+]

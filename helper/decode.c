@@ -1,13 +1,22 @@
 /* A file as rekordbox's separator reads it, before chunking: which reader rekordbox uses for the
  * file type, the length it gives, the channels it keeps, its resampler. One file can come out
  * more than one way (AAC): each way is a track, and each is prepared. */
+#if defined(_WIN32) || defined(RBSP_WIN_DECODE)
+/* Windows (and the Mac tests that compare it with AudioToolbox): the helper's own decoders */
+#include "pcm.h"
+#else
 #include <AudioToolbox/AudioToolbox.h>
+#endif
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "rbsp.h"
 #include "big.h"
+#ifdef _WIN32
+#include "plat_helper.h"
+#define strlcat plat_strlcat             /* mingw-w64 has none */
+#endif
 
 void tracks_free(tracks *ts) {
     for (int i = 0; i < ts->count; i++)
@@ -17,6 +26,10 @@ void tracks_free(tracks *ts) {
 
 static void lower_ext(const char *path, char *ext, size_t n) {
     const char *slash = strrchr(path, '/'), *dot = strrchr(path, '.');
+#ifdef _WIN32
+    const char *bs = strrchr(path, '\\');
+    if (bs && (!slash || bs > slash)) slash = bs;
+#endif
     ext[0] = 0;
     if (!dot || (slash && dot < slash)) return;
     size_t i = 0;
@@ -24,6 +37,48 @@ static void lower_ext(const char *path, char *ext, size_t n) {
     ext[i] = 0;
 }
 
+#ifdef RBSP_WIN_DECODE
+/* the formats as AudioToolbox names them on the Mac, for the code below that is the same on both */
+#define kAudioFormatFLAC PCM_FLAC
+#define kAudioFormatAppleLossless PCM_ALAC
+typedef struct { pcm_kind format; int rate, ch; double seconds; } probe_info;
+
+/* pcm.h's probe, by content (.mp3: rekordbox's MP3 frame scanner); why: what it refuses */
+static int probe(const char *path, const char *ext, probe_info *p, char *why, size_t whyn) {
+    plat_file f;
+    pcm_info pi;
+    if (plat_file_open_path(path, &f)) { snprintf(why, whyn, "the file can't be read"); return 1; }
+    int rc = pcm_probe(f, ext, &pi, why, whyn);
+    plat_file_close(f);
+    if (rc) return 1;
+    if (pi.rate < 1 || pi.ch < 1) { snprintf(why, whyn, "no audio stream RB Stems Plus can read"); return 1; }
+    p->format = pi.kind;
+    p->rate = pi.rate;
+    p->ch = pi.ch;
+    p->seconds = pi.seconds;
+    return 0;
+}
+
+static int is_aac(pcm_kind f) { return f == PCM_AAC; }
+
+/* FLAC, WAV, AIFF, ALAC, as the Mac's decode_pcm below gives them (pcm.h's rules) */
+static int decode_pcm(const char *path, float **out, size_t *n_out, int *rate, int *ch_out, char *why, size_t whyn) {
+    char ext[16];
+    plat_file f;
+    pcm_info pi;
+    pcm_out o;
+    lower_ext(path, ext, sizeof ext);
+    if (plat_file_open_path(path, &f)) { snprintf(why, whyn, "the file can't be read"); return 1; }
+    int rc = pcm_probe(f, ext, &pi, why, whyn) || pcm_decode(f, &pi, &o, why, whyn);
+    plat_file_close(f);
+    if (rc) return 1;
+    *out = o.s;
+    *n_out = o.n;
+    *rate = pi.rate;
+    *ch_out = pi.ch;
+    return 0;
+}
+#else
 typedef struct { UInt32 format; int rate, ch; double seconds; } probe_info;
 
 static int probe(const char *path, probe_info *p) {
@@ -122,6 +177,7 @@ done:
     ExtAudioFileDispose(f);
     return rc;
 }
+#endif
 
 static int add_track(tracks *ts, float *s, size_t n) {
     if (ts->count == MAX_TRACKS) { big_free(s); return 1; }
@@ -130,6 +186,14 @@ static int add_track(tracks *ts, float *s, size_t n) {
     return 0;
 }
 
+#ifdef RBSP_WIN_DECODE
+/* AAC through Media Foundation is helper.md's T10: refused before this (refused) */
+static int decode_aac(const char *path, tracks *ts, int *rate, char *why, size_t whyn) {
+    (void)path, (void)ts, (void)rate;
+    snprintf(why, whyn, "AAC: RB Stems Plus doesn't prepare it on Windows yet");
+    return 1;
+}
+#else
 /* AAC in an MP4: every decoder output (requirement 3) x the lengths rekordbox may give it */
 static int decode_aac(const char *path, tracks *ts, int *rate, char *why, size_t whyn) {
     mp4_audio a;
@@ -173,6 +237,7 @@ static int decode_aac(const char *path, tracks *ts, int *rate, char *why, size_t
     o.count = 0;                         /* every output was handed over */
     return 0;
 }
+#endif
 
 /* a 16-bit track as planar stereo float32 (big_alloc'd) */
 static float *to_float(const track *t) {
@@ -196,13 +261,26 @@ static int refused(const char *path, char *ext, size_t extn, probe_info *p, char
     for (size_t i = 0; i < sizeof exts / sizeof *exts; i++)
         if (!strcmp(ext, exts[i])) known = 1;
     if (!known) { snprintf(why, whyn, "%s: not a file type rekordbox plays", ext[0] ? ext : "no extension"); return 1; }
+#ifdef RBSP_WIN_DECODE
+    if (probe(path, ext, p, why, whyn)) return 1;
+    if (strcmp(ext, ".mp3") && is_aac(p->format)) { snprintf(why, whyn, "AAC: RB Stems Plus doesn't prepare it on Windows yet"); return 1; }
+#else
     if (probe(path, p)) { snprintf(why, whyn, "no audio stream macOS can read"); return 1; }
+#endif
     if (strcmp(ext, ".mp3") && is_aac(p->format)) {
         if (p->ch > 2) { snprintf(why, whyn, "AAC with %d channels: rekordbox loads it but doesn't separate it", p->ch); return 1; }
     } else if (strcmp(ext, ".mp3") && (p->rate == 11025 || p->rate == 352800 || p->rate == 384000)) {
         snprintf(why, whyn, "%d Hz: rekordbox can't load it", p->rate);
         return 1;
     }
+#ifdef _WIN32
+    /* rekordbox for Windows resamples with other code than the Mac's (helper.md §2): until the x64
+     * resampler is matched and proved (T11), only 44.1 kHz files are prepared */
+    if (p->rate != 44100) {
+        snprintf(why, whyn, "%d Hz: RB Stems Plus doesn't prepare files rekordbox resamples on Windows yet", p->rate);
+        return 1;
+    }
+#endif
     return 0;
 }
 
@@ -215,6 +293,10 @@ int probe_track(const char *path, double *seconds, int *aac, char *why, size_t w
     return 0;
 }
 
+#ifdef RBSP_TEST_TIMING
+uint64_t t_resample;
+#endif
+
 int load_tracks(const char *path, const char *rekordbox_app, tracks *ts, char *why, size_t whyn) {
     memset(ts, 0, sizeof *ts);
     char ext[16];
@@ -223,7 +305,11 @@ int load_tracks(const char *path, const char *rekordbox_app, tracks *ts, char *w
     int rate = p.rate;
     if (!strcmp(ext, ".mp3")) {          /* rekordbox's MP3 reader, whatever the layer */
         char lib[1024];
+#ifdef _WIN32
+        snprintf(lib, sizeof lib, "%s\\libmpg123.dll", rekordbox_app);   /* --rekordbox DIR: rekordbox.exe's folder */
+#else
         snprintf(lib, sizeof lib, "%s/Contents/MacOS/libmpg123.0.dylib", rekordbox_app);
+#endif
         float *s;
         size_t n;
         if (rb_mp3(path, lib, &s, &n, why, whyn)) return 1;
@@ -250,7 +336,9 @@ int load_tracks(const char *path, const char *rekordbox_app, tracks *ts, char *w
             float *in = ts->t[i].s, *o = NULL;
             size_t n = 0;
             if (!in) in = to_float(&ts->t[i]);
+            TIMING(uint64_t r0 = t_now();)
             if (!in || rb_resample(in, ts->t[i].n, rate, &o, &n)) bad = 1;
+            TIMING(t_resample += t_now() - r0;)
             if (in != ts->t[i].s) big_free(in);
             out.t[i] = (track){o, NULL, 2, 1, n};
             if (bad) { out.count = i + (o != NULL); break; }

@@ -1,0 +1,44 @@
+# config.ini fixtures for Windows' form of cache_dir (bridge.md §1, T3c): common/cfg_ini.c's
+# reader built with PATHS_WIN_FORM (common/tests/run.sh, modules-win), the rule the Windows
+# builds use. The format is tests/config-fixtures.txt's (its escapes: a path's backslash is \\);
+# the grammar is the same, only the path rule differs (common/path_rules.h).
+guid-root	enabled=1 max_gb=20 max_days=60 location=chosen dir=\\\\?\\Volume{0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f}\\RB%20Stems%20Plus%20Cache.noindex	cache_dir="\\\\?\\Volume{0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f}\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+guid-folder	enabled=1 max_gb=20 max_days=60 location=chosen dir=\\\\?\\Volume{0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f}\\DJ's%20Sets%20#1\\RB%20Stems%20Plus%20Cache.noindex	cache_dir="\\\\?\\Volume{0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f}\\DJ's Sets #1\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+guid-upper-hex	enabled=1 max_gb=20 max_days=60 location=chosen dir=\\\\?\\Volume{0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F}\\RB%20Stems%20Plus%20Cache.noindex	cache_dir="\\\\?\\Volume{0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F}\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+drive-root	enabled=1 max_gb=20 max_days=60 location=chosen dir=E:\\RB%20Stems%20Plus%20Cache.noindex	cache_dir="E:\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+drive-folder	enabled=1 max_gb=20 max_days=60 location=chosen dir=E:\\Music\\RB%20Stems%20Plus%20Cache.noindex	cache_dir="E:\\Music\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+drive-lower	enabled=1 max_gb=20 max_days=60 location=chosen dir=e:\\Music\\RB%20Stems%20Plus%20Cache.noindex	cache_dir="e:\\Music\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+non-ascii	enabled=1 max_gb=20 max_days=60 location=chosen dir=E:\\M\xC3\xBAsica\\RB%20Stems%20Plus%20Cache.noindex	cache_dir="E:\\M\xC3\xBAsica\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+single-quotes	enabled=1 max_gb=20 max_days=60 location=chosen dir=E:\\RB%20Stems%20Plus%20Cache.noindex	cache_dir='E:\\RB Stems Plus Cache.noindex'\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+in-cache-section	enabled=1 max_gb=3 max_days=60 location=chosen dir=\\\\?\\Volume{0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f}\\RB%20Stems%20Plus%20Cache.noindex	max_gb=3\n[cache]\ncache_dir="\\\\?\\Volume{0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f}\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+crlf	enabled=0 max_gb=20 max_days=60 location=chosen dir=\\\\?\\Volume{0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f}\\RB%20Stems%20Plus%20Cache.noindex	enabled=0\r\ncache_dir="\\\\?\\Volume{0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f}\\RB Stems Plus Cache.noindex"\r\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\r\n
+mac-form	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="/Volumes/GLS/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+forward-slashes	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:/Music/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+mixed-slashes	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\Music/RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+unc	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="\\\\server\\share\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+extended-drive	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="\\\\?\\E:\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+relative	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+drive-relative	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+guid-lowercase-volume	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="\\\\?\\volume{0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f}\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+guid-no-dashes	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="\\\\?\\Volume{0f8c2d3a1b2c4d5e8f901a2b3c4d5e6f}\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+guid-not-hex	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="\\\\?\\Volume{0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6g}\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+guid-no-brace	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="\\\\?\\Volume{0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+dot-dot	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\Music\\..\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+dot	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\.\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+empty-component	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\Music\\\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+trailing-backslash	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\RB Stems Plus Cache.noindex\\"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+component-trailing-dot	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\Music.\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+component-trailing-space	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\Music \\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+colon	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\a:b\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+less-than	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\a<b\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+greater-than	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\a>b\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+pipe	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\a|b\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+question-mark	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\a?b\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+star	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\a*b\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+control-char	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\a\tb\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+del	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\a\x7Fb\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+other-folder	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\GLS"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+folder-case	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\rb stems plus cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+path-700	enabled=1 max_gb=20 max_days=60 location=chosen dir=E:\\\*669.a\\RB%20Stems%20Plus%20Cache.noindex	cache_dir="E:\\\*669.a\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+path-701	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir="E:\\\*670.a\\RB Stems Plus Cache.noindex"\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n
+unquoted-space	enabled=1 max_gb=20 max_days=60 location=malformed	cache_dir=E:\\GLS 2\\RB Stems Plus Cache.noindex\ncache_id=0F8C2D3A-1B2C-4D5E-8F90-1A2B3C4D5E6F\n

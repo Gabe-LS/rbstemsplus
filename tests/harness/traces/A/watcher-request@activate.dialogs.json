@@ -1,0 +1,11 @@
+[
+ {
+  "n": 1,
+  "dialog": "rekordbox open / Quit rekordbox (also in other accounts on this Mac), then click Try Again. {Try Again*, Cancel}",
+  "origin": "main-queue-block",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ }
+]

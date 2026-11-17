@@ -1,0 +1,85 @@
+# The G0 scenarios on Windows (app.md §7 "The probe and the G0 scenarios", W10): which of
+# tests/harness/scenarios/*.sh the Windows shell runs, with what (OS-neutral verbs, one driver per OS:
+# the Windows driver is FlaUI's plus vm/volume.ps1, not written yet: FlaUI needs a download), and the
+# Windows-only scenarios judged on properties. Data only: the runner reads it. Columns, tab-separated:
+#   scenario  tests/harness/scenarios/<name>.sh, or win:<name> for a Windows-only scenario
+#   tag       first | Prepare (scenarios.tsv's; Status's run with Prepare, I10)
+#   windows   run (the trace must equal the latest Mac release's, except the per-OS fields) |
+#             properties (judged on the properties in notes) | mac-only (why in notes) |
+#             later (needs a part the first Windows release doesn't have yet: which in notes)
+#   per_os    fields the trace may differ in (comma-separated; "-" none), beyond the always
+#             per-OS ones below and the texts the Windows column of texts.def changes
+#   notes
+# Always per-OS, never listed (the runner and win/shell/tests read these two lines): win.title,
+# win.sheet (Windows' confirmations are dialogs, app.modal), the lights' .tint, the menus' states
+# (menu.*: Windows' own rows, menus.def; the shared rows' ids are the Mac's, the app menu "App",
+# and the driver maps a title the Windows column of texts.def words differently), c.notice
+# (Windows only), the Mac's fields with no Windows twin (c.view0, c.view1, the combined
+# c.reinstallBtn and c.uninstallAllBtn), and in "first" rows the hidden tabs' fields (I86):
+# always per-OS (every row): win.title,win.sheet,*.tint,menu.*,c.notice,c.view0,c.view1,c.reinstallBtn,c.uninstallAllBtn
+# always per-OS (first rows): prepare.*,status.*
+scenario	tag	windows	per_os	notes
+activation-refresh	first	run	-	both verbs: reopen is a second start's signal (one-copy window), activate-only an activation from another app (FlaUI)
+bridge-recovery-light	first	run	c.cacheLabel.tip	the bridge's rename as the Windows bridge does it (bridge.md); the light's words per OS
+cache-paused	first	later	-	the Prepare tab (W8b): its setup checks a playlist there; then the drive filled by vm/volume.ps1's VHD, not a disk image (c.cacheIcon.tip per OS)
+cache-update-offer	first	run	-	the local server serves payload.json's Windows block
+dialogs-under-estimate	Prepare	later	-	the Prepare tab (W8b)
+drive-replug	first	later	-	the Prepare tab (W8b): it starts on a checked playlist there; then the chosen drive is vm/volume.ps1's VHD, attached and detached (WM_DEVICECHANGE's volume arrival and removal; c.status.str per OS)
+g1-update-core	first	mac-only	-	G1's API spike on mac-A; never on Windows
+install-cache-flow	first	run	c.status.str	UAC accepted (FlaUI) where the Mac has no prompt; "this takes about a minute" is the worker's line
+install-confirm-cancel	first	run	-	the confirmation's buttons by title; menus as the dialog leaves them (disabled under it)
+install-offline-fails	first	later	-	the Status tab (I10): it comes back to Status; the work queue's alert is a flow dialog on Windows too
+install-plus-flow	first	run	-	-
+install-unverified	first	run	-	payload.json's signature as the Windows block is signed
+light-states	first	later	-	the Status tab (I10): it reads the states there; the tooltips worded per OS (c.plusIcon.tip, c.cacheIcon.tip)
+no-check-during-action	Prepare	later	-	the Prepare tab (W8b)
+password-sheet	first	mac-only	-	no password sheet on Windows: UAC is the system's (win:uac-declined, win:uac-accepted)
+perf-activation	first	run	-	perf mode; P3/P4 from trigger.activate to refresh.end
+perf-click	first	later	-	the Prepare tab (W8b): P5's clicks are Prepare's Check Again and the tab switches
+perf-idle	first	run	-	P12 from Windows' own counters (W11)
+perf-playlist-5000	Prepare	later	-	the Prepare tab (W8b)
+perf-report	first	run	-	P16: Create Report to "Report saved"
+perf-spike	Prepare	mac-only	-	G1.7's spike table (app/Spike)
+perf-spike-20k	Prepare	mac-only	-	G1.7's spike table (app/Spike)
+perf-start	first	later	-	the Prepare tab (W8b): P1, P2, P10 (the working set, W11's metric) end on its rows
+perf-start-first	first	run	-	perf-start up to its idle memory, no Prepare step (WB's plan): P1, P2 from the stub's launch, P10.idle the private bytes (W11's metric)
+perf-under-sheet	first	later	-	the Prepare tab (W8b): every P9 kind needs its estimate rows (on Windows: none, a main-thread confirmation, a work-queue alert; no password sheet, no Permission needed)
+perf-update	first	run	-	P14: the old app's "answer Update" to the new app's windowDrawn, through the stub and --swap
+perf-watcher	first	later	-	rbsp-watch.exe's own records (W7), not the probe's
+permission-needed	first	mac-only	-	macOS's App Management; Windows' nearest is SAC On, refused before install (win:sac-on-refused)
+prepare-check-cant-run	Prepare	later	-	the Prepare tab (W8b)
+prepare-choose-estimate	Prepare	later	-	the Prepare tab (W8b)
+prepare-come-back-quiet	Prepare	later	-	the Prepare tab (W8b)
+prepare-first-n	Prepare	later	-	the Prepare tab (W8b)
+prepare-folders	Prepare	later	-	the Prepare and Status tabs (W8b)
+prepare-held-click	Prepare	later	-	the Prepare tab (W8b)
+prepare-minimize-restore	Prepare	later	-	the Prepare tab (W8b)
+prepare-run	Prepare	later	-	the Prepare tab (W8b)
+prepare-run-under-dialog	Prepare	later	-	the Prepare tab (W8b)
+prepare-stop	Prepare	later	-	the Prepare tab (W8b)
+quit-during-download	first	later	-	the Exit row (W-core, G4): the quit through CloseGate (no CriticalWork during a download)
+quit-during-report	first	later	-	the Exit row (W-core, G4)
+quit-with-sheet	first	later	-	the Exit row (W-core, G4): Exit under a modal dialog is off, as Quit on the Mac
+rekordbox-missing	first	run	-	rekordbox's version folder moved out of <Program Files>\rekordbox
+remove-anyway	first	run	-	-
+report-end-checks	first	later	-	Create Report runs from the Status tab, which the first Windows release hides (I10, I86)
+resume-interrupted	first	run	-	-
+second-copy	first	properties	-	the second start finds the first copy's window and hands it the foreground (no second trace): HANDED, the first copy's reopen event and activation; "Already open" only when the first copy shows no window (BUSY, while quitting)
+settings-clear	Prepare	later	-	the Prepare tab (W8b)
+settings-location	first	run	-	Change… opens IFileOpenDialog (FlaUI); the drive is vm/volume.ps1's VHD
+settings-sheet	first	later	-	the Prepare tab (W8b): it starts on a checked playlist there; the Settings dialog is the core's (host->dialog)
+start-first-launch	first	run	-	the welcome; started from the stub (the pin), not the exe
+status-line-notices	first	run	-	-
+status-sets	Prepare	later	-	the Status tab (W8b)
+uninstall-everything	first	properties	-	the app's own files go through the C stub's --after-exit copy (I78): the window closes, the files and records are gone (the uninstall suite's audit), not a trace of the deleted app
+uninstall-stopped	first	run	-	-
+update-flow	first	run	-	the update through the stub, --swap and the off-screen start (W3b)
+watcher-off-line	first	run	c.status.str	the watcher turned off by its Run value (StartupApproved) as Settings > Apps > Startup does
+watcher-request	first	run	-	rbsp-watch.exe's request file; the dialog over rekordbox open
+win:uac-accepted	first	properties	-	Install Stems Cache, UAC accepted (FlaUI on the secure desktop's consent): the worker runs, the light turns on, CriticalWork counts the worker's run (a quit waits for it)
+win:uac-declined	first	properties	-	Install Stems Cache, UAC declined: the user stopped (1223), nothing changed, no alert beyond the core's, the buttons as before
+win:sac-on-refused	first	properties	-	bootstrap.ps1 with Smart App Control On: refused in one line with the how-to (release.md §4); no app installed
+win:sac-evaluation	first	properties	-	Smart App Control in Evaluation: the install goes through, the app starts and installs Stems Cache
+win:several-versions	first	properties	-	two rekordbox version folders under <Program Files>\rekordbox: the current one (its uninstall entry) is the one checked, installed into and named; the other untouched (sha256 of its DLLs)
+win:r1-offer	first	properties	-	R1: Pioneer's onnxruntime.dll missing from the current version folder: the light's line and "Put Back Pioneer's File" (the worker's restore), then the line gone and Put Back off until R1 answers again
+win:logoff-veto	first	properties	-	a logoff while the worker runs: vetoed with the status line as the reason, then the app quits when the worker ends and the logoff goes on (WV4); cancelled meanwhile: the app stays

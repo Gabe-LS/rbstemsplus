@@ -1,0 +1,66 @@
+[
+ {
+  "n": 1,
+  "dialog": "Install Demucs v4? / Replaces rekordbox's stems model with Demucs v4. rekordbox's own model is kept, so it can be put back. {Install*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en",
+   "prepare.tracksTable.r0",
+   "prepare.tracksTable.r1"
+  ]
+ },
+ {
+  "n": 2,
+  "dialog": "Install Demucs v4? / Replaces rekordbox's stems model with Demucs v4. rekordbox's own model is kept, so it can be put back. {Install*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ },
+ {
+  "n": 3,
+  "dialog": "rekordbox open / Quit rekordbox (also in other accounts on this Mac), then click Try Again. {Try Again*, Cancel}",
+  "origin": "main-queue-block",
+  "work_queue": "blocked (asked from the work queue, or busy)",
+  "window_changed_under_it": [
+   "c.spinner.anim"
+  ]
+ },
+ {
+  "n": 4,
+  "dialog": "Uninstall Stems Cache? / Stops saving stems and puts rekordbox's original files back. The stems already saved are kept. {Uninstall*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ },
+ {
+  "n": 5,
+  "dialog": "Password needed / Enter your password so RB Stems Plus can make changes to rekordbox. / [password] {Continue*, Cancel}",
+  "origin": "main-queue-block",
+  "work_queue": "blocked (asked from the work queue, or busy)",
+  "window_changed_under_it": []
+ },
+ {
+  "n": 6,
+  "dialog": "Reinstall Stems Cache? / Installs the latest version of Stems Cache again. {Reinstall*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ },
+ {
+  "n": 7,
+  "dialog": "Permission needed / 1. In the notification \"RB Stems Plus was prevented from modifying apps\", click Allow.\n2. Turn on RB Stems Plus in the list, then confirm.\n3. When macOS offers to quit and reopen RB Stems Plus, choose Later.\n4. Come back here and click Try Again. {Try Again*, Cancel}",
+  "origin": "main-queue-block",
+  "work_queue": "blocked (asked from the work queue, or busy)",
+  "window_changed_under_it": [
+   "c.spinner.anim",
+   "c.status.str"
+  ]
+ }
+]

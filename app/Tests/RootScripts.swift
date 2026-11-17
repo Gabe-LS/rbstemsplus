@@ -52,12 +52,15 @@ private struct FakeMac {
 private let three = ["MacOS/rekordbox", "_CodeSignature/CodeResources", "Frameworks/libonnxruntime.1.18.0.dylib"]
 private let version = "7.2.19.0342"
 private let fakeTeam = "fake.alphatheta"
-/// the name the test body looks for instead of rekordbox's, so the runs work while rekordbox is open
-private let fakeRekordboxProcess = "rbsp-rekordbox"
+/// the name the test body looks for instead of rekordbox's, so the runs work while rekordbox is open;
+/// this run's pid in it, so another make test running on this Mac at the same time (its sleepers
+/// are visible to pgrep too) can't make a run here see "rekordbox is open"
+private let fakeRekordboxProcess = "rbsp-rb-\(getpid())"
 /// the names and path the test body looks for instead of Pioneer's installer's and updater's and
-/// Installer.app's (process names: at most 16 characters, as macOS keeps them)
-private let fakeInstallerProcess = "rbsp-installer", fakeUpdaterProcess = "rbsp-Upmgr rb"
-private let fakeInstallerApp = "/rs-procs/Installer.app/Contents/MacOS/Installer"
+/// Installer.app's (process names: at most 16 characters, as macOS keeps them), this run's pid in
+/// them for the same reason
+private let fakeInstallerProcess = "rbsp-in-\(getpid())", fakeUpdaterProcess = "rbsp-Up \(getpid())"
+private let fakeInstallerApp = "/rs-procs-\(getpid())/Installer.app/Contents/MacOS/Installer"
 
 private func mkdirs(_ p: String) { try? FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o755]) }
 private func there(_ p: String) -> Bool { fileType(p) != nil }
@@ -170,17 +173,6 @@ func rootScriptTests() {
           "install: action, version, bundle ID, checksums, force; the bridge on stdin")
     check(cacheUninstallScript(version: "1").args == ["uninstall", "1", rbBundleID] && removeRootFolderScript().args == ["remove-root-folder", "", ""],
           "uninstall and remove-root-folder arguments")
-    // a run's exit code reaches the caller, with the root script's own reason (e.g. for "Uninstall stopped")
-    check(Controller.RootOutcome.done.code == nil && Controller.RootOutcome.done.problem == nil, "a run that succeeded has no code and no problem")
-    check(Controller.RootOutcome.failed(RootExit.noOriginals).code == RootExit.noOriginals
-          && Controller.RootOutcome.failed(RootExit.noOriginals).problem?.title == "Reinstall rekordbox", "a failed run's code and its reason (no saved originals)")
-    check(Controller.RootOutcome.rekordboxMissing.code == RootExit.rekordboxMissing
-          && Controller.RootOutcome.rekordboxMissing.problem?.title == "rekordbox missing", "rekordbox missing: its code and its reason")
-    check(Controller.RootOutcome.failed(Controller.cancelled).problem == nil && Controller.RootOutcome.failed(RootExit.checkFailed).problem == nil,
-          "cancelled, or a reason only in the log: no alert text")
-    for c in [RootExit.alreadyRunning, RootExit.installerRunning, RootExit.notPioneers, RootExit.rollbackFailed] {
-        check(Controller.rootProblem(c) != nil, "exit \(c) has its own reason for the user")
-    }
     check(![rbFolder, rootDir, rootLock, pioneerTeam].contains { $0.contains("'") || $0.contains("\n") }, "the fixed paths fit in single quotes")
     check(rbApp == rbFolder + "/rekordbox.app" && rbLib == rbApp + "/Contents/Frameworks/libonnxruntime.1.18.0.dylib"
           && rootOrt == rootDir + "/ort/libonnxruntime.1.18.0.dylib", "the scripts' paths match Paths.swift")

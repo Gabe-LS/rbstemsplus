@@ -1,0 +1,26 @@
+# T7 (bridge.md section 4): the Windows bridge's harness in the VM, bridge/win/tests/run.ps1's groups
+# as steps: harness.exe (it imports onnxruntime.dll by ordinal, as rekordbox.exe does) against the
+# TEST bridge with the 1.17.0 fake as its real library (passthrough), with none (missing: the
+# refusal stub), and with Pioneer's from the installed rekordbox (load; it SKIPs without one), and
+# with Pioneer's again, a cached chunk run marked as GPU memory (gpu, review BW1: passed through),
+# and a chosen location on an NTFS VHDX (the sys step vhd makes it) whose final component is a
+# junction to C: (junction, review BX6: "folder", a regression row for the reparse refusal), and
+# one on the share mapped as a network drive (network, review TR71, BW3's row: "not-local").
+# The harness steps run unelevated, as the user (I89); vhd runs as SYSTEM. From the snapshot with rekordbox installed, after the share holds
+# the files:
+#   bridge/win/tests/stage.sh --build       # the TEST bridge, harness.exe, the fake, the test model and run.ps1
+#   tests/win/vm-run.sh run "rekordbox 7.2.19 logged in" bridge
+include lib/vmlib.ps1
+need file bridge-win/run.ps1
+need file bridge-win/onnxruntime.dll
+need file bridge-win/harness.exe
+need file bridge-win/fake/onnxruntime.dll
+need file bridge-win/model/hdemucs.onnx
+# MODE       SECS NAME                SCRIPT
+sys          300  vhd                 bridge/vhd.ps1
+user         300  passthrough         bridge/passthrough.ps1
+user         300  missing             bridge/missing.ps1
+user         300  load                bridge/load.ps1
+user         300  gpu                 bridge/gpu.ps1
+user         300  junction            bridge/junction.ps1
+user         300  network             bridge/network.ps1

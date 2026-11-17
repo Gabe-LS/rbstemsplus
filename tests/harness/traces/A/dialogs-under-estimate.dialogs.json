@@ -1,0 +1,11 @@
+[
+ {
+  "n": 1,
+  "dialog": "Install Stems Cache? / Saves the stems rekordbox separates, with either stems model, so they load much faster the next time. {Install*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ }
+]

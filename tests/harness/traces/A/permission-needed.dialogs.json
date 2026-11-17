@@ -1,0 +1,31 @@
+[
+ {
+  "n": 1,
+  "dialog": "Install Stems Cache? / Saves the stems rekordbox separates, with either stems model, so they load much faster the next time. {Install*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ },
+ {
+  "n": 2,
+  "dialog": "Permission needed / 1. In the notification \"RB Stems Plus was prevented from modifying apps\", click Allow.\n2. Turn on RB Stems Plus in the list, then confirm.\n3. When macOS offers to quit and reopen RB Stems Plus, choose Later.\n4. Come back here and click Try Again. {Try Again*, Cancel}",
+  "origin": "main-queue-block",
+  "work_queue": "blocked (asked from the work queue, or busy)",
+  "window_changed_under_it": [
+   "c.spinner.anim",
+   "c.status.str"
+  ]
+ },
+ {
+  "n": 3,
+  "dialog": "Permission needed / 1. In the notification \"RB Stems Plus was prevented from modifying apps\", click Allow.\n2. Turn on RB Stems Plus in the list, then confirm.\n3. When macOS offers to quit and reopen RB Stems Plus, choose Later.\n4. Come back here and click Try Again. {Try Again*, Cancel}",
+  "origin": "main-queue-block",
+  "work_queue": "blocked (asked from the work queue, or busy)",
+  "window_changed_under_it": [
+   "c.spinner.anim",
+   "c.status.str"
+  ]
+ }
+]

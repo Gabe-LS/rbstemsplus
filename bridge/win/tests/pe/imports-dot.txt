@@ -1,0 +1,22 @@
+
+File: harness.exe
+Format: COFF-x86-64
+Arch: x86_64
+AddressSize: 64bit
+Import {
+  Name: onnxruntime_dll
+  ImportLookupTableRVA: 0x6D78
+  ImportAddressTableRVA: 0x7098
+  Symbol:  (1)
+  Symbol:  (2)
+  Symbol:  (3)
+  Symbol:  (4)
+}
+Import {
+  Name: api-ms-win-crt-environment-l1-1-0.dll
+  ImportLookupTableRVA: 0x6DA0
+  ImportAddressTableRVA: 0x70C0
+  Symbol: __p__environ (0)
+  Symbol: _putenv_s (0)
+  Symbol: getenv (0)
+}

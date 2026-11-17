@@ -1,0 +1,11 @@
+[
+ {
+  "n": 1,
+  "dialog": "Action interrupted / RB Stems Plus quit before \"Reinstall Demucs v4\" was done. Continue it now? {Continue*, Cancel}",
+  "origin": "main-queue-block",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ }
+]

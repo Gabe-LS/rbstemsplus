@@ -50,12 +50,16 @@ struct Manifest: Codable {
 
     /// The values that become folder names, URLs or checks must be plain: a version or file name
     /// made only of letters, digits, dots, dashes and underscores; checksums (previous_models too)
-    /// of 64 hex digits.
+    /// of 64 hex digits. payload_version and app.version must be release versions (x.y.z): a
+    /// beta's "1.5.0-beta.1" would compare above "1.5.0" and, once accepted, raise the floor
+    /// above the real 1.5.0. Refused here, so before the floor is touched (from 1.4.0; older
+    /// apps refuse a beta's payload.json because it has no "app").
     var valid: Bool {
         let plain: (String) -> Bool = { s in
             !s.isEmpty && s != "." && s != ".." && s.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }
         }
         return [payloadVersion, app.version, app.zip, bridge.file, model.file].allSatisfy(plain)
+            && [payloadVersion, app.version].allSatisfy(isReleaseVersion)
             && ([app.sha256, bridge.sha256, model.sha256] + (previousModels ?? [])).allSatisfy(isSHA256)
             && (model.size ?? 0) > 0
     }
@@ -67,6 +71,8 @@ let manifestSignatureFile = manifestFile + ".sig"
 /// signed (an old release can't be served again to undo a fix). A process of this account
 /// could delete this file; it still couldn't forge a signature.
 let payloadFloorFile = support + "/payload-version"
+/// The release version this app shows, and the app version it was recorded for (ShownVersion).
+let shownVersionFile = support + "/shown-version"
 
 /// The compatibility list used until a payload.json has been downloaded (1.0.0's).
 let builtInCompatible = Manifest.Compatible(rekordbox: ["7.2.17", "7.2.18", "7.2.19"], ortVersionPrefix: "1.18.", stemsEngine: ["0002"])
@@ -171,6 +177,8 @@ struct PayloadFiles {
     var floor = payloadFloorFile
     var keys = trustedKeys
     var minimum = payloadMinimum
+    /// The release version this app shows (Update.swift, ShownVersion), kept next to the floor.
+    var shown = shownVersionFile
 }
 
 /// The oldest payload_version this app accepts, also when no payload.json was ever accepted or
@@ -184,6 +192,15 @@ func payloadFloor(_ f: PayloadFiles = PayloadFiles()) -> String? {
     guard let d = FileManager.default.contents(atPath: f.floor) else { return nil }
     let v = String(decoding: d, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     return !v.isEmpty && v.count < 64 && v.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || "._-".contains($0)) }) ? v : nil
+}
+
+/// Whether `s` is a release version: x.y.z, each part 1 to 9 ASCII digits ("1.4.0", "1.10.2").
+/// A beta ("1.5.0-beta.1"), a "v", a fourth part or anything else isn't. VERSION, the tag and
+/// payload_version of every release are one (build.sh, build-app.sh and bootstrap.sh's
+/// older_version refuse anything else too). A pure rule: the shared core takes it over as is.
+func isReleaseVersion(_ s: String) -> Bool {
+    let parts = s.split(separator: ".", omittingEmptySubsequences: false)
+    return parts.count == 3 && parts.allSatisfy { p in (1...9).contains(p.count) && p.allSatisfy { $0.isASCII && $0.isNumber } }
 }
 
 /// Whether payload version `a` is older than `b` ("1.0.9" < "1.0.10").
@@ -282,12 +299,6 @@ func fetchManifestChecked(_ log: (String) -> Void) -> ManifestFetch {
         log("payload.json: REFUSED, \(why): nothing changed, the last good copy stays")
         return why == .notSaved ? .offline : .unverified
     }
-}
-
-/// fetchManifestChecked's payload.json, or nil (offline or not verified).
-func fetchManifest(_ log: (String) -> Void) -> Manifest? {
-    if case .ok(let m) = fetchManifestChecked(log) { return m }
-    return nil
 }
 
 // MARK: - checksums

@@ -1,0 +1,267 @@
+{"k":"start","t":0,"mode":"trace","pid":77864,"launch_ns":-12097167,"arch":"arm64"}
+{"k":"set","t":104032041,"f":"status.againBtn","s":"setTitle","v":"Prepare Again"}
+{"k":"set","t":104059583,"f":"status.stopBtn","s":"setTitle","v":"Stop Keeping…"}
+{"k":"ev","t":114892750,"e":"tabShown","v":"Status"}
+{"k":"ev","t":176072250,"e":"tabShown","v":"Manage"}
+{"k":"ev","t":176268000,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":176591666,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":176603625,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is off."}
+{"k":"set","t":177054500,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":177077833,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":177149875,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":177168458,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":177298125,"f":"c.cacheIcon","s":"setImage","v":"off"}
+{"k":"set","t":177307125,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":177321458,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":177325583,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"ev","t":185725791,"e":"cmd","v":"event 15000 windowDrawn 1"}
+{"k":"set","t":203915958,"f":"c.installPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":203939541,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":203948416,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":203958500,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Stems Cache"}
+{"k":"set","t":203967041,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":203973000,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":203974750,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":203980041,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":203981666,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":203984416,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":203985750,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":204188041,"f":"c.status","s":"setStringValue","v":"rekordbox 7 isn't installed."}
+{"k":"ev","t":204206666,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":238528000,"e":"didBecomeActive","v":""}
+{"k":"ev","t":238542250,"e":"tp","v":"trigger.activate"}
+{"k":"ev","t":248189958,"e":"windowDrawn","v":""}
+{"k":"frame","t":248186416,"n":2,"busy":44590458,"d":{"app.active":"1","app.modal":"","c.cacheIcon.hid":"0","c.cacheIcon.img":"off","c.cacheIcon.tint":"#ff383c","c.cacheIcon.tip":"Stems Cache is off.","c.cacheLabel.hid":"0","c.cacheLabel.str":"Stems Cache","c.cacheLabel.tip":"Stems Cache is off.","c.installCacheBtn.en":"0","c.installCacheBtn.hid":"0","c.installCacheBtn.title":"Install Stems Cache","c.installPlusBtn.en":"0","c.installPlusBtn.hid":"0","c.installPlusBtn.title":"Install Demucs v4","c.plusIcon.hid":"0","c.plusIcon.img":"off","c.plusIcon.tint":"#ff383c","c.plusIcon.tip":"Demucs v4 is off.","c.plusLabel.hid":"0","c.plusLabel.str":"Demucs v4","c.plusLabel.tip":"Demucs v4 is off.","c.reinstallBtn.en":"0","c.reinstallBtn.hid":"0","c.reinstallBtn.title":"Reinstall Stems Cache","c.reinstallCacheBtn.en":"0","c.reinstallCacheBtn.hid":"0","c.reinstallCacheBtn.title":"Reinstall Stems Cache","c.reinstallPlusBtn.en":"0","c.reinstallPlusBtn.hid":"0","c.reinstallPlusBtn.title":"Reinstall Demucs v4","c.settingsBtn.en":"1","c.settingsBtn.hid":"0","c.settingsBtn.title":"Settings…","c.spinner.anim":"0","c.spinner.hid":"0","c.status.hid":"0","c.status.str":"rekordbox 7 isn't installed.","c.uninstallAllBtn.en":"1","c.uninstallAllBtn.hid":"0","c.uninstallAllBtn.title":"Uninstall RB Stems Plus Completely","c.uninstallCacheBtn.en":"1","c.uninstallCacheBtn.hid":"0","c.uninstallCacheBtn.title":"Uninstall Stems Cache","c.uninstallPlusBtn.en":"0","c.uninstallPlusBtn.hid":"0","c.uninstallPlusBtn.title":"Uninstall Demucs v4","c.updateItem.en":"1","c.updateItem.hid":"1","c.updateItem.title":"Update RB Stems Plus…","c.view0.hid":"0","c.view0.str":"Demucs v4","c.view1.hid":"0","c.view1.str":"Stems Cache","menu.App.About RB Stems Plus.en":"1","menu.App.About RB Stems Plus.hid":"0","menu.App.About RB Stems Plus.title":"About RB Stems Plus","menu.App.Hide RB Stems Plus.en":"1","menu.App.Hide RB Stems Plus.hid":"0","menu.App.Hide RB Stems Plus.title":"Hide RB Stems Plus","menu.App.Quit RB Stems Plus.en":"1","menu.App.Quit RB Stems Plus.hid":"0","menu.App.Quit RB Stems Plus.title":"Quit RB Stems Plus","menu.App.Settings….en":"1","menu.App.Settings….hid":"0","menu.App.Settings….title":"Settings…","menu.App.Uninstall RB Stems Plus….en":"1","menu.App.Uninstall RB Stems Plus….hid":"0","menu.App.Uninstall RB Stems Plus….title":"Uninstall RB Stems Plus…","menu.App.en":"1","menu.App.hid":"0","menu.App.title":"NSMenuItem","menu.Edit.AutoFill.Contact….en":"0","menu.Edit.AutoFill.Contact….hid":"0","menu.Edit.AutoFill.Contact….title":"Contact…","menu.Edit.AutoFill.Credit Card….en":"0","menu.Edit.AutoFill.Credit Card….hid":"0","menu.Edit.AutoFill.Credit Card….title":"Credit Card…","menu.Edit.AutoFill.Passwords….en":"0","menu.Edit.AutoFill.Passwords….hid":"0","menu.Edit.AutoFill.Passwords….title":"Passwords…","menu.Edit.AutoFill.en":"1","menu.Edit.AutoFill.hid":"0","menu.Edit.AutoFill.title":"AutoFill","menu.Edit.Copy.en":"0","menu.Edit.Copy.hid":"0","menu.Edit.Copy.title":"Copy","menu.Edit.Cut.en":"0","menu.Edit.Cut.hid":"0","menu.Edit.Cut.title":"Cut","menu.Edit.Emoji & Symbols#2.en":"1","menu.Edit.Emoji & Symbols#2.hid":"1","menu.Edit.Emoji & Symbols#2.title":"Emoji & Symbols","menu.Edit.Emoji & Symbols#3.en":"1","menu.Edit.Emoji & Symbols#3.hid":"1","menu.Edit.Emoji & Symbols#3.title":"Emoji & Symbols","menu.Edit.Emoji & Symbols.en":"1","menu.Edit.Emoji & Symbols.hid":"0","menu.Edit.Emoji & Symbols.title":"Emoji & Symbols","menu.Edit.Paste.en":"0","menu.Edit.Paste.hid":"0","menu.Edit.Paste.title":"Paste","menu.Edit.Select All.en":"1","menu.Edit.Select All.hid":"0","menu.Edit.Select All.title":"Select All","menu.Edit.Start Dictation…#2.en":"1","menu.Edit.Start Dictation…#2.hid":"1","menu.Edit.Start Dictation…#2.title":"Start Dictation…","menu.Edit.Start Dictation….en":"1","menu.Edit.Start Dictation….hid":"0","menu.Edit.Start Dictation….title":"Start Dictation…","menu.Edit.en":"1","menu.Edit.hid":"0","menu.Edit.title":"NSMenuItem","menu.Help.Create Report.en":"1","menu.Help.Create Report.hid":"0","menu.Help.Create Report.title":"Create Report","menu.Help.RB Stems Plus Help.en":"1","menu.Help.RB Stems Plus Help.hid":"0","menu.Help.RB Stems Plus Help.title":"RB Stems Plus Help","menu.Help.RB Stems Plus Troubleshooting.en":"1","menu.Help.RB Stems Plus Troubleshooting.hid":"0","menu.Help.RB Stems Plus Troubleshooting.title":"RB Stems Plus Troubleshooting","menu.Help.Report an Issue.en":"1","menu.Help.Report an Issue.hid":"0","menu.Help.Report an Issue.title":"Report an Issue","menu.Help.en":"1","menu.Help.hid":"0","menu.Help.title":"NSMenuItem","menu.Manage.Demucs v4.Install.en":"0","menu.Manage.Demucs v4.Install.hid":"0","menu.Manage.Demucs v4.Install.title":"Install","menu.Manage.Demucs v4.Reinstall.en":"0","menu.Manage.Demucs v4.Reinstall.hid":"0","menu.Manage.Demucs v4.Reinstall.title":"Reinstall","menu.Manage.Demucs v4.Uninstall….en":"0","menu.Manage.Demucs v4.Uninstall….hid":"0","menu.Manage.Demucs v4.Uninstall….title":"Uninstall…","menu.Manage.Demucs v4.en":"1","menu.Manage.Demucs v4.hid":"0","menu.Manage.Demucs v4.title":"Demucs v4","menu.Manage.Show Log.en":"1","menu.Manage.Show Log.hid":"0","menu.Manage.Show Log.title":"Show Log","menu.Manage.Stems Cache.Install.en":"0","menu.Manage.Stems Cache.Install.hid":"0","menu.Manage.Stems Cache.Install.title":"Install","menu.Manage.Stems Cache.Reinstall.en":"0","menu.Manage.Stems Cache.Reinstall.hid":"0","menu.Manage.Stems Cache.Reinstall.title":"Reinstall","menu.Manage.Stems Cache.Uninstall….en":"1","menu.Manage.Stems Cache.Uninstall….hid":"0","menu.Manage.Stems Cache.Uninstall….title":"Uninstall…","menu.Manage.Stems Cache.en":"1","menu.Manage.Stems Cache.hid":"0","menu.Manage.Stems Cache.title":"Stems Cache","menu.Manage.en":"1","menu.Manage.hid":"0","menu.Manage.title":"NSMenuItem","menu.Prepare.Check Again.en":"0","menu.Prepare.Check Again.hid":"0","menu.Prepare.Check Again.title":"Check Again","menu.Prepare.Pause.en":"0","menu.Prepare.Pause.hid":"0","menu.Prepare.Pause.title":"Pause","menu.Prepare.Prepare Playlist….en":"1","menu.Prepare.Prepare Playlist….hid":"0","menu.Prepare.Prepare Playlist….title":"Prepare Playlist…","menu.Prepare.Stop.en":"0","menu.Prepare.Stop.hid":"0","menu.Prepare.Stop.title":"Stop","menu.Prepare.en":"1","menu.Prepare.hid":"0","menu.Prepare.title":"NSMenuItem","menu.View.Manage.en":"1","menu.View.Manage.hid":"0","menu.View.Manage.title":"Manage","menu.View.Prepare.en":"1","menu.View.Prepare.hid":"0","menu.View.Prepare.title":"Prepare","menu.View.Status.en":"1","menu.View.Status.hid":"0","menu.View.Status.title":"Status","menu.View.en":"1","menu.View.hid":"0","menu.View.title":"NSMenuItem","menu.Window.Close All.en":"1","menu.Window.Close All.hid":"0","menu.Window.Close All.title":"Close All","menu.Window.Close.en":"1","menu.Window.Close.hid":"0","menu.Window.Close.title":"Close","menu.Window.Minimize.en":"1","menu.Window.Minimize.hid":"0","menu.Window.Minimize.title":"Minimize","menu.Window.en":"1","menu.Window.hid":"0","menu.Window.title":"NSMenuItem","prepare.bar.hid":"0","prepare.bar.val":"0.000","prepare.checkBtn.en":"1","prepare.checkBtn.hid":"0","prepare.checkBtn.title":"Button","prepare.info.hid":"0","prepare.info.str":"","prepare.nameLabel.hid":"0","prepare.nameLabel.str":"Choose a playlist","prepare.outline.en":"1","prepare.outline.hid":"0","prepare.outline.rows":"0","prepare.outline.sel":"-1","prepare.pauseBtn.en":"1","prepare.pauseBtn.hid":"0","prepare.pauseBtn.title":"Button","prepare.prepareBtn.en":"1","prepare.prepareBtn.hid":"0","prepare.prepareBtn.title":"Button","prepare.runGap.hid":"0","prepare.stopBtn.en":"1","prepare.stopBtn.hid":"0","prepare.stopBtn.title":"Button","prepare.tracksTable.en":"1","prepare.tracksTable.hid":"0","prepare.tracksTable.rows":"0","prepare.tracksTable.sel":"-1","prepare.until.days":"-9444","prepare.until.en":"1","prepare.until.hid":"0","status.againBtn.en":"1","status.againBtn.hid":"0","status.againBtn.title":"Prepare Again","status.cacheTip.hid":"0","status.cacheTip.str":"Stems Cache is off.","status.plusTip.hid":"0","status.plusTip.str":"Demucs v4 is off.","status.runLine.hid":"0","status.runLine.str":"","status.stopBtn.en":"1","status.stopBtn.hid":"0","status.stopBtn.title":"Stop Keeping…","status.table.en":"1","status.table.hid":"0","status.table.rows":"0","status.table.sel":"-1","status.view0.hid":"0","status.view0.str":"Prepared playlists","status.view1.hid":"0","status.view1.str":"Up to 5 playlists, each kept until its date. Stems Cache leaves their stems alone until then.","tab.sel":"2","win.key":"1","win.mini":"0","win.sheet":"","win.title":"Manage - TEST BUILD, downloads from http://192.168.64.1:8765/","win.vis":"1"}}
+{"k":"ev","t":252899791,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":253131625,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":253146250,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is off."}
+{"k":"set","t":253328125,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":253339583,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":253372500,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":253379250,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":253464750,"f":"c.cacheIcon","s":"setImage","v":"off"}
+{"k":"set","t":253477083,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":253488166,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":253491125,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":253511625,"f":"c.installPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":253521375,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":253523083,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":253526250,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Stems Cache"}
+{"k":"set","t":253529125,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":253530583,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":253531916,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":253533541,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":253534958,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":253540416,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":253542000,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":253657250,"f":"c.status","s":"setStringValue","v":"rekordbox 7 isn't installed."}
+{"k":"ev","t":253668125,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":253770750,"e":"tp","v":"trigger.location"}
+{"k":"ev","t":253780333,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":253899291,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":253909250,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is off."}
+{"k":"set","t":254001791,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":254012083,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":254022416,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":254030958,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":254103875,"f":"c.cacheIcon","s":"setImage","v":"off"}
+{"k":"set","t":254113250,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":254120791,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":254122750,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":254137750,"f":"c.installPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254147541,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254149125,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254150750,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Stems Cache"}
+{"k":"set","t":254153333,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254154916,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254156333,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":254157416,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254159083,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":254161208,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":254162666,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":254225750,"f":"c.status","s":"setStringValue","v":"rekordbox 7 isn't installed."}
+{"k":"ev","t":254235041,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":254249000,"e":"tp","v":"trigger.location"}
+{"k":"ev","t":254250458,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":254332333,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":254341750,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is off."}
+{"k":"set","t":254432541,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":254441916,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":254449791,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":254451875,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":254537208,"f":"c.cacheIcon","s":"setImage","v":"off"}
+{"k":"set","t":254545875,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":254552500,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":254554458,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":254567833,"f":"c.installPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254570625,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254573333,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254575750,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Stems Cache"}
+{"k":"set","t":254578791,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254593916,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254595083,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":254596041,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254597041,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":254598416,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":254599250,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":254658250,"f":"c.status","s":"setStringValue","v":"rekordbox 7 isn't installed."}
+{"k":"ev","t":254668083,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":254681166,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":254759666,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":254769000,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is off."}
+{"k":"set","t":254854458,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":254863041,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":254869750,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":254871500,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":254943000,"f":"c.cacheIcon","s":"setImage","v":"off"}
+{"k":"set","t":254951916,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":254958000,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":254960125,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":254972958,"f":"c.installPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254988958,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254990500,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254992166,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Stems Cache"}
+{"k":"set","t":254994208,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254995541,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254996583,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":254997458,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":254998375,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":254999833,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":255000583,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":255057541,"f":"c.status","s":"setStringValue","v":"rekordbox 7 isn't installed."}
+{"k":"ev","t":255067083,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":274957875,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":696945625,"e":"cmd","v":"click c.uninstallCacheBtn"}
+{"k":"ev","t":709415750,"e":"cmd","v":"event 5000 dialog 1"}
+{"k":"ev","t":1158784333,"e":"workQueueFree","n":1,"v":"25125"}
+{"k":"ev","t":1158790708,"e":"dialog","n":1,"v":"Uninstall Stems Cache? / Stops saving stems and puts rekordbox's original files back. The stems already saved are kept. {Uninstall*, Cancel}","origin":"event"}
+{"k":"frame","t":1163666375,"n":80,"busy":285843500,"d":{"app.modal":"Uninstall Stems Cache? / Stops saving stems and puts rekordbox's original files back. The stems already saved are kept. {Uninstall*, Cancel}","c.updateItem.en":"0","menu.App.About RB Stems Plus.en":"0","menu.App.Quit RB Stems Plus.en":"0","menu.App.Settings….en":"0","menu.App.Uninstall RB Stems Plus….en":"0","menu.Edit.Select All.en":"0","menu.Edit.Start Dictation…#2.en":"0","menu.Edit.Start Dictation….en":"0","menu.Help.Create Report.en":"0","menu.Help.RB Stems Plus Help.en":"0","menu.Help.RB Stems Plus Troubleshooting.en":"0","menu.Help.Report an Issue.en":"0","menu.Manage.Show Log.en":"0","menu.Manage.Stems Cache.Uninstall….en":"0","menu.Prepare.Prepare Playlist….en":"0","menu.View.Manage.en":"0","menu.View.Prepare.en":"0","menu.View.Status.en":"0","menu.Window.Close All.en":"0","menu.Window.Close.en":"0","win.key":"0","win.sheet":"Uninstall Stems Cache? / Stops saving stems and puts rekordbox's original files back. The stems already saved are kept. {Uninstall*, Cancel}"}}
+{"k":"ev","t":1198350500,"e":"cmd","v":"wait 5000 app.modal!="}
+{"k":"ev","t":1205498166,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":1616874291,"e":"cmd","v":"wait 10000 app.modal!="}
+{"k":"ev","t":1624487166,"e":"cmd","v":"count dialog"}
+{"k":"ev","t":1632453833,"e":"cmd","v":"answer Uninstall"}
+{"k":"ev","t":1633498041,"e":"dialogEnd","n":1,"v":"Uninstall Stems Cache? / Stops saving stems and puts rekordbox's original files back. The stems already saved are kept. {Uninstall*, Cancel}","origin":""}
+{"k":"set","t":1904486208,"f":"c.status","s":"setStringValue","v":"Uninstalling Stems Cache…"}
+{"k":"set","t":1904523166,"f":"c.spinner","s":"startAnimation","v":"1"}
+{"k":"set","t":1904528958,"f":"c.installPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1904531083,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1904532833,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1904534041,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1904535208,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1904550625,"f":"c.settingsBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1904557375,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"ev","t":1908593958,"e":"cmd","v":"event 30000 dialog 2"}
+{"k":"ev","t":2194451333,"e":"dialog","n":2,"v":"rekordbox missing / rekordbox isn't in the Applications folder. If you moved it, click Cancel and put it back first. Otherwise RB Stems Plus can remove the copy of rekordbox's files it kept; Pioneer's installer can always reinstall rekordbox. {Cancel*, Remove}","origin":"main-queue-block"}
+{"k":"frame","t":2197490541,"n":128,"busy":564190916,"d":{"app.modal":"rekordbox missing / rekordbox isn't in the Applications folder. If you moved it, click Cancel and put it back first. Otherwise RB Stems Plus can remove the copy of rekordbox's files it kept; Pioneer's installer can always reinstall rekordbox. {Cancel*, Remove}","c.settingsBtn.en":"0","c.spinner.anim":"1","c.status.str":"Uninstalling Stems Cache…","c.uninstallCacheBtn.en":"0","win.sheet":"rekordbox missing / rekordbox isn't in the Applications folder. If you moved it, click Cancel and put it back first. Otherwise RB Stems Plus can remove the copy of rekordbox's files it kept; Pioneer's installer can always reinstall rekordbox. {Cancel*, Remove}"}}
+{"k":"ev","t":2203803583,"e":"cmd","v":"wait 30000 app.modal!="}
+{"k":"ev","t":2209518958,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":2635581541,"e":"cmd","v":"wait 10000 app.modal!="}
+{"k":"ev","t":2647146083,"e":"cmd","v":"count dialog"}
+{"k":"ev","t":2657638500,"e":"cmd","v":"answer Cancel"}
+{"k":"ev","t":2658261250,"e":"dialogEnd","n":2,"v":"rekordbox missing / rekordbox isn't in the Applications folder. If you moved it, click Cancel and put it back first. Otherwise RB Stems Plus can remove the copy of rekordbox's files it kept; Pioneer's installer can always reinstall rekordbox. {Cancel*, Remove}","origin":""}
+{"k":"ev","t":2926288666,"e":"cmd","v":"wait 30000 c.spinner.anim=0"}
+{"k":"frame","t":2926413708,"n":158,"busy":269188958,"d":{"app.modal":"","menu.App.About RB Stems Plus.en":"1","menu.App.Quit RB Stems Plus.en":"1","menu.Edit.Select All.en":"1","menu.Edit.Start Dictation…#2.en":"1","menu.Edit.Start Dictation….en":"1","menu.Help.RB Stems Plus Help.en":"1","menu.Help.RB Stems Plus Troubleshooting.en":"1","menu.Help.Report an Issue.en":"1","menu.Manage.Show Log.en":"1","menu.View.Manage.en":"1","menu.View.Prepare.en":"1","menu.View.Status.en":"1","menu.Window.Close All.en":"1","menu.Window.Close.en":"1","win.key":"1","win.sheet":""}}
+{"k":"ev","t":3052396125,"e":"workQueueFree","n":2,"v":"857964708"}
+{"k":"ev","t":3052821625,"e":"tp","v":"trigger.actionEnd"}
+{"k":"set","t":3052925291,"f":"c.status","s":"setStringValue","v":""}
+{"k":"set","t":3052938916,"f":"c.spinner","s":"stopAnimation","v":"0"}
+{"k":"ev","t":3052941208,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":3053087291,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":3053098666,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is off."}
+{"k":"set","t":3053237500,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":3053244333,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":3053257125,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":3053266541,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":3053342416,"f":"c.cacheIcon","s":"setImage","v":"off"}
+{"k":"set","t":3053351041,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":3053358458,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":3053360500,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":3053379541,"f":"c.installPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3053386625,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3053388291,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3053398250,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":3053400916,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3053401916,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3053422500,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3053429041,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3053440833,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3053443375,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3053444541,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3053550208,"f":"c.status","s":"setStringValue","v":"rekordbox 7 isn't installed."}
+{"k":"ev","t":3053556416,"e":"tp","v":"refresh.end"}
+{"k":"frame","t":3055868791,"n":176,"busy":3460541,"d":{"c.reinstallBtn.title":"Reinstall Demucs v4","c.settingsBtn.en":"1","c.spinner.anim":"0","c.status.str":"rekordbox 7 isn't installed.","c.uninstallCacheBtn.en":"1","c.updateItem.en":"1","menu.App.Settings….en":"1","menu.App.Uninstall RB Stems Plus….en":"1","menu.Help.Create Report.en":"1","menu.Manage.Stems Cache.Uninstall….en":"1","menu.Prepare.Prepare Playlist….en":"1"}}
+{"k":"ev","t":3080303000,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":3508394333,"e":"cmd","v":"click c.uninstallCacheBtn"}
+{"k":"ev","t":3528606041,"e":"cmd","v":"event 5000 dialog 3"}
+{"k":"ev","t":4062989916,"e":"workQueueFree","n":3,"v":"46916"}
+{"k":"ev","t":4062990416,"e":"dialog","n":3,"v":"Uninstall Stems Cache? / Stops saving stems and puts rekordbox's original files back. The stems already saved are kept. {Uninstall*, Cancel}","origin":"event"}
+{"k":"frame","t":4068891208,"n":217,"busy":292529583,"d":{"app.modal":"Uninstall Stems Cache? / Stops saving stems and puts rekordbox's original files back. The stems already saved are kept. {Uninstall*, Cancel}","c.updateItem.en":"0","menu.App.About RB Stems Plus.en":"0","menu.App.Quit RB Stems Plus.en":"0","menu.App.Settings….en":"0","menu.App.Uninstall RB Stems Plus….en":"0","menu.Edit.Select All.en":"0","menu.Edit.Start Dictation…#2.en":"0","menu.Edit.Start Dictation….en":"0","menu.Help.Create Report.en":"0","menu.Help.RB Stems Plus Help.en":"0","menu.Help.RB Stems Plus Troubleshooting.en":"0","menu.Help.Report an Issue.en":"0","menu.Manage.Show Log.en":"0","menu.Manage.Stems Cache.Uninstall….en":"0","menu.Prepare.Prepare Playlist….en":"0","menu.View.Manage.en":"0","menu.View.Prepare.en":"0","menu.View.Status.en":"0","menu.Window.Close All.en":"0","menu.Window.Close.en":"0","win.key":"0","win.sheet":"Uninstall Stems Cache? / Stops saving stems and puts rekordbox's original files back. The stems already saved are kept. {Uninstall*, Cancel}"}}
+{"k":"ev","t":4103283458,"e":"cmd","v":"wait 5000 app.modal!="}
+{"k":"ev","t":4108618208,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":4538976875,"e":"cmd","v":"wait 10000 app.modal!="}
+{"k":"ev","t":4544418250,"e":"cmd","v":"count dialog"}
+{"k":"ev","t":4550024666,"e":"cmd","v":"answer Uninstall"}
+{"k":"ev","t":4550390625,"e":"dialogEnd","n":3,"v":"Uninstall Stems Cache? / Stops saving stems and puts rekordbox's original files back. The stems already saved are kept. {Uninstall*, Cancel}","origin":""}
+{"k":"set","t":4819876500,"f":"c.status","s":"setStringValue","v":"Uninstalling Stems Cache…"}
+{"k":"set","t":4819894458,"f":"c.spinner","s":"startAnimation","v":"1"}
+{"k":"set","t":4819897666,"f":"c.installPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":4819899500,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":4819901083,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":4819902416,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":4819903666,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":4819917583,"f":"c.settingsBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":4819922458,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"ev","t":4822256125,"e":"cmd","v":"event 30000 dialog 4"}
+{"k":"ev","t":5097745125,"e":"dialog","n":4,"v":"rekordbox missing / rekordbox isn't in the Applications folder. If you moved it, click Cancel and put it back first. Otherwise RB Stems Plus can remove the copy of rekordbox's files it kept; Pioneer's installer can always reinstall rekordbox. {Cancel*, Remove}","origin":"main-queue-block"}
+{"k":"frame","t":5101580166,"n":253,"busy":551767666,"d":{"app.modal":"rekordbox missing / rekordbox isn't in the Applications folder. If you moved it, click Cancel and put it back first. Otherwise RB Stems Plus can remove the copy of rekordbox's files it kept; Pioneer's installer can always reinstall rekordbox. {Cancel*, Remove}","c.settingsBtn.en":"0","c.spinner.anim":"1","c.status.str":"Uninstalling Stems Cache…","c.uninstallCacheBtn.en":"0","win.sheet":"rekordbox missing / rekordbox isn't in the Applications folder. If you moved it, click Cancel and put it back first. Otherwise RB Stems Plus can remove the copy of rekordbox's files it kept; Pioneer's installer can always reinstall rekordbox. {Cancel*, Remove}"}}
+{"k":"ev","t":5122914583,"e":"cmd","v":"wait 30000 app.modal!="}
+{"k":"ev","t":5128829833,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":5544755333,"e":"cmd","v":"wait 10000 app.modal!="}
+{"k":"ev","t":5551611500,"e":"cmd","v":"count dialog"}
+{"k":"ev","t":5558047083,"e":"cmd","v":"answer Remove"}
+{"k":"ev","t":5558404125,"e":"dialogEnd","n":4,"v":"rekordbox missing / rekordbox isn't in the Applications folder. If you moved it, click Cancel and put it back first. Otherwise RB Stems Plus can remove the copy of rekordbox's files it kept; Pioneer's installer can always reinstall rekordbox. {Cancel*, Remove}","origin":""}
+{"k":"ev","t":5825016583,"e":"cmd","v":"wait 60000 c.spinner.anim=0"}
+{"k":"frame","t":5825115208,"n":284,"busy":267291666,"d":{"app.modal":"","menu.App.About RB Stems Plus.en":"1","menu.App.Quit RB Stems Plus.en":"1","menu.Edit.Select All.en":"1","menu.Edit.Start Dictation…#2.en":"1","menu.Edit.Start Dictation….en":"1","menu.Help.RB Stems Plus Help.en":"1","menu.Help.RB Stems Plus Troubleshooting.en":"1","menu.Help.Report an Issue.en":"1","menu.Manage.Show Log.en":"1","menu.View.Manage.en":"1","menu.View.Prepare.en":"1","menu.View.Status.en":"1","menu.Window.Close All.en":"1","menu.Window.Close.en":"1","win.key":"1","win.sheet":""}}
+{"k":"set","t":5845954375,"f":"c.status","s":"setStringValue","v":"Removing the copy of rekordbox's files…"}
+{"k":"set","t":5845970041,"f":"c.spinner","s":"startAnimation","v":"1"}
+{"k":"set","t":5845973708,"f":"c.installPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":5845975791,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":5845977833,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":5845979541,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":5845981083,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":5845982583,"f":"c.settingsBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":5845983750,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"frame","t":5846001791,"n":292,"busy":887875,"d":{"c.status.str":"Removing the copy of rekordbox's files…"}}
+{"k":"ev","t":6049254375,"e":"workQueueFree","n":4,"v":"951525292"}
+{"k":"ev","t":6049710083,"e":"tp","v":"trigger.actionEnd"}
+{"k":"set","t":6049837291,"f":"c.status","s":"setStringValue","v":""}
+{"k":"set","t":6049851625,"f":"c.spinner","s":"stopAnimation","v":"0"}
+{"k":"ev","t":6049854000,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":6050020750,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":6050033833,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is off."}
+{"k":"set","t":6050186583,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":6050195083,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":6050215041,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":6050217500,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":6050297708,"f":"c.cacheIcon","s":"setImage","v":"off"}
+{"k":"set","t":6050304708,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":6050312833,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":6050314875,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":6050333125,"f":"c.installPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":6050339916,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":6050341625,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":6050344166,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":6050346583,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":6050348125,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":6050378833,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":6050385583,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":6050387041,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":6050389541,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":6050390750,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":6050502583,"f":"c.status","s":"setStringValue","v":"rekordbox 7 isn't installed."}
+{"k":"ev","t":6050510625,"e":"tp","v":"refresh.end"}
+{"k":"frame","t":6052679041,"n":310,"busy":3409750,"d":{"c.settingsBtn.en":"1","c.spinner.anim":"0","c.status.str":"rekordbox 7 isn't installed.","c.updateItem.en":"1","menu.App.Settings….en":"1","menu.App.Uninstall RB Stems Plus….en":"1","menu.Help.Create Report.en":"1","menu.Prepare.Prepare Playlist….en":"1"}}
+{"k":"ev","t":6078510208,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":6488309958,"e":"cmd","v":"quit "}
+{"k":"ev","t":6489352625,"e":"willTerminate","v":""}

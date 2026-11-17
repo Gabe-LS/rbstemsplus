@@ -1,0 +1,59 @@
+[
+ {
+  "n": 1,
+  "dialog": "Settings / Stems Cache uses these settings the next time rekordbox opens. / Stems Cache location: This Mac / Stems Cache size limit (GB) / [20] / Remove stems unused for (days) / [60] {Change…, Use This Mac (off), Save*, Clear Saved Stems, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ },
+ {
+  "n": 2,
+  "dialog": "Clear saved stems? / Deletes the saved stems. rekordbox separates those tracks again the next time you load them. {Clear*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": []
+ },
+ {
+  "n": 3,
+  "dialog": "Settings / Stems Cache uses these settings the next time rekordbox opens. / Stems Cache location: This Mac / Stems Cache size limit (GB) / [20] / Remove stems unused for (days) / [60] {Change…, Use This Mac (off), Save*, Clear Saved Stems (measuring…) (off), Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en",
+   "status.table.r0"
+  ]
+ },
+ {
+  "n": 4,
+  "dialog": "Settings / Stems Cache uses these settings the next time rekordbox opens. / Stems Cache location: This Mac / Stems Cache size limit (GB) / [20] / Remove stems unused for (days) / [60] {Change…, Use This Mac (off), Save*, Clear Saved Stems, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ },
+ {
+  "n": 5,
+  "dialog": "Clear saved stems? / Deletes the saved stems. rekordbox separates those tracks again the next time you load them. {Clear*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": []
+ },
+ {
+  "n": 6,
+  "dialog": "Settings / Stems Cache uses these settings the next time rekordbox opens. / Stems Cache location: This Mac / Stems Cache size limit (GB) / [20] / Remove stems unused for (days) / [60] {Change…, Use This Mac (off), Save*, Clear Saved Stems (measuring…) (off), Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en",
+   "prepare.info.str",
+   "prepare.prepareBtn.en",
+   "prepare.tracksTable.r0",
+   "prepare.tracksTable.r1",
+   "prepare.tracksTable.r2",
+   "status.table.r0"
+  ]
+ }
+]

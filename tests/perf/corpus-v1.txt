@@ -1,0 +1,29 @@
+# The helper's performance corpus, version 1 (helper.md §2a P-H1, release.md §6.2): 20 made-up
+# tracks (music-like tones, a beat and noise; no recordings), made by helper/tests/perf.sh corpus
+# with ffmpeg (synthesis; MP3 by LAME, FLAC, ALAC, WAV, AIFF; AAC by macOS's own encoder, aac_at).
+# Reproducible: the same ffmpeg and macOS give the bytes of tests/perf/corpus-v1.sha256.
+# Generated once into the gate archive (gates-archive/corpus-v1, with its SHA256SUMS) and kept:
+# a regenerated corpus is a new version, never the same one.
+#   name  type  rate  sample-format-or-bitrate  seconds  left-Hz  right-Hz  short
+# type: mp3-cbr (bitrate), mp3-vbr (LAME -V), aac (AudioToolbox's, bitrate), alac, flac, wav, aiff
+# (s16, s24, f32). short: in the shorter form's corpus (GP, G3: one model, these 8 tracks).
+01-mp3-cbr320    mp3-cbr  44100  320k  120  220  277  -
+02-mp3-vbr2      mp3-vbr  44100  2     90   247  311  short
+03-mp3-48k       mp3-cbr  48000  192k  60   196  262  short
+04-aac-256       aac      44100  256k  120  233  294  -
+05-aac-128       aac      44100  128k  45   208  330  short
+06-aac-48k       aac      48000  256k  60   185  247  -
+07-alac-16       alac     44100  s16   90   262  349  -
+08-alac-24-96k   alac     96000  s24   45   294  370  short
+09-flac-16       flac     44100  s16   120  175  220  -
+10-flac-24-48k   flac     48000  s24   60   311  392  short
+11-flac-24-96k   flac     96000  s24   45   165  208  -
+12-wav-16        wav      44100  s16   150  220  330  -
+13-wav-24-48k    wav      48000  s24   60   277  349  -
+14-wav-f32       wav      44100  f32   45   247  370  short
+15-wav-f32-96k   wav      96000  f32   30   196  294  -
+16-aiff-16       aiff     44100  s16   90   233  311  -
+17-aiff-24-48k   aiff     48000  s24   45   262  392  short
+18-aiff-24-96k   aiff     96000  s24   30   185  277  -
+19-mp3-cbr128    mp3-cbr  44100  128k  120  208  262  -
+20-wav-16-30s    wav      44100  s16   30   175  233  short

@@ -1,0 +1,11 @@
+<Application x:Class="RbStemsPlus.W0.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
+  <Application.Resources>
+    <Style x:Key="Cell" TargetType="TextBlock">
+      <Setter Property="Margin" Value="4,1" />
+      <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+    </Style>
+  </Application.Resources>
+</Application>

@@ -49,15 +49,6 @@ func stemsPlusBlocked() -> String? {
 /// Why Stems Cache can't be installed from a standard account (sudo refuses it).
 let needsAdminLine = "Stems Cache needs an administrator account."
 
-/// On a standard account with something of Stems Cache on this Mac (`cacheTraces`), why its
-/// uninstall buttons (and, if this account chose it, Reinstall) are off; nil on an administrator
-/// account, or with nothing to remove (needsAdminLine then says why it can't be installed).
-func standardAccountLine(admin: Bool, cacheTraces: Bool, cacheChosen: Bool) -> String? {
-    guard !admin, cacheTraces else { return nil }
-    return cacheChosen ? "Reinstalling or removing Stems Cache needs an administrator account."
-                       : "Removing Stems Cache needs an administrator account."
-}
-
 /// Why Stems Cache can't be installed on this Mac, or nil if it can.
 func stemsCacheBlocked() -> String? {
     if !userIsAdmin { return needsAdminLine }

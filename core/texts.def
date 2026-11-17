@@ -1,0 +1,692 @@
+/* texts.def: every user-facing text, once, with named slots and a column per OS (mac-core §3.9).
+ *
+ *   SLOT(name, os)                   a slot a text may use as {name}; os: all | mac | win
+ *   TEXT(id, os, mac, win)           os: all | mac | win; win is "" only where Windows never
+ *                                    shows the text (the list in core/tests/win_texts.c)
+ *
+ * The build keeps one column: a Mac build compiles only the mac column (the win strings are never
+ * referenced, so they aren't in the objects); under CORE_WIN_POLICY both are kept and core_text's
+ * os argument picks. Slots are filtered by OS like every row, so a Windows-only slot never reaches
+ * the Mac objects. A test refuses an unknown slot, a "{" that isn't a slot, and tip phrases in
+ * action dialogs (M5's lint). At most 64 slots.
+ *
+ * The Mac column is 1.3.0's own words, byte for byte (sources named; core/tests/texts-in-swift.py
+ * checks every piece against app/Sources). Texts are whole sentences where Swift has them;
+ * where Swift joins pieces (", " between parts, a list of status lines) the code that ports it
+ * joins the same pieces. Log lines aren't texts: they stay the log's own (host->log).
+ * The Windows column (W-core, app.md §9) is the Mac's words where they read the same on Windows,
+ * and Windows words where they don't (Recycle Bin, File Explorer, this PC, Close rekordbox,
+ * Windows Settings). Each Windows text takes exactly its Mac text's slots, so one composer serves
+ * both, except where Windows names a place the Mac's words don't: the staging text (no file
+ * named), and the three naming rekordbox's folder (T_PREP_NO_REKORDBOX, T_ROOT_MISSING_MSG,
+ * T_ROOT_FOLDER_CLEANUP_MSG), whose {dir} is <Program Files>\rekordbox under Windows' own Program
+ * Files, on whichever drive (dialog_texts.c's w_rb_dir_slot). "" (core_text answers CORE_E_NOTYET) only for the Mac-only
+ * paths: the password sheet, App Management's "Permission needed", Time Machine, Apple silicon,
+ * macOS's privacy prompt, another account's app and the bundle's re-sign. core/tests/win_texts.c
+ * holds that list, the slot rule and the Mac words Windows never says. Windows-only rows (tagged
+ * win, "" in the mac column) are at the end.
+ */
+#ifndef SLOT
+#define SLOT(name, os)
+#endif
+#ifndef TEXT
+#define TEXT(id, os, mac, win)
+#endif
+
+SLOT(version,  all)
+SLOT(drive,    all)
+SLOT(engine,   all)
+SLOT(gb,       all)
+SLOT(playlist, all)
+SLOT(n,        all)
+SLOT(m,        all)
+SLOT(time,     all)
+SLOT(size,     all)
+SLOT(share,    all)
+SLOT(limit,    all)
+SLOT(name,     all)
+SLOT(why,      all)
+SLOT(state,    all)
+SLOT(connect,  all)
+SLOT(rekordbox, all)
+SLOT(ort,      all)
+SLOT(action,   all)
+SLOT(label,    all)
+SLOT(dir,      all)
+SLOT(path,     all)
+SLOT(message,  all)
+SLOT(details,  all)
+SLOT(stems,    all)
+SLOT(features, all)
+
+TEXT(T_APP_NAME,         all, "RB Stems Plus", "RB Stems Plus")
+TEXT(T_CHECKING,         all, "Checking…", "Checking…")                                   /* Prepare.swift:234 */
+TEXT(T_NOT_CHECKED,      all, "Not checked", "Not checked")                                 /* Prepare.swift:234 */
+TEXT(T_READY,            all, "Ready", "Ready")                                       /* Prepare.swift:235 */
+TEXT(T_TO_PREPARE,       all, "To prepare", "To prepare")                                  /* Prepare.swift:235 */
+TEXT(T_ALREADY_OPEN,     all, "Already open", "Already open")                                /* main.swift:209 */
+TEXT(T_ALREADY_OPEN_MSG, all, "Use the RB Stems Plus window that is already open.", "Use the RB Stems Plus window that is already open.")
+TEXT(T_OK,               all, "OK", "OK")
+TEXT(T_CANCEL,           all, "Cancel", "Cancel")
+TEXT(T_CACHE_ON,         all, "Stems Cache is on.", "Stems Cache is on.")                          /* Controller.swift:409 */
+TEXT(T_CACHE_ENGINE,     all, "Stems Cache doesn't support STEMS Engine {engine} yet. When an RB Stems Plus update supports it, click Reinstall Stems Cache.", "Stems Cache doesn't support STEMS Engine {engine} yet. When an RB Stems Plus update supports it, click Reinstall Stems Cache.") /* Controller.swift:404 */
+TEXT(T_CACHE_PAUSED,     all, "Stems Cache stopped saving stems: \"{drive}\" has less than {gb} GB free.", "Stems Cache stopped saving stems: \"{drive}\" has less than {gb} GB free.") /* State.swift:139 */
+
+/* quit or close during a Prepare run (Controller.swift:354-357) */
+TEXT(T_STOP_PREPARING_TITLE, all, "“{playlist}” is being prepared", "“{playlist}” is being prepared")
+TEXT(T_STOP_PREPARING_MSG,   all, "Stop preparing it? The tracks done so far stay prepared.", "Stop preparing it? The tracks done so far stay prepared.")
+TEXT(T_STOP_AND_QUIT,        all, "Stop and Quit", "Stop and Exit")
+
+/* the folder picker (LocationActions.swift:82-83) */
+TEXT(T_PICK_FOLDER_MESSAGE, all, "Choose a folder on an external drive. Stems Cache saves stems in a folder named \"RB Stems Plus Cache\" inside it.", "Choose a folder on an external drive. Stems Cache saves stems in a folder named \"RB Stems Plus Cache\" inside it.")
+TEXT(T_PICK_FOLDER_CHOOSE,  all, "Choose", "Choose")
+
+/* menus (main.swift) */
+TEXT(T_MENU_SETTINGS,    all, "Settings…", "Settings…")
+TEXT(T_MENU_UPDATE,      all, "Update RB Stems Plus…", "Update RB Stems Plus…")
+TEXT(T_MENU_UNINSTALL,   all, "Uninstall RB Stems Plus…", "Uninstall RB Stems Plus…")
+TEXT(T_MENU_PREPARE,     all, "Prepare", "Prepare")
+TEXT(T_MENU_CHECK_AGAIN, all, "Check Again", "Check Again")
+TEXT(T_MENU_PAUSE,       all, "Pause", "Pause")
+TEXT(T_MENU_RESUME,      all, "Resume", "Resume")
+TEXT(T_MENU_MANAGE,      all, "Manage", "Manage")
+TEXT(T_MENU_DEMUCS,      all, "Demucs v4", "Demucs v4")
+TEXT(T_MENU_INSTALL,     all, "Install", "Install")
+TEXT(T_MENU_HELP,        all, "Help", "Help")
+TEXT(T_MENU_HELP_HOME,   all, "RB Stems Plus Help", "RB Stems Plus Help")
+TEXT(T_MENU_REPORT,      all, "Create Report", "Create Report")
+
+/* ---------------------------------------------------------------- M5: every text, by source */
+
+/* buttons and words used in many places */
+TEXT(T_CONTINUE,            all, "Continue", "Continue")
+TEXT(T_DONE,                all, "Done", "Done")
+TEXT(T_INSTALL,             all, "Install", "Install")
+TEXT(T_REINSTALL,           all, "Reinstall", "Reinstall")
+TEXT(T_UNINSTALL,           all, "Uninstall", "Uninstall")
+TEXT(T_UNINSTALL_ELLIPSIS,  all, "Uninstall…", "Uninstall…")
+TEXT(T_TRY_AGAIN,           all, "Try Again", "Try Again")
+TEXT(T_OPEN_HELP,           all, "Open Help", "Open Help")
+TEXT(T_REMOVE,              all, "Remove", "Remove")
+TEXT(T_KEEP,                all, "Keep", "Keep")
+TEXT(T_UPDATE,              all, "Update", "Update")
+TEXT(T_NOT_NOW,             all, "Not Now", "Not Now")
+TEXT(T_QUIT,                all, "Quit", "Exit")
+TEXT(T_SAVE,                all, "Save", "Save")
+TEXT(T_CLEAR,               all, "Clear", "Clear")
+TEXT(T_DASH,                all, "–", "–")                                          /* PrepareView.swift:239-240 */
+TEXT(T_CONFIRM,             all, "{action}?", "{action}?")                                  /* Controller.swift confirm */
+TEXT(T_SEE_LOG,             all, "See the log in this window.", "See the log in this window.")
+TEXT(T_UNKNOWN,             all, "unknown", "unknown")                                    /* Compat.swift:94 */
+TEXT(T_FEATURE_PLUS,        all, "Demucs v4", "Demucs v4")
+TEXT(T_FEATURE_CACHE,       all, "Stems Cache", "Stems Cache")
+TEXT(T_FEATURES_BOTH,       all, "Demucs v4 + Stems Cache", "Demucs v4 + Stems Cache")                    /* Controller.swift:251, Actions.swift reinstallLabel */
+TEXT(T_REINSTALL_FEATURES,  all, "Reinstall {features}", "Reinstall {features}")                       /* Controller.swift:260 */
+
+/* the window (Controller.swift) */
+TEXT(T_TAB_STATUS,          all, "Status", "Status")
+TEXT(T_TAB_PREPARE,         all, "Prepare", "Prepare")
+TEXT(T_TAB_MANAGE,          all, "Manage", "Manage")
+TEXT(T_BTN_INSTALL_PLUS,    all, "Install Demucs v4", "Install Demucs v4")
+TEXT(T_BTN_INSTALL_CACHE,   all, "Install Stems Cache", "Install Stems Cache")
+TEXT(T_BTN_REINSTALL_PLUS,  all, "Reinstall Demucs v4", "Reinstall Demucs v4")
+TEXT(T_BTN_REINSTALL_CACHE, all, "Reinstall Stems Cache", "Reinstall Stems Cache")
+TEXT(T_BTN_UNINSTALL_PLUS,  all, "Uninstall Demucs v4", "Uninstall Demucs v4")
+TEXT(T_BTN_UNINSTALL_CACHE, all, "Uninstall Stems Cache", "Uninstall Stems Cache")
+TEXT(T_BTN_UNINSTALL_ALL,   all, "Uninstall RB Stems Plus Completely", "Uninstall RB Stems Plus Completely")
+TEXT(T_WELCOME_TITLE,       all, "Welcome to RB Stems Plus", "Welcome to RB Stems Plus")
+TEXT(T_WELCOME_MSG,         all, "Demucs v4 replaces rekordbox's own stems model with Meta's Demucs v4 separation model. The first separation of a track takes longer, and the two models split some sounds differently: listen and keep the one you prefer.\n\nStems Cache saves the separated stems, with either model, so a track's stems load much faster the next time. It changes one file inside rekordbox, so macOS will ask you to allow RB Stems Plus to change rekordbox.\n\nRB Stems Plus is unofficial: it isn't made or supported by AlphaTheta or Pioneer DJ.", "Demucs v4 replaces rekordbox's own stems model with Meta's Demucs v4 separation model. The first separation of a track takes longer, and the two models split some sounds differently: listen and keep the one you prefer.\n\nStems Cache saves the separated stems, with either model, so a track's stems load much faster the next time. It changes one file inside rekordbox.\n\nRB Stems Plus is unofficial: it isn't made or supported by AlphaTheta or Pioneer DJ.")
+TEXT(T_NOTICE_NO_SAVED_MODEL, all, "There's no saved copy of rekordbox's own stems model, so uninstalling Demucs v4 can't put it back.", "There's no saved copy of rekordbox's own stems model, so uninstalling Demucs v4 can't put it back.")
+TEXT(T_STOP_AND_CONTINUE,   all, "Stop and Continue", "Stop and Continue")                          /* Controller.swift:356 with Actions.swift preflight */
+TEXT(T_STOP_AND_UPDATE,     all, "Stop and Update", "Stop and Update")                            /* ... with Update.swift:162 */
+
+/* the lights (Controller.swift lightDrawing, plusLight, cacheLight; State.swift cachePausedTip) */
+TEXT(T_LIGHT_AX_ON,         all, "on", "on")
+TEXT(T_LIGHT_AX_LIMITED,    all, "installed, not working right now", "installed, not working right now")
+TEXT(T_LIGHT_AX_OFF,        all, "off", "off")
+TEXT(T_PLUS_ON,             all, "Demucs v4 is on.", "Demucs v4 is on.")
+TEXT(T_PLUS_OFF,            all, "Demucs v4 is off.", "Demucs v4 is off.")
+TEXT(T_CACHE_OFF,           all, "Stems Cache is off.", "Stems Cache is off.")
+TEXT(T_CACHE_NO_ENGINE,     all, "Stems Cache starts saving stems once rekordbox has downloaded its STEMS Engine.", "Stems Cache starts saving stems once rekordbox has downloaded its STEMS Engine.")
+TEXT(T_CACHE_OTHER_ACCOUNT, all, "Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here.", "Stems Cache was installed from another account on this PC. Click Install Stems Cache to use it here.")
+TEXT(T_CACHE_RB_MODEL_OFF,  all, "Stems Cache doesn't save the stems of rekordbox's own model: rekordbox_model is 0 in config.ini.", "Stems Cache doesn't save the stems of rekordbox's own model: rekordbox_model is 0 in config.ini.")
+TEXT(T_CACHE_NEEDS_UPDATE,  all, "Stems Cache needs an update to save the stems of rekordbox's own model. Click Reinstall Stems Cache.", "Stems Cache needs an update to save the stems of rekordbox's own model. Click Reinstall Stems Cache.")
+TEXT(T_CACHE_PAUSED_DISK,   all, "Stems Cache stopped saving stems: your disk has less than {gb} GB free.", "Stems Cache stopped saving stems: your disk has less than {gb} GB free.")
+TEXT(T_CACHE_PAUSED_AT_INSTALL,      all, "Stems Cache will stop saving stems while \"{drive}\" has less than {gb} GB free.", "Stems Cache will stop saving stems while \"{drive}\" has less than {gb} GB free.")   /* State.swift cachePausedAtInstall */
+TEXT(T_CACHE_PAUSED_AT_INSTALL_DISK, all, "Stems Cache will stop saving stems while your disk has less than {gb} GB free.", "Stems Cache will stop saving stems while your disk has less than {gb} GB free.")
+
+/* why a feature can't be installed (Compat.swift), the status line's other lines */
+TEXT(T_CHECKS_AGAIN,        all, " RB Stems Plus checks again each time you open it.", " RB Stems Plus checks again each time you open it.")   /* Compat.swift checksAgain */
+TEXT(T_RB_NOT_INSTALLED,    all, "rekordbox 7 isn't installed.", "rekordbox 7 isn't installed.")
+TEXT(T_PLUS_NO_ENGINE,      all, "Open rekordbox and turn on STEMS once, so it downloads its STEMS Engine.", "Open rekordbox and turn on STEMS once, so it downloads its STEMS Engine.")
+TEXT(T_PLUS_ENGINE_UNLISTED, all, "Demucs v4 isn't available for STEMS Engine {engine} yet.", "Demucs v4 isn't available for STEMS Engine {engine} yet.")
+TEXT(T_NEEDS_ADMIN,         all, "Stems Cache needs an administrator account.", "Stems Cache needs an administrator account.")
+TEXT(T_STANDARD_REINSTALL_REMOVE, all, "Reinstalling or removing Stems Cache needs an administrator account.", "Reinstalling or removing Stems Cache needs an administrator account.")
+TEXT(T_STANDARD_REMOVE,     all, "Removing Stems Cache needs an administrator account.", "Removing Stems Cache needs an administrator account.")
+TEXT(T_CACHE_RB_UNLISTED,   all, "Stems Cache doesn't support rekordbox {rekordbox} yet.", "Stems Cache doesn't support rekordbox {rekordbox} yet.")
+TEXT(T_CACHE_TEST_VERSION,  all, "Stems Cache from a test version is in rekordbox: reinstall rekordbox first.", "Stems Cache from a test version is in rekordbox: reinstall rekordbox first.")
+TEXT(T_CACHE_NO_ORT,        all, "Stems Cache can't find rekordbox's ONNX Runtime: reinstall rekordbox.", "Stems Cache can't find rekordbox's ONNX Runtime: reinstall rekordbox.")
+TEXT(T_CACHE_ORT_NOT_ORIGINAL, all, "rekordbox's ONNX Runtime isn't the original: reinstall rekordbox.", "rekordbox's ONNX Runtime isn't the original: reinstall rekordbox.")
+TEXT(T_CACHE_ORT_UNLISTED,  all, "Stems Cache doesn't support ONNX Runtime {ort} yet.", "Stems Cache doesn't support ONNX Runtime {ort} yet.")
+TEXT(T_MOVE_TO_APPLICATIONS, all, "Move RB Stems Plus to the Applications folder, then open it from there.", "This copy of RB Stems Plus isn't the installed one: open RB Stems Plus from the Start menu.")   /* Safety.swift */
+TEXT(T_CACHE_LINK,          all, "~/Library/Caches/rbstemsplus is a link, so RB Stems Plus leaves it and what it points to alone.", "%LOCALAPPDATA%\\rbstemsplus\\Cache is a link, so RB Stems Plus leaves it and what it points to alone.")   /* State.swift cacheLinkLine */
+TEXT(T_WATCHER_OFF,         all, "Reinstall reminders are off. Turn on RB Stems Plus Watcher in System Settings › General › Login Items & Extensions.", "Reinstall reminders are off. Turn on RB Stems Plus Watcher in Windows Settings › Apps › Startup.")   /* Actions.swift watcherOffLine */
+TEXT(T_UPDATE_NOTICE,       all, "RB Stems Plus {version} is available: choose Update RB Stems Plus in the RB Stems Plus menu.", "RB Stems Plus {version} is available: choose Update RB Stems Plus in the RB Stems Plus menu.")   /* Update.swift:29 */
+
+/* where the stems are saved: the light's texts (Location.swift locationLight) */
+TEXT(T_LOC_CHECKING_DRIVE,     all, "Stems Cache is still checking \"{drive}\".", "Stems Cache is still checking \"{drive}\".")
+TEXT(T_LOC_CHECKING_THIS_MAC,  all, "Stems Cache is still checking this Mac.", "Stems Cache is still checking this PC.")
+TEXT(T_LOC_AGAIN_SOON_DRIVE,   all, "Stems Cache will use \"{drive}\" again in a few seconds.", "Stems Cache will use \"{drive}\" again in a few seconds.")
+TEXT(T_LOC_AGAIN_SOON_THIS_MAC, all, "Stems Cache will use this Mac again in a few seconds.", "Stems Cache will use this PC again in a few seconds.")
+TEXT(T_LOC_NOT_USING_DRIVE,    all, "Stems Cache isn't using \"{drive}\" right now: {why}", "Stems Cache isn't using \"{drive}\" right now: {why}")
+TEXT(T_LOC_NOT_USING_THIS_MAC, all, "Stems Cache isn't using this Mac right now: {why}", "Stems Cache isn't using this PC right now: {why}")
+TEXT(T_LOC_R_NOT_CONNECTED,    all, "the drive isn't connected. Connect it: Stems Cache uses it again by itself.", "the drive isn't connected. Connect it: Stems Cache uses it again by itself.")
+TEXT(T_LOC_R_FOLDER,           all, "its folder on the drive is missing or was replaced. If this stays, choose the drive again in Settings.", "its folder on the drive is missing or was replaced. If this stays, choose the drive again in Settings.")
+TEXT(T_LOC_R_READ_ONLY,        all, "the drive is read-only; macOS may need to repair it in Disk Utility.", "the drive is read-only; Windows may need to repair it (the drive's Properties › Tools › Check in File Explorer).")
+TEXT(T_LOC_R_NO_PERMISSION,    all, "rekordbox isn't allowed to use the drive. Allow it in System Settings › Privacy & Security › Files and Folders › rekordbox, then restart rekordbox.", "rekordbox isn't allowed to use the drive. Check the folder's permissions (Properties › Security in File Explorer), then restart rekordbox.")
+TEXT(T_LOC_R_NOT_LOCAL,        all, "the drive isn't connected to this Mac.", "the drive isn't connected to this PC.")
+TEXT(T_LOC_R_FAILED,           all, "reading or writing the drive failed. If it happens again, check the drive in Disk Utility.", "reading or writing the drive failed. If it happens again, check the drive (its Properties › Tools › Check in File Explorer).")
+TEXT(T_LOC_CONFIG_SESSION,     all, "Stems Cache isn't saving stems in this rekordbox session: its settings (config.ini) couldn't be read when rekordbox opened. Restart rekordbox.", "Stems Cache isn't saving stems in this rekordbox session: its settings (config.ini) couldn't be read when rekordbox opened. Restart rekordbox.")
+TEXT(T_LOC_CONFIG_UNREADABLE,  all, "Stems Cache can't read its settings (config.ini). See Help › RB Stems Plus Troubleshooting.", "Stems Cache can't read its settings (config.ini). See Help › RB Stems Plus Troubleshooting.")
+TEXT(T_LOC_CONFIG_MALFORMED,   all, "Where Stems Cache saves stems is set wrongly in config.ini. Choose it again in Settings.", "Where Stems Cache saves stems is set wrongly in config.ini. Choose it again in Settings.")
+TEXT(T_LOC_BRIDGE_TOO_OLD,     all, "Stems Cache needs an update to save stems on \"{drive}\": it's saving them on this Mac for now. Click Reinstall Stems Cache.", "Stems Cache needs an update to save stems on \"{drive}\": it's saving them on this PC for now. Click Reinstall Stems Cache.")
+TEXT(T_LOC_NOT_CONNECTED,      all, "Stems Cache's drive \"{drive}\" isn't connected: rekordbox separates tracks as usual. {connect} Renamed the drive, or does it show as \"{drive} 1\"? Choose it again in Settings: the stems on it are kept.", "Stems Cache's drive \"{drive}\" isn't connected: rekordbox separates tracks as usual. {connect}")
+TEXT(T_LOC_CONNECT_AUTO,       all, "Connect it: Stems Cache uses it again by itself.", "Connect it: Stems Cache uses it again by itself.")
+TEXT(T_LOC_CONNECT_OPEN,       all, "Connect it, then open rekordbox.", "Connect it, then open rekordbox.")
+TEXT(T_LOC_CONNECT_RESTART,    all, "Connect it, then restart rekordbox.", "Connect it, then restart rekordbox.")
+TEXT(T_LOC_FOLDER_MISSING,     all, "Stems Cache's folder on \"{drive}\" is missing or was replaced.", "Stems Cache's folder on \"{drive}\" is missing or was replaced.")
+TEXT(T_LOC_LINK,               all, "Stems Cache isn't saving: a folder on the way to Stems Cache's folder on \"{drive}\" is a link.", "Stems Cache isn't saving: a folder on the way to Stems Cache's folder on \"{drive}\" is a link.")
+TEXT(T_LOC_NETWORK,            all, "Stems Cache isn't saving: \"{drive}\" is a network drive. Choose a drive connected to this Mac in Settings.", "Stems Cache isn't saving: \"{drive}\" is a network drive. Choose a drive connected to this PC in Settings.")
+TEXT(T_LOC_READ_ONLY,          all, "\"{drive}\" is read-only; macOS may need to repair it in Disk Utility.", "\"{drive}\" is read-only; Windows may need to repair it (the drive's Properties › Tools › Check in File Explorer).")
+TEXT(T_LOC_NO_PERMISSION,      all, "RB Stems Plus isn't allowed to use \"{drive}\". Allow it in System Settings › Privacy & Security › Files and Folders › RB Stems Plus.", "RB Stems Plus isn't allowed to use \"{drive}\". Check the folder's permissions (Properties › Security in File Explorer).")
+
+/* a size and a duration (Location.swift aboutSize, StemsSize; LocationActions.swift sizeWords;
+ * Prepare.swift sizeText, durationText) */
+TEXT(T_ABOUT_GB,            all, " (about {gb} GB)", " (about {gb} GB)")
+TEXT(T_ABOUT_MB,            all, " (about {n} MB)", " (about {n} MB)")
+TEXT(T_SIZE_MEASURING,      all, " (measuring…)", " (measuring…)")
+TEXT(T_SIZE_FAILED,         all, " (couldn't measure)", " (couldn't measure)")
+TEXT(T_SIZE_NOT_CONNECTED,  all, " (not connected)", " (not connected)")
+TEXT(T_SIZE_GB,             all, "{gb} GB", "{gb} GB")
+TEXT(T_SIZE_MB,             all, "{n} MB", "{n} MB")
+TEXT(T_DUR_UNDER_MINUTE,    all, "under a minute", "under a minute")
+TEXT(T_DUR_MIN,             all, "{n} min", "{n} min")
+TEXT(T_DUR_H_MIN,           all, "{n} h {m} min", "{n} h {m} min")
+
+/* why playlists can't be prepared now (Prepare.swift prepareProblems) */
+TEXT(T_PREP_NEEDS_ARM,      all, "Preparing playlists needs a Mac with Apple silicon.", "")
+TEXT(T_PREP_NO_HELPER,      all, "This copy of RB Stems Plus can't prepare playlists: its helper is missing. Download RB Stems Plus again.", "This copy of RB Stems Plus can't prepare playlists: its helper is missing. Download RB Stems Plus again.")
+TEXT(T_PREP_NO_REKORDBOX,   all, "rekordbox 7 isn't in /Applications/rekordbox 7.", "rekordbox 7 isn't in {dir}.")
+TEXT(T_PREP_NO_CACHE,       all, "Install Stems Cache first: prepared stems are saved where Stems Cache saves them.", "Install Stems Cache first: prepared stems are saved where Stems Cache saves them.")
+TEXT(T_PREP_REINSTALL_CACHE, all, "Reinstall Stems Cache: this installation can't keep prepared playlists.", "Reinstall Stems Cache: this installation can't keep prepared playlists.")
+TEXT(T_PREP_RB_UNLISTED,    all, "Preparing doesn't support rekordbox {rekordbox} yet.", "Preparing doesn't support rekordbox {rekordbox} yet.")
+TEXT(T_PREP_CONFIG_UNREADABLE, all, "Stems Cache can't read its settings (config.ini: {why}).", "Stems Cache can't read its settings (config.ini: {why}).")
+TEXT(T_PREP_DISABLED,       all, "Stems Cache is turned off in config.ini (enabled=0).", "Stems Cache is turned off in config.ini (enabled=0).")
+TEXT(T_PREP_SPEED,          all, "rekordbox is set to Prioritize speed for STEMS: prepared stems are used only with Prioritize sound quality (rekordbox › Preferences › Extensions › STEMS).", "rekordbox is set to Prioritize speed for STEMS: prepared stems are used only with Prioritize sound quality (rekordbox's Preferences › Extensions › STEMS).")
+TEXT(T_PREP_MODEL_CHANGED,  all, "The Demucs v4 model in rekordbox isn't the one RB Stems Plus installed: reinstall Demucs v4.", "The Demucs v4 model in rekordbox isn't the one RB Stems Plus installed: reinstall Demucs v4.")
+TEXT(T_PREP_NO_FOLDER,      all, "Where Stems Cache saves stems can't be used now.", "Where Stems Cache saves stems can't be used now.")
+
+/* an estimate, a run, a track's row (Prepare.swift, PrepareView.swift) */
+TEXT(T_EST_READY_ONE,       all, "{n} track ready", "{n} track ready")
+TEXT(T_EST_READY_MANY,      all, "{n} tracks ready", "{n} tracks ready")
+TEXT(T_EST_TO_PREPARE,      all, "{n} to prepare ({time} of music)", "{n} to prepare ({time} of music)")
+TEXT(T_EST_SKIPPED,         all, "{n} skipped", "{n} skipped")
+TEXT(T_EST_NO_TRACKS,       all, "No tracks.", "No tracks.")
+TEXT(T_EST_ABOUT,           all, " About {size} and {time}.", " About {size} and {time}.")
+TEXT(T_EST_SHARE,           all, " Prepared playlists will use {size} of the {share} they may use (75% of Stems Cache's {limit} GB limit).", " Prepared playlists will use {size} of the {share} they may use (75% of Stems Cache's {limit} GB limit).")
+TEXT(T_FIT_FIRST_ONE,       all, "Prepare the First {n} Track", "Prepare the First {n} Track")
+TEXT(T_FIT_FIRST_MANY,      all, "Prepare the First {n} Tracks", "Prepare the First {n} Tracks")
+TEXT(T_FIT_RAISE,           all, "Raise the Limit to {limit} GB", "Raise the Limit to {limit} GB")
+TEXT(T_FIT_MSG,             all, "Prepared playlists may use 75% of Stems Cache's {limit} GB limit ({share}), the rest stays for the tracks rekordbox separates during a set. This playlist would take them to {size}.", "Prepared playlists may use 75% of Stems Cache's {limit} GB limit ({share}), the rest stays for the tracks rekordbox separates during a set. This playlist would take them to {size}.")
+TEXT(T_FIT_NO_ROOM,         all, " The disk doesn't have room for a higher limit.", " The disk doesn't have room for a higher limit.")
+TEXT(T_RES_SKIPPED,         all, "Skipped", "Skipped")
+TEXT(T_RES_PREPARED,        all, "Prepared", "Prepared")
+TEXT(T_RES_STOPPED,         all, "Stopped", "Stopped")
+TEXT(T_RES_PREPARING,       all, "Preparing…", "Preparing…")
+TEXT(T_NOTE_REFUSED,        all, "couldn't be saved: rekordbox separates it when loaded", "couldn't be saved: rekordbox separates it when loaded")
+TEXT(T_NOTE_SILENT,         all, "silent: nothing to save", "silent: nothing to save")
+TEXT(T_NOTE_ALREADY,        all, "already saved", "already saved")
+TEXT(T_NOTE_PARTLY,         all, "partly saved already, the rest separated now", "partly saved already, the rest separated now")
+TEXT(T_NOTE_NOW,            all, "separated now", "separated now")
+TEXT(T_NOTE_SOME_PARTS,     all, ", some parts couldn't be saved", ", some parts couldn't be saved")
+TEXT(T_NOTE_REMOVED,        all, "{n} of its stems were removed from the cache", "{n} of its stems were removed from the cache")
+TEXT(T_SET_UNCHECKED_ERR,   all, "Couldn't be checked", "Couldn't be checked")
+TEXT(T_SET_CANT_CHECK_NOW,  all, "Can't be checked now", "Can't be checked now")
+TEXT(T_SET_NO_TRACKS,       all, "No tracks in the playlist", "No tracks in the playlist")
+TEXT(T_SET_READY_UNCHECKED, all, "Ready ({n} not checked)", "Ready ({n} not checked)")
+TEXT(T_SET_TO_PREPARE_ONE,  all, "{n} track to prepare", "{n} track to prepare")
+TEXT(T_SET_TO_PREPARE_MANY, all, "{n} tracks to prepare", "{n} tracks to prepare")
+TEXT(T_SET_UNREADABLE,      all, "{n} can't be read", "{n} can't be read")
+TEXT(T_LAST_ONE,            all, "Last time: {n} track done", "Last time: {n} track done")
+TEXT(T_LAST_MANY,           all, "Last time: {n} tracks done", "Last time: {n} tracks done")
+TEXT(T_PART_SKIPPED,        all, ", {n} skipped", ", {n} skipped")
+TEXT(T_LAST_STOPPED,        all, ", stopped before the end", ", stopped before the end")
+TEXT(T_LAST_STOPPED_SHARE,  all, ", stopped at the 75% share", ", stopped at the 75% share")
+TEXT(T_LAST_STOPPED_EARLY,  all, ", stopped early (see the log)", ", stopped early (see the log)")
+TEXT(T_LAST_NOT_SAVED,      all, ", the set couldn't be saved (see the log)", ", the set couldn't be saved (see the log)")
+TEXT(T_RUN_FAILED,          all, "“{playlist}” couldn't be prepared", "“{playlist}” couldn't be prepared")
+TEXT(T_RUN_PREPARED,        all, "“{playlist}” is prepared", "“{playlist}” is prepared")
+TEXT(T_RUN_PARTIAL,         all, "“{playlist}” isn't fully prepared", "“{playlist}” isn't fully prepared")
+TEXT(T_RUN_PREPARING,       all, "Preparing “{playlist}”: {n}%", "Preparing “{playlist}”: {n}%")
+TEXT(T_RUN_PAUSED,          all, "Paused “{playlist}”: {n}%", "Paused “{playlist}”: {n}%")
+TEXT(T_RUN_STARTING,        all, "Starting…", "Starting…")
+TEXT(T_RUN_TRACK_OF,        all, "Track {n} of {m}.", "Track {n} of {m}.")
+TEXT(T_RUN_DONE_ONE,        all, "{n} track done", "{n} track done")
+TEXT(T_RUN_DONE_MANY,       all, "{n} tracks done", "{n} tracks done")
+TEXT(T_RUN_USE,             all, ". Prepared playlists use {size}.", ". Prepared playlists use {size}.")
+TEXT(T_RUN_STOPPED_USER,    all, " Stopped: the tracks not done yet aren't prepared.", " Stopped: the tracks not done yet aren't prepared.")
+TEXT(T_RUN_STOPPED_WHY,     all, " Stopped: {why}.", " Stopped: {why}.")
+TEXT(T_RUN_NO_HELPER,       all, "The helper couldn't start.", "The helper couldn't start.")
+TEXT(T_RUN_STOPPING,        all, "Stopping…", "Stopping…")                       /* PrepareView.swift:874 */
+TEXT(T_RUN_UNEXPECTED,      all, "The preparing stopped unexpectedly. Click Check Again, then Prepare.", "The preparing stopped unexpectedly. Click Check Again, then Prepare.")
+TEXT(T_PREP_CHOOSE,         all, "Choose a playlist", "Choose a playlist")
+TEXT(T_PREP_RB_PLAYLISTS,   all, "rekordbox's playlists", "rekordbox's playlists")
+TEXT(T_PREP_FOLDER,         all, "A folder: choose one of its playlists.", "A folder: choose one of its playlists.")
+TEXT(T_PREP_INTELLIGENT,    all, "Intelligent playlists can't be prepared: their tracks change as you add music.", "Intelligent playlists can't be prepared: their tracks change as you add music.")
+TEXT(T_PREP_CANT_LIST,      all, "This list can't be prepared.", "This list can't be prepared.")
+TEXT(T_PREP_CHECKING_PL,    all, "Checking the playlist…", "Checking the playlist…")
+TEXT(T_PREP_NO_DISK_ROOM,   all, " The disk doesn't have room for them.", " The disk doesn't have room for them.")
+TEXT(T_PREP_ASKING,         all, "macOS is asking whether RB Stems Plus may read some tracks: answer its prompt, then click Check Again.", "")
+TEXT(T_PREP_INTRO,          all, "Choose a playlist on the left to see what preparing it takes. Its stems are kept until the date below, then Stems Cache treats them like any others.", "Choose a playlist on the left to see what preparing it takes. Its stems are kept until the date below, then Stems Cache treats them like any others.")
+TEXT(T_PREP_LIB_UNREADABLE, all, "rekordbox's library can't be read.", "rekordbox's library can't be read.")
+TEXT(T_PREP_PL_UNCHECKABLE, all, "The playlist couldn't be checked.", "The playlist couldn't be checked.")
+TEXT(T_PREP_KEEP_UNTIL,     all, "Keep the stems until", "Keep the stems until")
+TEXT(T_PREP_PLAYLIST_ID,    all, "Playlist {name}", "Playlist {name}")
+TEXT(T_COL_TRACK,           all, "Track", "Track")
+TEXT(T_COL_RESULT,          all, "Result", "Result")
+TEXT(T_COL_NOTE,            all, "Note", "Note")
+TEXT(T_BTN_PREPARE,         all, "Prepare", "Prepare")
+TEXT(T_BTN_CHECK_AGAIN,     all, "Check Again", "Check Again")
+TEXT(T_BTN_PAUSE,           all, "Pause", "Pause")
+TEXT(T_BTN_RESUME,          all, "Resume", "Resume")
+TEXT(T_BTN_STOP,            all, "Stop", "Stop")
+TEXT(T_PREP_CANT_TITLE,     all, "Can't prepare “{playlist}”", "Can't prepare “{playlist}”")
+TEXT(T_PREP_DOESNT_FIT,     all, "“{playlist}” doesn't fit", "“{playlist}” doesn't fit")
+TEXT(T_LIMIT_NOT_RAISED,    all, "Limit not raised", "Limit not raised")
+TEXT(T_LIMIT_NOT_RAISED_MSG, all, "RB Stems Plus couldn't write its settings file. See the log.", "RB Stems Plus couldn't write its settings file. See the log.")
+TEXT(T_NO_SPACE_TITLE,      all, "Not enough free space", "Not enough free space")
+TEXT(T_NO_SPACE_MSG,        all, "The disk Stems Cache saves on doesn't have room for {size} more. Prepare anyway? It stops when the disk gets low.", "The disk Stems Cache saves on doesn't have room for {size} more. Prepare anyway? It stops when the disk gets low.")
+
+/* the Status tab (PrepareView.swift StatusTab) */
+TEXT(T_COL_PLAYLIST,        all, "Playlist", "Playlist")
+TEXT(T_COL_TRACKS,          all, "Tracks", "Tracks")
+TEXT(T_COL_KEPT_UNTIL,      all, "Kept until", "Kept until")
+TEXT(T_COL_STATE,           all, "State", "State")
+TEXT(T_BTN_PREPARE_AGAIN,   all, "Prepare Again", "Prepare Again")
+TEXT(T_BTN_STOP_KEEPING,    all, "Stop Keeping…", "Stop Keeping…")
+TEXT(T_STATUS_TITLE,        all, "Prepared playlists", "Prepared playlists")
+TEXT(T_STATUS_NOTE,         all, "Up to 5 playlists, each kept until its date. Stems Cache leaves their stems alone until then.", "Up to 5 playlists, each kept until its date. Stems Cache leaves their stems alone until then.")
+TEXT(T_STOP_KEEPING_TITLE,  all, "Stop keeping “{playlist}”", "Stop keeping “{playlist}”")
+TEXT(T_STOP_KEEPING,        all, "Stop Keeping", "Stop Keeping")
+TEXT(T_STOP_KEEPING_MSG,    all, "Its stems stay in Stems Cache like any others, and may be removed when Stems Cache needs room.", "Its stems stay in Stems Cache like any others, and may be removed when Stems Cache needs room.")
+
+/* the watcher (Watcher.swift) */
+TEXT(T_W_KEPT_ONE,          all, "{n} track isn't fully prepared: rekordbox may separate it as you play. Open RB Stems Plus to see why and prepare it again.", "{n} track isn't fully prepared: rekordbox may separate it as you play. Open RB Stems Plus to see why and prepare it again.")
+TEXT(T_W_KEPT_MANY,         all, "{n} tracks aren't fully prepared: rekordbox may separate them as you play. Open RB Stems Plus to see why and prepare it again.", "{n} tracks aren't fully prepared: rekordbox may separate them as you play. Open RB Stems Plus to see why and prepare it again.")
+TEXT(T_W_TITLE_UPDATED,     all, "rekordbox was updated", "rekordbox was updated")
+TEXT(T_W_TITLE_ENGINE,      all, "rekordbox installed a new STEMS Engine", "rekordbox installed a new STEMS Engine")
+TEXT(T_W_TITLE_MODEL_BACK,  all, "rekordbox put its own stems model back", "rekordbox put its own stems model back")
+TEXT(T_W_OFF_BOTH,          all, "Demucs v4 and Stems Cache are off.", "Demucs v4 and Stems Cache are off.")
+TEXT(T_W_IT_ENGINE,         all, "It isn't available for STEMS Engine {engine} yet.", "It isn't available for STEMS Engine {engine} yet.")
+TEXT(T_W_IT_REKORDBOX,      all, "It doesn't support rekordbox {rekordbox} yet.", "It doesn't support rekordbox {rekordbox} yet.")
+TEXT(T_W_BOTH_BLOCKED,      all, "Demucs v4 isn't available for STEMS Engine {engine} yet, and Stems Cache doesn't support rekordbox {rekordbox} yet.", "Demucs v4 isn't available for STEMS Engine {engine} yet, and Stems Cache doesn't support rekordbox {rekordbox} yet.")
+TEXT(T_W_BLOCKED_MSG,       all, "{state} {why} RB Stems Plus checks again each time you open it, and asks you to reinstall once it can.", "{state} {why} RB Stems Plus checks again each time you open it, and asks you to reinstall once it can.")
+TEXT(T_W_DONT_ASK,          all, "Don't Ask Again for This Version", "Don't Ask Again for This Version")
+TEXT(T_W_REINSTALL_NOW,     all, "Reinstall Now", "Reinstall Now")
+TEXT(T_W_REMIND_LATER,      all, "Remind Me Later", "Remind Me Later")
+TEXT(T_W_BOTH_CACHE_BLOCKED, all, "Demucs v4 and Stems Cache are off. Reinstall Demucs v4 to separate tracks with it. Stems Cache doesn't support rekordbox {rekordbox} yet, so it stays off for now.", "Demucs v4 and Stems Cache are off. Reinstall Demucs v4 to separate tracks with it. Stems Cache doesn't support rekordbox {rekordbox} yet, so it stays off for now.")
+TEXT(T_W_BOTH_MODEL_BLOCKED, all, "Demucs v4 and Stems Cache are off. Reinstall Stems Cache to reuse the stems it has saved. Demucs v4 isn't available for STEMS Engine {engine} yet, so it stays off for now.", "Demucs v4 and Stems Cache are off. Reinstall Stems Cache to reuse the stems it has saved. Demucs v4 isn't available for STEMS Engine {engine} yet, so it stays off for now.")
+TEXT(T_W_BOTH,              all, "Demucs v4 and Stems Cache are off. Reinstall them to separate tracks with Demucs v4 and reuse the stems Stems Cache has saved.", "Demucs v4 and Stems Cache are off. Reinstall them to separate tracks with Demucs v4 and reuse the stems Stems Cache has saved.")
+TEXT(T_W_CACHE_OFF_PLUS_WORKS, all, "Stems Cache is off (Demucs v4 still works). Reinstall it to reuse the stems it has saved.", "Stems Cache is off (Demucs v4 still works). Reinstall it to reuse the stems it has saved.")
+TEXT(T_W_CACHE_OFF,         all, "Stems Cache is off. Reinstall it to reuse the stems it has saved.", "Stems Cache is off. Reinstall it to reuse the stems it has saved.")
+TEXT(T_W_MODEL_OFF,         all, "Demucs v4 is off. Reinstall it to separate tracks with Demucs v4 instead of rekordbox's own model.", "Demucs v4 is off. Reinstall it to separate tracks with Demucs v4 instead of rekordbox's own model.")
+
+/* start-up refusals (main.swift, Safety.swift startupProblem) */
+TEXT(T_CANT_OPEN,           all, "RB Stems Plus can't open", "RB Stems Plus can't open")
+TEXT(T_LOCK_UNUSABLE,       all, "{path} can't be used ({why}). Move it to the Trash, then open RB Stems Plus again.", "{path} can't be used ({why}). Move it to the Recycle Bin, then open RB Stems Plus again.")
+TEXT(T_START_ROOT,          all, "RB Stems Plus can't run as root. Open it from your own account.", "RB Stems Plus can't run as administrator. Open it normally, not with Run as administrator.")
+TEXT(T_START_NO_HOME,       all, "Your account's home folder can't be found.", "Your account's home folder can't be found.")
+TEXT(T_START_NOT_FOLDER,    all, "{path} isn't a folder. RB Stems Plus uses only a real folder there: move it to the Trash, then open RB Stems Plus again.", "{path} isn't a folder. RB Stems Plus uses only a real folder there: move it to the Recycle Bin, then open RB Stems Plus again.")
+
+/* the password and App Management (Admin.swift) */
+TEXT(T_PW_TITLE,            all, "Password needed", "")
+TEXT(T_PW_WRONG_TITLE,      all, "Wrong password", "")
+TEXT(T_PW_MSG,              all, "Enter your password so RB Stems Plus can make changes to rekordbox.", "")
+TEXT(T_PW_WRONG_MSG,        all, "Try again so RB Stems Plus can make changes to rekordbox.", "")
+TEXT(T_PW_FIELD,            all, "Password", "")
+TEXT(T_PERM_TITLE,          all, "Permission needed", "")
+TEXT(T_PERM_MSG,            all, "1. In the notification \"RB Stems Plus was prevented from modifying apps\", click Allow.\n2. Turn on RB Stems Plus in the list, then confirm.\n3. When macOS offers to quit and reopen RB Stems Plus, choose Later.\n4. Come back here and click Try Again.", "")
+TEXT(T_TRYING_AGAIN,        all, "Trying again…", "")
+TEXT(T_ROOT_ALREADY_TITLE,  all, "Already working", "Already working")
+TEXT(T_ROOT_ALREADY_MSG,    all, "RB Stems Plus is already changing rekordbox. Wait a moment, then try again.", "RB Stems Plus is already changing rekordbox. Wait a moment, then try again.")
+TEXT(T_ROOT_UPDATING_TITLE, all, "rekordbox updating", "rekordbox updating")
+TEXT(T_ROOT_UPDATING_MSG,   all, "Wait until rekordbox's installer or updater has finished, then try again.", "Wait until rekordbox's installer or updater has finished, then try again.")
+TEXT(T_ROOT_MISSING_TITLE,  all, "rekordbox missing", "rekordbox missing")
+TEXT(T_ROOT_MISSING_MSG,    all, "rekordbox isn't in the Applications folder. Install rekordbox from rekordbox.com, then try again.", "rekordbox isn't in {dir}. Install rekordbox from rekordbox.com, then try again.")
+TEXT(T_ROOT_REINSTALL_TITLE, all, "Reinstall rekordbox", "Reinstall rekordbox")
+TEXT(T_ROOT_NOT_PIONEERS_MSG, all, "rekordbox isn't installed the way Pioneer's installer leaves it. Reinstall rekordbox from rekordbox.com, then try again.", "rekordbox isn't installed the way Pioneer's installer leaves it. Reinstall rekordbox from rekordbox.com, then try again.")
+TEXT(T_ROOT_NO_ORIGINALS_MSG, all, "RB Stems Plus has no complete copy of rekordbox's original files. Reinstall rekordbox from rekordbox.com, then try again.", "RB Stems Plus has no complete copy of rekordbox's original files. Reinstall rekordbox from rekordbox.com, then try again.")
+TEXT(T_ROOT_ROLLBACK_FAILED_MSG, all, "Changing rekordbox failed, and its original files couldn't be put back. Reinstall rekordbox from rekordbox.com, then try again.", "Changing rekordbox failed, and its original files couldn't be put back. Reinstall rekordbox from rekordbox.com, then try again.")
+TEXT(T_ROOT_ROLLED_BACK,    all, "rekordbox has its original files again. See the log in this window.", "rekordbox has its original files again. See the log in this window.")
+TEXT(T_ROOT_FOLDER_FAILURE, all, "RB Stems Plus couldn't remove its copy of rekordbox's files.", "RB Stems Plus couldn't remove its copy of rekordbox's files.")
+TEXT(T_RUN_INSTALLING_CACHE,   all, "Installing Stems Cache (this takes about a minute)…", "Installing Stems Cache (this takes about a minute)…")
+TEXT(T_RUN_REINSTALLING_CACHE, all, "Reinstalling Stems Cache (this takes about a minute)…", "Reinstalling Stems Cache (this takes about a minute)…")
+TEXT(T_RUN_REMOVING_ROOT,      all, "Removing the copy of rekordbox's files…", "Removing the copy of rekordbox's files…")
+TEXT(T_RUN_UNINSTALLING_CACHE, all, "Uninstalling Stems Cache…", "Uninstalling Stems Cache…")
+TEXT(T_INSTALL_FAILED,      all, "Install failed", "Install failed")
+TEXT(T_REINSTALL_FAILED,    all, "Reinstall failed", "Reinstall failed")
+TEXT(T_UNINSTALL_FAILED,    all, "Uninstall failed", "Uninstall failed")
+TEXT(T_FAILURE_WHY,         all, "{message} {why}", "{message} {why}")                            /* Admin.swift runRoot: failure + " " + why */
+
+/* the actions (Actions.swift) */
+TEXT(T_DOWNLOAD_FAILED,     all, "Download failed", "Download failed")
+TEXT(T_OFFLINE_MSG,         all, "Nothing was changed. Check your internet connection and try again.", "Nothing was changed. Check your internet connection and try again.")
+TEXT(T_UNVERIFIED_MSG,      all, "The download couldn't be verified. Nothing was changed. Try again later.", "The download couldn't be verified. Nothing was changed. Try again later.")   /* Payload.swift */
+TEXT(T_CHECKING_LATEST,     all, "Checking for the latest files…", "Checking for the latest files…")
+TEXT(T_LOW_DISK,            all, "Low disk space", "Low disk space")
+TEXT(T_LOW_DISK_NEED_MSG,   all, "RB Stems Plus needs about {gb} GB free. Nothing was changed. Free up some space and try again.", "RB Stems Plus needs about {gb} GB free. Nothing was changed. Free up some space and try again.")
+TEXT(T_DISK_FULL_MSG,       all, "The disk is full. Nothing was changed. Free up some space and try again.", "The disk is full. Nothing was changed. Free up some space and try again.")
+TEXT(T_DAMAGED_MSG,         all, "A file didn't download correctly. Nothing was changed. Try again later.", "A file didn't download correctly. Nothing was changed. Try again later.")
+TEXT(T_WHAT_MODEL,          all, "the Demucs v4 model", "the Demucs v4 model")
+TEXT(T_WHAT_APP,            all, "RB Stems Plus {version}", "RB Stems Plus {version}")
+TEXT(T_INSTALLING_PLUS,     all, "Installing Demucs v4…", "Installing Demucs v4…")
+TEXT(T_PLUS_NOT_DONE_INSTALLED,   all, "Demucs v4 couldn't be installed. {message} Nothing was changed.", "Demucs v4 couldn't be installed. {message} Nothing was changed.")
+TEXT(T_PLUS_NOT_DONE_REINSTALLED, all, "Demucs v4 couldn't be reinstalled. {message} Nothing was changed.", "Demucs v4 couldn't be reinstalled. {message} Nothing was changed.")
+TEXT(T_PREPARING_CACHE,     all, "Preparing Stems Cache…", "Preparing Stems Cache…")
+TEXT(T_CACHE_NOT_INSTALLED, all, "Stems Cache couldn't be installed.", "Stems Cache couldn't be installed.")
+TEXT(T_CACHE_NOT_REINSTALLED, all, "Stems Cache couldn't be reinstalled.", "Stems Cache couldn't be reinstalled.")
+TEXT(T_CACHE_NOT_INSTALLED_LOG,   all, "Stems Cache couldn't be installed. See the log in this window.", "Stems Cache couldn't be installed. See the log in this window.")
+TEXT(T_CACHE_NOT_REINSTALLED_LOG, all, "Stems Cache couldn't be reinstalled. See the log in this window.", "Stems Cache couldn't be reinstalled. See the log in this window.")
+TEXT(T_RB_OPEN_TITLE,       all, "rekordbox open", "rekordbox open")
+TEXT(T_RB_OPEN_MSG,         all, "Quit rekordbox (also in other accounts on this Mac), then try again.", "Close rekordbox (also in other accounts on this PC), then try again.")
+TEXT(T_RB_OPEN_TRY_AGAIN,   all, "Quit rekordbox (also in other accounts on this Mac), then click Try Again.", "Close rekordbox (also in other accounts on this PC), then click Try Again.")
+TEXT(T_INSTALLING,          all, "Installing…", "Installing…")
+TEXT(T_REINSTALLING,        all, "Reinstalling…", "Reinstalling…")
+TEXT(T_UNINSTALLING,        all, "Uninstalling…", "Uninstalling…")
+TEXT(T_UNINSTALLING_ALL,    all, "Uninstalling RB Stems Plus…", "Uninstalling RB Stems Plus…")
+TEXT(T_UPDATING_CACHE,      all, "Updating Stems Cache…", "Updating Stems Cache…")
+TEXT(T_ACTION_UPDATE_CACHE, all, "Update Stems Cache", "Update Stems Cache")
+TEXT(T_PLUS_NOT_REMOVED_SPACE, all, "Demucs v4 couldn't be removed. {message} Free up some space and try again.", "Demucs v4 couldn't be removed. {message} Free up some space and try again.")
+TEXT(T_PLUS_NOT_REMOVED_HELP,  all, "Demucs v4 couldn't be removed. {message} To get rekordbox's own stems model back, click Open Help.", "Demucs v4 couldn't be removed. {message} To get rekordbox's own stems model back, click Open Help.")
+TEXT(T_CACHE_NOT_REMOVED,   all, "Stems Cache couldn't be removed.", "Stems Cache couldn't be removed.")
+TEXT(T_CHECKING_WHERE,      all, "Checking where stems are saved…", "Checking where stems are saved…")
+TEXT(T_UNINSTALL_ALL_Q,     all, "Uninstall RB Stems Plus?", "Uninstall RB Stems Plus?")
+TEXT(T_UNINSTALL_STOPPED,   all, "Uninstall stopped", "Uninstall stopped")
+TEXT(T_UNINSTALL_STOPPED_CACHE, all, "Stems Cache couldn't be removed, so nothing else was deleted. {why}", "Stems Cache couldn't be removed, so nothing else was deleted. {why}")
+TEXT(T_UNINSTALLED_TITLE,   all, "RB Stems Plus is uninstalled", "RB Stems Plus is uninstalled")
+TEXT(T_REMOVED_TITLE,       all, "RB Stems Plus is removed", "RB Stems Plus is removed")
+TEXT(T_UNINSTALLED_OTHERS_CACHE, all, "rekordbox has its own stems model again. Stems Cache stays for the other account.", "rekordbox has its own stems model again. Stems Cache stays for the other account.")
+TEXT(T_UNINSTALLED_BACK,    all, "rekordbox is back to how it was.", "rekordbox is back to how it was.")
+TEXT(T_OTHER_ACCOUNT_TITLE, all, "Stems Cache from another account", "Stems Cache from another account")
+TEXT(T_OTHER_ACCOUNT_MSG,   all, "Stems Cache was installed from another account on this Mac. Removing it turns it off in every account.", "Stems Cache was installed from another account on this PC. Removing it turns it off in every account.")
+TEXT(T_DELETING_DRIVE,      all, "Deleting the stems saved on \"{drive}\"…", "Deleting the stems saved on \"{drive}\"…")
+TEXT(T_DELETING_DRIVE_N,    all, "Deleting the stems saved on \"{drive}\"… {n} files", "Deleting the stems saved on \"{drive}\"… {n} files")
+TEXT(T_LEFT_DRIVE_PARTLY,   all, "Some of the stems saved on \"{drive}\" couldn't be deleted: delete the folder \"{dir}\" in Finder.", "Some of the stems saved on \"{drive}\" couldn't be deleted: delete the folder \"{dir}\" in File Explorer.")
+TEXT(T_LEFT_DRIVE_NOT_CONNECTED, all, "The stems saved on \"{drive}\" stay: it isn't connected. To delete them, delete the folder \"{dir}\" in Finder.", "The stems saved on \"{drive}\" stay: it isn't connected. To delete them, delete the folder \"{dir}\" in File Explorer.")
+TEXT(T_LEFT_DRIVE_NOT_NAMED, all, "The stems saved on \"{drive}\" stay. To delete them, delete the folder \"{dir}\" in Finder.", "The stems saved on \"{drive}\" stay. To delete them, delete the folder \"{dir}\" in File Explorer.")
+TEXT(T_LEFT_LIBRARY,        all, "Some of its files in your Library folder couldn't be deleted.", "Some of its files in your AppData folder couldn't be deleted.")
+TEXT(T_SELF_DELETE_FAILED,  all, "RB Stems Plus's own folder couldn't be removed: move RB Stems Plus to the Trash.", "RB Stems Plus's own folder couldn't be removed: delete it in File Explorer.")   /* SELF_DELETE couldn't start: the app stays open (owner decided 2026-11-12; not 1.3.0's words) */
+TEXT(T_ACTION_INTERRUPTED,  all, "Action interrupted", "Action interrupted")
+TEXT(T_ACTION_INTERRUPTED_MSG, all, "RB Stems Plus quit before \"{label}\" was done. Continue it now?", "RB Stems Plus closed before \"{label}\" was done. Continue it now?")
+TEXT(T_CACHE_UPDATE_TITLE,  all, "Stems Cache update", "Stems Cache update")
+TEXT(T_CACHE_UPDATE_MSG,    all, "An update for Stems Cache is available. Updating it asks for your password, and rekordbox needs to be closed. Until then, Stems Cache keeps working as it is.", "An update for Stems Cache is available. Updating it asks for an administrator's permission, and rekordbox needs to be closed. Until then, Stems Cache keeps working as it is.")
+TEXT(T_KEPT_ROOT_FOLDER_MSG, all, "The copy of rekordbox's files was kept, so nothing else was deleted. If you moved rekordbox, put it back in the Applications folder, then uninstall again.", "The copy of rekordbox's files was kept, so nothing else was deleted.")
+TEXT(T_ROOT_FOLDER_CLEANUP_MSG, all, "rekordbox isn't in the Applications folder. If you moved it, click Cancel and put it back first. Otherwise RB Stems Plus can remove the copy of rekordbox's files it kept; Pioneer's installer can always reinstall rekordbox.", "rekordbox isn't in {dir}. RB Stems Plus can remove the copy of rekordbox's files it kept; Pioneer's installer can always reinstall rekordbox.")
+TEXT(T_ANYWAY_BTN,          all, "Remove RB Stems Plus Anyway", "Remove RB Stems Plus Anyway")
+TEXT(T_ANYWAY_NO_SPACE,     all, "{message} Nothing was deleted. Free up some space and try again.", "{message} Nothing was deleted. Free up some space and try again.")
+TEXT(T_ANYWAY_INTRO,        all, "{message} Nothing was deleted.\n\nRemove RB Stems Plus Anyway deletes only its own files", "{message} Nothing was deleted.\n\nRemove RB Stems Plus Anyway deletes only its own files")
+TEXT(T_ANYWAY_KEEPS_SAVED,  all, " and keeps its saved copy of rekordbox's own stems model. ", " and keeps its saved copy of rekordbox's own stems model. ")
+TEXT(T_ANYWAY_GET_BACK,     all, "To get rekordbox's own stems model back, click Open Help.", "To get rekordbox's own stems model back, click Open Help.")
+TEXT(T_ANYWAY_ABOUT_KEPT,   all, "{message} The saved copy of rekordbox's own stems model stays in {dir}. To put it back, click Open Help.", "{message} The saved copy of rekordbox's own stems model stays in {dir}. To put it back, click Open Help.")
+TEXT(T_ANYWAY_ABOUT,        all, "{message} To get rekordbox's own stems model back, click Open Help.", "{message} To get rekordbox's own stems model back, click Open Help.")
+TEXT(T_REMOVAL_NOTE_CONNECTED, all, ", including all stems saved in its folder on \"{drive}\"{size}, also any saved there by other Macs or accounts", ", including all stems saved in its folder on \"{drive}\"{size}, also any saved there by other computers or accounts")
+TEXT(T_REMOVAL_NOTE_NOT_CONNECTED, all, " (its stems on \"{drive}\", which isn't connected, stay)", " (its stems on \"{drive}\", which isn't connected, stay)")
+TEXT(T_INSTALL_NOTE_REINSTALL, all, "Installs the latest version of {features} again.", "Installs the latest version of {features} again.")
+TEXT(T_FEATURES_AND,        all, "Demucs v4 and Stems Cache", "Demucs v4 and Stems Cache")
+TEXT(T_INSTALL_NOTE_BOTH,   all, "Replaces rekordbox's stems model with Demucs v4, and saves the stems it separates so they load much faster the next time.", "Replaces rekordbox's stems model with Demucs v4, and saves the stems it separates so they load much faster the next time.")
+TEXT(T_INSTALL_NOTE_CACHE,  all, "Saves the stems rekordbox separates, with either stems model, so they load much faster the next time.", "Saves the stems rekordbox separates, with either stems model, so they load much faster the next time.")
+TEXT(T_INSTALL_NOTE_PLUS,   all, "Replaces rekordbox's stems model with Demucs v4. rekordbox's own model is kept, so it can be put back.", "Replaces rekordbox's stems model with Demucs v4. rekordbox's own model is kept, so it can be put back.")
+TEXT(T_UNINSTALL_NOTE_CACHE, all, "Stops saving stems and puts rekordbox's original files back. The stems already saved are kept.", "Stops saving stems and puts rekordbox's original files back. The stems already saved are kept.")
+TEXT(T_UNINSTALL_NOTE_PLUS, all, "Puts rekordbox's own stems model back.", "Puts rekordbox's own stems model back.")
+TEXT(T_UNINSTALL_ALL_EXACT, all, "rekordbox goes back to exactly how it was.", "rekordbox goes back to exactly how it was.")
+TEXT(T_UNINSTALL_ALL_NO_SAVED, all, "There's no saved copy of rekordbox's own stems model to put back.", "There's no saved copy of rekordbox's own stems model to put back.")
+TEXT(T_UNINSTALL_ALL_OWN_MODEL, all, "rekordbox gets its own stems model back.", "rekordbox gets its own stems model back.")
+TEXT(T_UNINSTALL_ALL_OTHERS, all, " Stems Cache was installed from another account on this Mac.", " Stems Cache was installed from another account on this PC.")
+TEXT(T_UNINSTALL_ALL_DRIVE, all, "RB Stems Plus will be deleted, including all stems saved in its folder on \"{drive}\"{size}, also any saved there by other Macs or accounts.", "RB Stems Plus will be deleted, including all stems saved in its folder on \"{drive}\"{size}, also any saved there by other computers or accounts.")
+TEXT(T_UNINSTALL_ALL_DRIVE_GONE, all, "RB Stems Plus will be deleted. Its stems on \"{drive}\", which isn't connected, stay: connect it first to delete them too.", "RB Stems Plus will be deleted. Its stems on \"{drive}\", which isn't connected, stay: connect it first to delete them too.")
+TEXT(T_UNINSTALL_ALL_THIS_MAC, all, "RB Stems Plus will be deleted, including the stems it saved{size}.", "RB Stems Plus will be deleted, including the stems it saved{size}.")
+TEXT(T_UNINSTALL_ALL_MSG,   all, "{message} Your music and rekordbox library aren't touched.\n\n{why}", "{message} Your music and rekordbox library aren't touched.\n\n{why}")
+TEXT(T_FATE_OTHERS_PASTE,   all, " Other accounts on this Mac that use RB Stems Plus need to paste the install command again.", "")
+TEXT(T_FATE_OTHER_ACCOUNT,  all, " RB Stems Plus stays in the Applications folder: it belongs to another account on this Mac.", "")
+TEXT(T_FATE_CANT_DELETE,    all, " RB Stems Plus couldn't delete itself: drag it to the Trash.", " RB Stems Plus couldn't delete all of its files: delete the folder %LOCALAPPDATA%\\Programs\\RB Stems Plus in File Explorer.")
+
+/* Settings and the stems' location (Settings.swift, LocationActions.swift, Location.swift) */
+TEXT(T_SETTINGS_TITLE,      all, "Settings", "Settings")
+TEXT(T_SETTINGS_MSG,        all, "Stems Cache uses these settings the next time rekordbox opens.", "Stems Cache uses these settings the next time rekordbox opens.")
+TEXT(T_SETTINGS_UNREADABLE, all, "Stems Cache can't read its settings (config.ini), so nothing can be changed here. See Help › RB Stems Plus Troubleshooting.", "Stems Cache can't read its settings (config.ini), so nothing can be changed here. See Help › RB Stems Plus Troubleshooting.")
+TEXT(T_SETTINGS_REINSTALL_TO_CHOOSE, all, " Reinstall Stems Cache to choose where stems are saved.", " Reinstall Stems Cache to choose where stems are saved.")
+TEXT(T_SETTINGS_CLEAR,      all, "Clear Saved Stems{size}", "Clear Saved Stems{size}")
+TEXT(T_SETTINGS_SIZE_FIELD, all, "Stems Cache size limit (GB)", "Stems Cache size limit (GB)")
+TEXT(T_SETTINGS_DAYS_FIELD, all, "Remove stems unused for (days)", "Remove stems unused for (days)")
+TEXT(T_SETTINGS_CHANGE,     all, "Change…", "Change…")
+TEXT(T_SETTINGS_USE_THIS_MAC, all, "Use This Mac", "Use This PC")
+TEXT(T_SIZE_OUT_OF_RANGE,   all, "Size out of range", "Size out of range")
+TEXT(T_SIZE_OUT_OF_RANGE_MSG, all, "Enter a size from 0.1 to 100,000 GB.", "Enter a size from 0.1 to 100,000 GB.")
+TEXT(T_DAYS_OUT_OF_RANGE,   all, "Days out of range", "Days out of range")
+TEXT(T_DAYS_OUT_OF_RANGE_MSG, all, "Enter a number of days from 1 to 36,500.", "Enter a number of days from 1 to 36,500.")
+TEXT(T_SETTINGS_NOT_SAVED,  all, "Settings not saved", "Settings not saved")
+TEXT(T_SETTINGS_NOT_SAVED_MSG, all, "RB Stems Plus couldn't write its settings file. See the log in this window.", "RB Stems Plus couldn't write its settings file. See the log in this window.")
+TEXT(T_CLEAR_Q,             all, "Clear saved stems{size}", "Clear saved stems{size}")
+TEXT(T_CLEAR_THIS_MAC_MSG,  all, "Deletes the saved stems. rekordbox separates those tracks again the next time you load them.", "Deletes the saved stems. rekordbox separates those tracks again the next time you load them.")
+TEXT(T_CLEAR_LOCATION_MSG,  all, "Deletes all stems saved in this folder on \"{drive}\", including any saved there by other Macs or accounts.", "Deletes all stems saved in this folder on \"{drive}\", including any saved there by other computers or accounts.")
+TEXT(T_NOT_CLEARED,         all, "Saved stems not cleared", "Saved stems not cleared")
+TEXT(T_NOT_CLEARED_MSG,     all, "Some saved stems couldn't be deleted. See the log in this window.", "Some saved stems couldn't be deleted. See the log in this window.")
+TEXT(T_NOT_CLEARED_DRIVE_MSG, all, "Some saved stems on \"{drive}\" couldn't be deleted ({why}).", "Some saved stems on \"{drive}\" couldn't be deleted ({why}).")
+/* removeInLocation's reasons (Location.swift:620-660), for the alert above and the log (M6) */
+TEXT(T_REMOVE_R_NOT_CONNECTED, all, "not connected", "not connected")
+TEXT(T_REMOVE_R_NOT_OPENED,    all, "the drive can't be opened", "the drive can't be opened")
+TEXT(T_REMOVE_R_NOT_READ,      all, "the drive can't be read", "the drive can't be read")
+TEXT(T_REMOVE_R_ENTRY,         all, "{name}: {why}", "{name}: {why}")
+TEXT(T_REMOVE_R_OTHER_DRIVE,   all, "{name} is on another drive", "{name} is on another drive")
+TEXT(T_REMOVE_R_MARKER,        all, "the folder's marker isn't the one expected", "the folder's marker isn't the one expected")
+TEXT(T_REMOVE_R_SOME,          all, "some files couldn't be deleted", "some files couldn't be deleted")
+/* Settings and the stems' location, continued (LocationActions.swift, Location.swift) */
+TEXT(T_CLEARING_DRIVE,      all, "Clearing saved stems on \"{drive}\"…", "Clearing saved stems on \"{drive}\"…")
+TEXT(T_CLEARING_DRIVE_N,    all, "Clearing saved stems on \"{drive}\"… {n} files", "Clearing saved stems on \"{drive}\"… {n} files")
+TEXT(T_LOCATION_LABEL,      all, "Stems Cache location: {path}", "Stems Cache location: {path}")
+TEXT(T_LOCATION_UNREADABLE, all, "Stems Cache location: config.ini can't be read", "Stems Cache location: config.ini can't be read")
+TEXT(T_LOCATION_THIS_MAC,   all, "Stems Cache location: This Mac", "Stems Cache location: This PC")
+TEXT(T_LOCATION_SEP,        all, " › ", " › ")                                       /* locationLabel's joined(separator:) */
+TEXT(T_LOCATION_MALFORMED,  all, "Stems Cache location: set wrongly in config.ini", "Stems Cache location: set wrongly in config.ini")
+TEXT(T_OLD_DRIVE_STAYS,     all, "The stems saved on \"{drive}\" stay there.", "The stems saved on \"{drive}\" stay there.")
+TEXT(T_SWITCH_FOUND,        all, "Stems Cache will use the {size} already saved on \"{drive}\".", "Stems Cache will use the {size} already saved on \"{drive}\".")
+TEXT(T_SWITCH_NEW,          all, "Stems Cache will save stems on \"{drive}\".", "Stems Cache will save stems on \"{drive}\".")
+TEXT(T_SWITCH_THIS_MAC_DELETED, all, " The {size} saved on this Mac will be deleted: rekordbox separates those tracks again the next time you load them.", " The {size} saved on this PC will be deleted: rekordbox separates those tracks again the next time you load them.")
+TEXT(T_USE_THIS_MAC_MSG,    all, "Stems Cache will save stems on this Mac.", "Stems Cache will save stems on this PC.")
+TEXT(T_USE_THIS_MAC_Q,      all, "Use This Mac?", "Use This PC?")
+TEXT(T_USE_DRIVE_Q,         all, "Use \"{drive}\"?", "Use \"{drive}\"?")
+TEXT(T_USE_DRIVE,           all, "Use \"{drive}\"", "Use \"{drive}\"")
+TEXT(T_CHECKING_FOLDER,     all, "Checking the folder…", "Checking the folder…")
+TEXT(T_LOOKING_FOR_STEMS,   all, "Looking for saved stems on \"{drive}\"…", "Looking for saved stems on \"{drive}\"…")
+TEXT(T_MEASURING,           all, "Measuring…", "Measuring…")
+TEXT(T_DELETING_THIS_MAC,   all, "Deleting the stems saved on this Mac…", "Deleting the stems saved on this PC…")
+TEXT(T_CANT_SAVE_THERE,     all, "Can't save stems there", "Can't save stems there")
+TEXT(T_NOT_OURS_MSG,        all, "That \"RB Stems Plus Cache\" folder isn't RB Stems Plus's: its marker file is missing. Choose another folder.", "That \"RB Stems Plus Cache\" folder isn't RB Stems Plus's: its marker file is missing. Choose another folder.")
+TEXT(T_FOUND_TITLE,         all, "Saved stems found", "Saved stems found")
+TEXT(T_FOUND_MSG,           all, "Found your saved stems on \"{drive}\".", "Found your saved stems on \"{drive}\".")
+TEXT(T_FOUND_SIZE_MSG,      all, "Found your saved stems on \"{drive}\" ({size}).", "Found your saved stems on \"{drive}\" ({size}).")
+TEXT(T_USE_THEM,            all, "Use Them", "Use Them")
+TEXT(T_OTHER_OWNER_MSG,     all, "This folder belongs to another account on this drive, which has ownership turned on.", "This folder belongs to another account, so RB Stems Plus can't write to it.")
+TEXT(T_APPEARED_MSG,        all, "A folder named \"RB Stems Plus Cache\" appeared there meanwhile. Choose the folder again.", "A folder named \"RB Stems Plus Cache\" appeared there meanwhile. Choose the folder again.")
+TEXT(T_CREATE_R_MARKER,     all, "the marker couldn't be written ({why})", "the marker couldn't be written ({why})")      /* Location.swift createLocationFolder */
+TEXT(T_CANT_CREATE_MSG,     all, "RB Stems Plus couldn't create its folder on \"{drive}\" ({why}).", "RB Stems Plus couldn't create its folder on \"{drive}\" ({why}).")
+TEXT(T_REFUSE_INTERNAL,     all, "Choose a folder on an external drive. To save stems on this Mac, use This Mac.", "Choose a folder on an external drive. To save stems on this PC, use This PC.")
+TEXT(T_REFUSE_NETWORK,      all, "Choose a drive connected to this Mac, not a network drive.", "Choose a drive connected to this PC, not a network drive.")
+TEXT(T_REFUSE_READ_ONLY,    all, "\"{drive}\" is read-only.", "\"{drive}\" is read-only.")
+TEXT(T_REFUSE_TIME_MACHINE, all, "\"{drive}\" is a Time Machine backup drive.", "")
+TEXT(T_REFUSE_INSIDE,       all, "Choose the folder that contains \"RB Stems Plus Cache\", not a folder inside it.", "Choose the folder that contains \"RB Stems Plus Cache\", not a folder inside it.")
+TEXT(T_REFUSE_LINK,         all, "A folder on the way to the one you chose is a link. Choose the folder itself.", "A folder on the way to the one you chose is a link. Choose the folder itself.")
+TEXT(T_REFUSE_FILE_SYSTEM,  all, "\"{drive}\" isn't formatted as APFS, Mac OS Extended, exFAT or FAT32.", "\"{drive}\" isn't formatted as NTFS, exFAT or FAT32.")
+TEXT(T_REFUSE_PATH,         all, "That folder's path is too long, or has a character Stems Cache can't use (a double quote or a control character). Choose another folder.", "That folder's path is too long, or has a character Stems Cache can't use (a double quote or a control character). Choose another folder.")
+TEXT(T_REFUSE_UNREADABLE,   all, "RB Stems Plus can't read that folder's drive. Choose another folder.", "RB Stems Plus can't read that folder's drive. Choose another folder.")
+
+/* uninstalling Demucs v4: rekordbox's model (Models.swift: the messages a dialog shows) */
+TEXT(T_MODEL_UNKNOWN,       all, "rekordbox's stems model isn't one RB Stems Plus knows, so it was left as it is.", "rekordbox's stems model isn't one RB Stems Plus knows, so it was left as it is.")
+TEXT(T_MODEL_IS_OURS,       all, "rekordbox's stems model is the Demucs v4 model, so it wasn't saved as rekordbox's own.", "rekordbox's stems model is the Demucs v4 model, so it wasn't saved as rekordbox's own.")
+TEXT(T_MODEL_NO_SPACE_SAVE, all, "There isn't enough free space to save a copy of rekordbox's own stems model.", "There isn't enough free space to save a copy of rekordbox's own stems model.")
+TEXT(T_MODEL_NOT_SAVED,     all, "A copy of rekordbox's own stems model couldn't be saved.", "A copy of rekordbox's own stems model couldn't be saved.")
+TEXT(T_MODEL_UNREADABLE,    all, "rekordbox's stems model can't be read.", "rekordbox's stems model can't be read.")
+TEXT(T_MODEL_NO_SAVED_COPY, all, "There's no saved copy of rekordbox's own stems model on this Mac.", "There's no saved copy of rekordbox's own stems model on this PC.")
+TEXT(T_MODEL_NO_SPACE_BACK, all, "There isn't enough free space to put rekordbox's own stems model back.", "There isn't enough free space to put rekordbox's own stems model back.")
+TEXT(T_MODEL_NOT_BACK_WHY,  all, "rekordbox's own stems model couldn't be put back: {why}.", "rekordbox's own stems model couldn't be put back: {why}.")
+TEXT(T_MODEL_NOT_BACK,      all, "rekordbox's own stems model couldn't be put back.", "rekordbox's own stems model couldn't be put back.")
+TEXT(T_MODEL_CHANGED,       all, "rekordbox's stems model changed meanwhile.", "rekordbox's stems model changed meanwhile.")
+TEXT(T_MODEL_NOT_VERIFIED,  all, "rekordbox's stems model didn't verify after it was put back.", "rekordbox's stems model didn't verify after it was put back.")
+TEXT(T_MODEL_SAVED_DAMAGED, all, "The saved copy of rekordbox's own stems model is damaged.", "The saved copy of rekordbox's own stems model is damaged.")
+TEXT(T_MODEL_NOT_A_FILE,    all, "rekordbox's stems model isn't a file.", "rekordbox's stems model isn't a file.")
+TEXT(T_MODEL_NO_SPACE_COPY, all, "There isn't enough free space to copy the Demucs v4 model.", "There isn't enough free space to copy the Demucs v4 model.")
+TEXT(T_MODEL_NOT_COPIED_WHY, all, "The Demucs v4 model couldn't be copied: {why}.", "The Demucs v4 model couldn't be copied: {why}.")
+TEXT(T_MODEL_COPY_BAD,      all, "The Demucs v4 model didn't copy correctly.", "The Demucs v4 model didn't copy correctly.")
+TEXT(T_MODEL_NOT_PLACED_WHY, all, "The Demucs v4 model couldn't be put in place: {why}.", "The Demucs v4 model couldn't be put in place: {why}.")
+TEXT(T_MODEL_LEFT_NONE,     all, "rekordbox has no stems model.", "rekordbox has no stems model.")
+TEXT(T_MODEL_LEFT_OURS,     all, "rekordbox still has the Demucs v4 model.", "rekordbox still has the Demucs v4 model.")
+TEXT(T_MODEL_LEFT_UNKNOWN,  all, "rekordbox's stems model isn't one RB Stems Plus knows.", "rekordbox's stems model isn't one RB Stems Plus knows.")
+
+/* updating the app (Update.swift) */
+TEXT(T_NOT_IN_APPLICATIONS, all, "Not in Applications", "Not installed")
+TEXT(T_NOT_IN_APPLICATIONS_MSG, all, "Move RB Stems Plus to the Applications folder, open it from there, then choose Update RB Stems Plus again.", "This copy of RB Stems Plus isn't the installed one. Open RB Stems Plus from the Start menu, then choose Update RB Stems Plus again.")
+TEXT(T_ADMIN_NEEDED,        all, "Administrator needed", "Can't update")
+TEXT(T_ADMIN_NEEDED_MSG,    all, "Only an administrator can update RB Stems Plus on this Mac.", "RB Stems Plus can't write to its own folder, so it can't update itself.")
+TEXT(T_UPDATE_TO,           all, "Update RB Stems Plus to {version}", "Update RB Stems Plus to {version}")
+TEXT(T_UPDATE_TO_MSG,       all, "Replaces this version with RB Stems Plus {version}.", "Replaces this version with RB Stems Plus {version}.")
+TEXT(T_UPDATING_APP,        all, "Updating RB Stems Plus…", "Updating RB Stems Plus…")
+TEXT(T_UPDATE_BAD_DOWNLOAD, all, "The update didn't download correctly. Nothing was changed. Try again later.", "The update didn't download correctly. Nothing was changed. Try again later.")
+TEXT(T_UPDATE_FAILED,       all, "Update failed", "Update failed")
+TEXT(T_UPDATE_FAILED_MSG,   all, "RB Stems Plus wasn't changed.{why} If macOS said RB Stems Plus was prevented from modifying apps, allow it, then choose Update RB Stems Plus again. Otherwise try again later.", "RB Stems Plus wasn't changed.{why} Try again later.")
+TEXT(T_UPDATE_R_APP,        all, " RB Stems Plus was moved or changed while it was updating.", " RB Stems Plus was moved or changed while it was updating.")
+TEXT(T_UPDATE_R_DOWNLOAD,   all, " The download wasn't a valid copy of RB Stems Plus.", " The download wasn't a valid copy of RB Stems Plus.")
+TEXT(T_UPDATE_R_STAGING,    all, " Something else is in the way next to RB Stems Plus ({name}).", " Something else is in the way of the new version's folder.")
+TEXT(T_UPDATE_R_COPY,       all, " The new version couldn't be copied next to RB Stems Plus.", " The new version couldn't be copied next to RB Stems Plus.")
+TEXT(T_UPDATE_R_COPY_CHECK, all, " The copy of the new version didn't check out.", " The copy of the new version didn't check out.")
+TEXT(T_UPDATE_R_SIGN,       all, " The new version couldn't be signed.", "")
+TEXT(T_UPDATE_R_SWAP,       all, " The new version couldn't take this one's place.", " The new version couldn't take this one's place.")
+TEXT(T_CHECKING_WHAT,       all, "Checking {name}…", "Checking {name}…")                            /* Payload.swift fetchAsset */
+TEXT(T_DOWNLOADING_WHAT,    all, "Downloading {name}…", "Downloading {name}…")
+TEXT(T_DOWNLOADING_WHAT_PCT, all, "Downloading {name}… {n}%", "Downloading {name}… {n}%")
+
+/* Create Report (Report.swift) */
+TEXT(T_CREATING_REPORT,     all, "Creating a report…", "Creating a report…")
+TEXT(T_REPORT_FAILED,       all, "Report failed", "Report failed")
+TEXT(T_REPORT_FAILED_MSG,   all, "The report couldn't be created. See the log in this window.", "The report couldn't be created. See the log in this window.")
+TEXT(T_REPORT_SAVED,        all, "Report saved", "Report saved")
+TEXT(T_REPORT_SAVED_MSG,    all, "It's saved as {path}. To get help, click Open GitHub Issue, then drag the report into the issue.", "It's saved as {path}. To get help, click Open GitHub Issue, then drag the report into the issue.")
+TEXT(T_OPEN_ISSUE,          all, "Open GitHub Issue", "Open GitHub Issue")
+TEXT(T_ISSUE_BODY,          all, "### What happened?\n\n\n\n### Technical details\nPlease also drag in the report zip that RB Stems Plus just showed in Finder (it has the full logs).\n\n```\n{details}\n```", "### What happened?\n\n\n\n### Technical details\nPlease also drag in the report zip that RB Stems Plus just showed in File Explorer (it has the full logs).\n\n```\n{details}\n```")
+
+/* the menus (main.swift) not in the starter rows */
+TEXT(T_MENU_ABOUT,          all, "About RB Stems Plus", "About RB Stems Plus")
+TEXT(T_MENU_HIDE,           all, "Hide RB Stems Plus", "")
+TEXT(T_MENU_QUIT,           all, "Quit RB Stems Plus", "Exit")
+TEXT(T_MENU_EDIT,           all, "Edit", "Edit")
+TEXT(T_MENU_CUT,            all, "Cut", "Cut")
+TEXT(T_MENU_COPY,           all, "Copy", "Copy")
+TEXT(T_MENU_PASTE,          all, "Paste", "Paste")
+TEXT(T_MENU_SELECT_ALL,     all, "Select All", "Select All")
+TEXT(T_MENU_VIEW,           all, "View", "View")
+TEXT(T_MENU_PREPARE_PLAYLIST, all, "Prepare Playlist…", "Prepare Playlist…")
+TEXT(T_MENU_STOP,           all, "Stop", "Stop")
+TEXT(T_MENU_STEMS_CACHE,    all, "Stems Cache", "Stems Cache")
+TEXT(T_MENU_REINSTALL,      all, "Reinstall", "Reinstall")
+TEXT(T_MENU_UNINSTALL_PART, all, "Uninstall…", "Uninstall…")
+TEXT(T_MENU_SHOW_LOG,       all, "Show Log", "Show Log")
+TEXT(T_MENU_WINDOW,         all, "Window", "")
+TEXT(T_MENU_CLOSE,          all, "Close", "")
+TEXT(T_MENU_MINIMIZE,       all, "Minimize", "")
+TEXT(T_MENU_TROUBLESHOOTING, all, "RB Stems Plus Troubleshooting", "RB Stems Plus Troubleshooting")
+TEXT(T_MENU_REPORT_ISSUE,   all, "Report an Issue", "Report an Issue")
+TEXT(T_MENU_STATUS,         all, "Status", "Status")
+TEXT(T_ABOUT_CREDITS,       all, "\n\nFree and open source (MIT licence).\n\nNot made or supported by\nAlphaTheta / Pioneer DJ.", "\n\nFree and open source (MIT licence).\n\nNot made or supported by\nAlphaTheta / Pioneer DJ.")
+
+/* ---------------------------------------------------------------- Windows only (W-core, app.md §9) */
+
+/* "rekordbox is still closing" (PLAN R1, app.md §5.5): rekordbox's process lingers about 75 s after
+ * its window closes; the flow waits for it with this status line */
+TEXT(T_WIN_STILL_CLOSING,     win, "", "rekordbox is still closing…")
+/* the update-first offer (I76, J23): the worker in <Program Files> speaks another protocol, or its
+ * floor refuses this app's payload (exit 12, 14), or no worker can serve this app */
+TEXT(T_WIN_UPDATE_FIRST_TITLE, win, "", "Update RB Stems Plus first")
+TEXT(T_WIN_UPDATE_FIRST_MSG,  win, "", "Stems Cache on this PC was installed by a newer RB Stems Plus: update RB Stems Plus, then try again.")
+/* R1's light, text and "put Pioneer's file back" flow (app.md §5.2, §5.5 restore) */
+TEXT(T_WIN_R1_LIVE_MISSING,   win, "", "rekordbox's onnxruntime.dll is missing, so rekordbox can't separate stems. Click Put Back Pioneer's File.")
+TEXT(T_WIN_R1_LIVE_FOREIGN,   win, "", "rekordbox's onnxruntime.dll isn't Pioneer's or RB Stems Plus's, so rekordbox may not separate stems. Click Put Back Pioneer's File.")
+TEXT(T_WIN_R1_ORT_MISSING,    win, "", "Stems Cache's copy of rekordbox's ONNX Runtime is missing, so rekordbox can't separate stems. Click Put Back Pioneer's File.")
+TEXT(T_WIN_BTN_RESTORE,       win, "", "Put Back Pioneer's File")
+TEXT(T_WIN_RESTORE_Q,         win, "", "Put back Pioneer's file?")
+TEXT(T_WIN_RESTORE_MSG,       win, "", "Puts rekordbox's own onnxruntime.dll back. Stems Cache stays off until you reinstall it.")
+TEXT(T_WIN_RESTORING,         win, "", "Putting back Pioneer's file…")
+TEXT(T_WIN_RESTORE_FAILED,    win, "", "Put back failed")
+TEXT(T_WIN_RESTORE_NOT_DONE,  win, "", "Pioneer's file couldn't be put back.")
+/* the uninstall's last file, removed at the next restart (I20): said only when it applies */
+TEXT(T_WIN_REMOVED_AT_RESTART, win, "", " One file of RB Stems Plus is removed when Windows restarts.")
+/* start-up refusals (app.md §5.9): UAC off (I35), the minimum Windows (I34) and .NET */
+TEXT(T_WIN_START_UAC_OFF,     win, "", "RB Stems Plus can't run while User Account Control is off. Turn it on, restart Windows, then open RB Stems Plus again.")
+TEXT(T_WIN_START_OLD_WINDOWS, win, "", "RB Stems Plus needs Windows 11, version 22H2 or later.")
+TEXT(T_WIN_START_OLD_NET,     win, "", "RB Stems Plus needs .NET Framework 4.8.1 or later. Install it with Windows Update, then open RB Stems Plus again.")
+/* bootstrap.ps1's Smart App Control refusal (I69, R16), here for W14a's table of Windows texts */
+TEXT(T_WIN_SAC_ON,            win, "", "Smart App Control is on, so RB Stems Plus can't be installed. Turn it off in Windows Security › App & browser control › Smart App Control, then run the install command again.")
+
+/* the update-first offer when no newer RB Stems Plus can be found (review C1): one button */
+TEXT(T_WIN_NO_NEWER_MSG,      win, "", "Stems Cache on this PC was installed by a newer RB Stems Plus, and no newer version can be downloaded now. Try again later.")
+/* "rekordbox open" after the wait, when rekordbox's window is gone but its process still runs
+ * (review C14): the Try Again ask's and the OK alert's words */
+TEXT(T_WIN_STILL_CLOSING_TRY, win, "", "rekordbox hasn't finished closing. Click Try Again in a moment.")
+TEXT(T_WIN_STILL_CLOSING_MSG, win, "", "rekordbox hasn't finished closing. Try again in a moment.")
+/* appended (HF7): FEAT_NOT_CHECKED's line */
+TEXT(T_WIN_CACHE_NOT_CHECKED, win, "", "Stems Cache couldn't check rekordbox just now.")
+/* the nameless forms (review NR2; owner, 2026-11-13): a {drive} text whose drive has no name ("":
+ * unplugged, no label remembered; a letter is never shown for it) says "Stems Cache's drive".
+ * Picked only on Windows, by drive_text, location_light, paused_text and the not-connected flow
+ * texts. A connected drive with neither a label nor a letter (folder-mounted, or its letter
+ * removed) also gives "": its connected-only texts' nameless forms are appended below (review
+ * NT1, NT2) */
+TEXT(T_WIN_LOC_CHECKING_NAMELESS,      win, "", "Stems Cache is still checking its drive.")
+TEXT(T_WIN_LOC_AGAIN_SOON_NAMELESS,    win, "", "Stems Cache will use its drive again in a few seconds.")
+TEXT(T_WIN_LOC_NOT_USING_NAMELESS,     win, "", "Stems Cache isn't using its drive right now: {why}")
+TEXT(T_WIN_LOC_BRIDGE_TOO_OLD_NAMELESS, win, "", "Stems Cache needs an update to save stems on its drive: it's saving them on this PC for now. Click Reinstall Stems Cache.")
+TEXT(T_WIN_LOC_NOT_CONNECTED_NAMELESS, win, "", "Stems Cache's drive isn't connected: rekordbox separates tracks as usual. {connect}")
+TEXT(T_WIN_LOC_FOLDER_MISSING_NAMELESS, win, "", "Stems Cache's folder on its drive is missing or was replaced.")
+TEXT(T_WIN_LOC_LINK_NAMELESS,          win, "", "Stems Cache isn't saving: a folder on the way to Stems Cache's folder on its drive is a link.")
+TEXT(T_WIN_LOC_NETWORK_NAMELESS,       win, "", "Stems Cache isn't saving: Stems Cache's drive is a network drive. Choose a drive connected to this PC in Settings.")
+TEXT(T_WIN_LOC_READ_ONLY_NAMELESS,     win, "", "Stems Cache's drive is read-only; Windows may need to repair it (the drive's Properties › Tools › Check in File Explorer).")
+TEXT(T_WIN_LOC_NO_PERMISSION_NAMELESS, win, "", "RB Stems Plus isn't allowed to use Stems Cache's drive. Check the folder's permissions (Properties › Security in File Explorer).")
+TEXT(T_WIN_CACHE_PAUSED_NAMELESS,      win, "", "Stems Cache stopped saving stems: its drive has less than {gb} GB free.")
+TEXT(T_WIN_CACHE_PAUSED_AT_INSTALL_NAMELESS, win, "", "Stems Cache will stop saving stems while its drive has less than {gb} GB free.")
+TEXT(T_WIN_LEFT_DRIVE_NOT_CONNECTED_NAMELESS, win, "", "The stems saved on Stems Cache's drive stay: it isn't connected. To delete them, delete the folder \"{dir}\" in File Explorer.")
+TEXT(T_WIN_REMOVAL_NOTE_NOT_CONNECTED_NAMELESS, win, "", " (its stems on Stems Cache's drive, which isn't connected, stay)")
+TEXT(T_WIN_UNINSTALL_ALL_DRIVE_GONE_NAMELESS, win, "", "RB Stems Plus will be deleted. Its stems on Stems Cache's drive, which isn't connected, stay: connect it first to delete them too.")
+TEXT(T_WIN_OLD_DRIVE_STAYS_NAMELESS,   win, "", "The stems saved on the previous drive stay there.")
+/* appended (review NT1): the connected-only nameless forms, for a chosen drive that has neither a
+ * label nor a letter now (folder-mounted, or its letter removed). Picked only on Windows, by
+ * nameless_text; none has a {drive} slot */
+TEXT(T_WIN_UNINSTALL_ALL_DRIVE_NAMELESS, win, "", "RB Stems Plus will be deleted, including all stems saved in its folder on Stems Cache's drive{size}, also any saved there by other computers or accounts.")
+TEXT(T_WIN_REMOVAL_NOTE_CONNECTED_NAMELESS, win, "", ", including all stems saved in its folder on Stems Cache's drive{size}, also any saved there by other computers or accounts")
+TEXT(T_WIN_DELETING_DRIVE_NAMELESS,    win, "", "Deleting the stems saved on Stems Cache's drive…")
+TEXT(T_WIN_DELETING_DRIVE_N_NAMELESS,  win, "", "Deleting the stems saved on Stems Cache's drive… {n} files")
+TEXT(T_WIN_LEFT_DRIVE_PARTLY_NAMELESS, win, "", "Some of the stems saved on Stems Cache's drive couldn't be deleted: delete the folder \"{dir}\" in File Explorer.")
+TEXT(T_WIN_LEFT_DRIVE_NOT_NAMED_NAMELESS, win, "", "The stems saved on Stems Cache's drive stay. To delete them, delete the folder \"{dir}\" in File Explorer.")
+TEXT(T_WIN_CLEAR_LOCATION_MSG_NAMELESS, win, "", "Deletes all stems saved in this folder on Stems Cache's drive, including any saved there by other computers or accounts.")
+TEXT(T_WIN_CLEARING_DRIVE_NAMELESS,    win, "", "Clearing saved stems on Stems Cache's drive…")
+TEXT(T_WIN_CLEARING_DRIVE_N_NAMELESS,  win, "", "Clearing saved stems on Stems Cache's drive… {n} files")
+TEXT(T_WIN_NOT_CLEARED_DRIVE_MSG_NAMELESS, win, "", "Some saved stems on Stems Cache's drive couldn't be deleted ({why}).")
+/* appended (review NT2): Settings' location row for that drive; {path} is " › " and the folders
+ * below the drive's root, "" at the root */
+TEXT(T_WIN_LOCATION_LABEL_NAMELESS,    win, "", "Stems Cache location: Stems Cache's drive{path}")
+/* appended (review NT1; owner, 2026-11-15): Settings refuses to choose a drive with neither a
+ * label nor a letter, so its Use, Found, Looking and Can't create texts need no nameless form */
+TEXT(T_WIN_REFUSE_NAMELESS,            win, "", "That folder's drive has no name and no drive letter. Choose another folder.")
+/* appended (owner, 2026-11-16): the after-exit's one dialog (win/c/afterexit.c), when it kept the
+ * app files and the Apps & features entry because a program still ran from the apps folder after
+ * the 60 s wait, or the process list stayed unknown; no program named (its path is in the log) */
+TEXT(T_WIN_UNINSTALL_KEPT,             win, "", "RB Stems Plus couldn't be fully uninstalled because part of it is still running, maybe in another session of your Windows account. Restart Windows, then uninstall it again from Apps & features.")
+#undef SLOT
+#undef TEXT

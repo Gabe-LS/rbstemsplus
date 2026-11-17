@@ -1,0 +1,135 @@
+{"k":"start","t":0,"mode":"trace","pid":1076,"launch_ns":-10731417,"arch":"arm64"}
+{"k":"set","t":86807458,"f":"status.againBtn","s":"setTitle","v":"Prepare Again"}
+{"k":"set","t":86827666,"f":"status.stopBtn","s":"setTitle","v":"Stop Keeping…"}
+{"k":"ev","t":94629833,"e":"tabShown","v":"Status"}
+{"k":"ev","t":166060166,"e":"tabShown","v":"Manage"}
+{"k":"ev","t":166256666,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":182301041,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":182320500,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is off."}
+{"k":"set","t":182802250,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":182811958,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":182889166,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":182905833,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":182987708,"f":"c.cacheIcon","s":"setImage","v":"off"}
+{"k":"set","t":182994208,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":183010250,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":183014416,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"ev","t":190651416,"e":"cmd","v":"event 30000 windowDrawn 1"}
+{"k":"set","t":307331708,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":307361833,"f":"c.installCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":307421291,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":307435208,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":307479750,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":307495750,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":307497958,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":307504083,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":307510083,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":307513208,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":307514750,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":307722583,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":307732250,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":339106291,"e":"didBecomeActive","v":""}
+{"k":"ev","t":339123583,"e":"tp","v":"trigger.activate"}
+{"k":"ev","t":347365666,"e":"windowDrawn","v":""}
+{"k":"frame","t":347362125,"n":2,"busy":141601958,"d":{"app.active":"1","app.modal":"","c.cacheIcon.hid":"0","c.cacheIcon.img":"off","c.cacheIcon.tint":"#ff383c","c.cacheIcon.tip":"Stems Cache is off.","c.cacheLabel.hid":"0","c.cacheLabel.str":"Stems Cache","c.cacheLabel.tip":"Stems Cache is off.","c.installCacheBtn.en":"1","c.installCacheBtn.hid":"0","c.installCacheBtn.title":"Install Stems Cache","c.installPlusBtn.en":"1","c.installPlusBtn.hid":"0","c.installPlusBtn.title":"Install Demucs v4","c.plusIcon.hid":"0","c.plusIcon.img":"off","c.plusIcon.tint":"#ff383c","c.plusIcon.tip":"Demucs v4 is off.","c.plusLabel.hid":"0","c.plusLabel.str":"Demucs v4","c.plusLabel.tip":"Demucs v4 is off.","c.reinstallBtn.en":"0","c.reinstallBtn.hid":"0","c.reinstallBtn.title":"Reinstall Demucs v4","c.reinstallCacheBtn.en":"0","c.reinstallCacheBtn.hid":"0","c.reinstallCacheBtn.title":"Reinstall Stems Cache","c.reinstallPlusBtn.en":"0","c.reinstallPlusBtn.hid":"0","c.reinstallPlusBtn.title":"Reinstall Demucs v4","c.settingsBtn.en":"1","c.settingsBtn.hid":"0","c.settingsBtn.title":"Settings…","c.spinner.anim":"0","c.spinner.hid":"0","c.status.hid":"0","c.status.str":"","c.uninstallAllBtn.en":"1","c.uninstallAllBtn.hid":"0","c.uninstallAllBtn.title":"Uninstall RB Stems Plus Completely","c.uninstallCacheBtn.en":"0","c.uninstallCacheBtn.hid":"0","c.uninstallCacheBtn.title":"Uninstall Stems Cache","c.uninstallPlusBtn.en":"0","c.uninstallPlusBtn.hid":"0","c.uninstallPlusBtn.title":"Uninstall Demucs v4","c.updateItem.en":"1","c.updateItem.hid":"1","c.updateItem.title":"Update RB Stems Plus…","c.view0.hid":"0","c.view0.str":"Demucs v4","c.view1.hid":"0","c.view1.str":"Stems Cache","menu.App.About RB Stems Plus.en":"1","menu.App.About RB Stems Plus.hid":"0","menu.App.About RB Stems Plus.title":"About RB Stems Plus","menu.App.Hide RB Stems Plus.en":"1","menu.App.Hide RB Stems Plus.hid":"0","menu.App.Hide RB Stems Plus.title":"Hide RB Stems Plus","menu.App.Quit RB Stems Plus.en":"1","menu.App.Quit RB Stems Plus.hid":"0","menu.App.Quit RB Stems Plus.title":"Quit RB Stems Plus","menu.App.Settings….en":"1","menu.App.Settings….hid":"0","menu.App.Settings….title":"Settings…","menu.App.Uninstall RB Stems Plus….en":"1","menu.App.Uninstall RB Stems Plus….hid":"0","menu.App.Uninstall RB Stems Plus….title":"Uninstall RB Stems Plus…","menu.App.en":"1","menu.App.hid":"0","menu.App.title":"NSMenuItem","menu.Edit.AutoFill.Contact….en":"0","menu.Edit.AutoFill.Contact….hid":"0","menu.Edit.AutoFill.Contact….title":"Contact…","menu.Edit.AutoFill.Credit Card….en":"0","menu.Edit.AutoFill.Credit Card….hid":"0","menu.Edit.AutoFill.Credit Card….title":"Credit Card…","menu.Edit.AutoFill.Passwords….en":"0","menu.Edit.AutoFill.Passwords….hid":"0","menu.Edit.AutoFill.Passwords….title":"Passwords…","menu.Edit.AutoFill.en":"1","menu.Edit.AutoFill.hid":"0","menu.Edit.AutoFill.title":"AutoFill","menu.Edit.Copy.en":"0","menu.Edit.Copy.hid":"0","menu.Edit.Copy.title":"Copy","menu.Edit.Cut.en":"0","menu.Edit.Cut.hid":"0","menu.Edit.Cut.title":"Cut","menu.Edit.Emoji & Symbols#2.en":"1","menu.Edit.Emoji & Symbols#2.hid":"1","menu.Edit.Emoji & Symbols#2.title":"Emoji & Symbols","menu.Edit.Emoji & Symbols#3.en":"1","menu.Edit.Emoji & Symbols#3.hid":"1","menu.Edit.Emoji & Symbols#3.title":"Emoji & Symbols","menu.Edit.Emoji & Symbols.en":"1","menu.Edit.Emoji & Symbols.hid":"0","menu.Edit.Emoji & Symbols.title":"Emoji & Symbols","menu.Edit.Paste.en":"0","menu.Edit.Paste.hid":"0","menu.Edit.Paste.title":"Paste","menu.Edit.Select All.en":"1","menu.Edit.Select All.hid":"0","menu.Edit.Select All.title":"Select All","menu.Edit.Start Dictation…#2.en":"1","menu.Edit.Start Dictation…#2.hid":"1","menu.Edit.Start Dictation…#2.title":"Start Dictation…","menu.Edit.Start Dictation….en":"1","menu.Edit.Start Dictation….hid":"0","menu.Edit.Start Dictation….title":"Start Dictation…","menu.Edit.en":"1","menu.Edit.hid":"0","menu.Edit.title":"NSMenuItem","menu.Help.Create Report.en":"1","menu.Help.Create Report.hid":"0","menu.Help.Create Report.title":"Create Report","menu.Help.RB Stems Plus Help.en":"1","menu.Help.RB Stems Plus Help.hid":"0","menu.Help.RB Stems Plus Help.title":"RB Stems Plus Help","menu.Help.RB Stems Plus Troubleshooting.en":"1","menu.Help.RB Stems Plus Troubleshooting.hid":"0","menu.Help.RB Stems Plus Troubleshooting.title":"RB Stems Plus Troubleshooting","menu.Help.Report an Issue.en":"1","menu.Help.Report an Issue.hid":"0","menu.Help.Report an Issue.title":"Report an Issue","menu.Help.en":"1","menu.Help.hid":"0","menu.Help.title":"NSMenuItem","menu.Manage.Demucs v4.Install.en":"1","menu.Manage.Demucs v4.Install.hid":"0","menu.Manage.Demucs v4.Install.title":"Install","menu.Manage.Demucs v4.Reinstall.en":"0","menu.Manage.Demucs v4.Reinstall.hid":"0","menu.Manage.Demucs v4.Reinstall.title":"Reinstall","menu.Manage.Demucs v4.Uninstall….en":"0","menu.Manage.Demucs v4.Uninstall….hid":"0","menu.Manage.Demucs v4.Uninstall….title":"Uninstall…","menu.Manage.Demucs v4.en":"1","menu.Manage.Demucs v4.hid":"0","menu.Manage.Demucs v4.title":"Demucs v4","menu.Manage.Show Log.en":"1","menu.Manage.Show Log.hid":"0","menu.Manage.Show Log.title":"Show Log","menu.Manage.Stems Cache.Install.en":"1","menu.Manage.Stems Cache.Install.hid":"0","menu.Manage.Stems Cache.Install.title":"Install","menu.Manage.Stems Cache.Reinstall.en":"0","menu.Manage.Stems Cache.Reinstall.hid":"0","menu.Manage.Stems Cache.Reinstall.title":"Reinstall","menu.Manage.Stems Cache.Uninstall….en":"0","menu.Manage.Stems Cache.Uninstall….hid":"0","menu.Manage.Stems Cache.Uninstall….title":"Uninstall…","menu.Manage.Stems Cache.en":"1","menu.Manage.Stems Cache.hid":"0","menu.Manage.Stems Cache.title":"Stems Cache","menu.Manage.en":"1","menu.Manage.hid":"0","menu.Manage.title":"NSMenuItem","menu.Prepare.Check Again.en":"0","menu.Prepare.Check Again.hid":"0","menu.Prepare.Check Again.title":"Check Again","menu.Prepare.Pause.en":"0","menu.Prepare.Pause.hid":"0","menu.Prepare.Pause.title":"Pause","menu.Prepare.Prepare Playlist….en":"1","menu.Prepare.Prepare Playlist….hid":"0","menu.Prepare.Prepare Playlist….title":"Prepare Playlist…","menu.Prepare.Stop.en":"0","menu.Prepare.Stop.hid":"0","menu.Prepare.Stop.title":"Stop","menu.Prepare.en":"1","menu.Prepare.hid":"0","menu.Prepare.title":"NSMenuItem","menu.View.Manage.en":"1","menu.View.Manage.hid":"0","menu.View.Manage.title":"Manage","menu.View.Prepare.en":"1","menu.View.Prepare.hid":"0","menu.View.Prepare.title":"Prepare","menu.View.Status.en":"1","menu.View.Status.hid":"0","menu.View.Status.title":"Status","menu.View.en":"1","menu.View.hid":"0","menu.View.title":"NSMenuItem","menu.Window.Close All.en":"1","menu.Window.Close All.hid":"0","menu.Window.Close All.title":"Close All","menu.Window.Close.en":"1","menu.Window.Close.hid":"0","menu.Window.Close.title":"Close","menu.Window.Minimize.en":"1","menu.Window.Minimize.hid":"0","menu.Window.Minimize.title":"Minimize","menu.Window.en":"1","menu.Window.hid":"0","menu.Window.title":"NSMenuItem","prepare.bar.hid":"0","prepare.bar.val":"0.000","prepare.checkBtn.en":"1","prepare.checkBtn.hid":"0","prepare.checkBtn.title":"Button","prepare.info.hid":"0","prepare.info.str":"","prepare.nameLabel.hid":"0","prepare.nameLabel.str":"Choose a playlist","prepare.outline.en":"1","prepare.outline.hid":"0","prepare.outline.rows":"0","prepare.outline.sel":"-1","prepare.pauseBtn.en":"1","prepare.pauseBtn.hid":"0","prepare.pauseBtn.title":"Button","prepare.prepareBtn.en":"1","prepare.prepareBtn.hid":"0","prepare.prepareBtn.title":"Button","prepare.runGap.hid":"0","prepare.stopBtn.en":"1","prepare.stopBtn.hid":"0","prepare.stopBtn.title":"Button","prepare.tracksTable.en":"1","prepare.tracksTable.hid":"0","prepare.tracksTable.rows":"0","prepare.tracksTable.sel":"-1","prepare.until.days":"-9444","prepare.until.en":"1","prepare.until.hid":"0","status.againBtn.en":"1","status.againBtn.hid":"0","status.againBtn.title":"Prepare Again","status.cacheTip.hid":"0","status.cacheTip.str":"Stems Cache is off.","status.plusTip.hid":"0","status.plusTip.str":"Demucs v4 is off.","status.runLine.hid":"0","status.runLine.str":"","status.stopBtn.en":"1","status.stopBtn.hid":"0","status.stopBtn.title":"Stop Keeping…","status.table.en":"1","status.table.hid":"0","status.table.rows":"0","status.table.sel":"-1","status.view0.hid":"0","status.view0.str":"Prepared playlists","status.view1.hid":"0","status.view1.str":"Up to 5 playlists, each kept until its date. Stems Cache leaves their stems alone until then.","tab.sel":"2","win.key":"1","win.mini":"0","win.sheet":"","win.title":"Manage - TEST BUILD, downloads from http://192.168.64.1:8765/","win.vis":"1"}}
+{"k":"ev","t":427780958,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":444074625,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":444098125,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is off."}
+{"k":"set","t":444306416,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":444315500,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":444353291,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":444356458,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":444448958,"f":"c.cacheIcon","s":"setImage","v":"off"}
+{"k":"set","t":444457416,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":444467916,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":444470250,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":488459333,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":488474750,"f":"c.installCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":488476958,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":488480833,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":488485333,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":488486625,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":488488166,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":488489666,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":488491000,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":488494541,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":488495791,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":488620791,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":488628458,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":488732041,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":503530541,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":503553333,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is off."}
+{"k":"set","t":503732875,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":503744000,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":503781291,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":503784083,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":503856541,"f":"c.cacheIcon","s":"setImage","v":"off"}
+{"k":"set","t":503865291,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":503874125,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":503876250,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":550394125,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":550417958,"f":"c.installCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":550420458,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":550424708,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":550429666,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":550431208,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":550432583,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":550434000,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":550435500,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":550439541,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":550440750,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":550588916,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":550596625,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":551013125,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":552161000,"e":"tp","v":"trigger.location"}
+{"k":"ev","t":552165166,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":568308916,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":568328000,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is off."}
+{"k":"set","t":568520375,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":568528666,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":568559250,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":568561833,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":568651458,"f":"c.cacheIcon","s":"setImage","v":"off"}
+{"k":"set","t":568657958,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":568667125,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":568669500,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":612801208,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":612820875,"f":"c.installCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":612823083,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":612826708,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":612830875,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":612832458,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":612833833,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":612835291,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":612836750,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":612840333,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":612841583,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":612987875,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":612998500,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":613019625,"e":"tp","v":"trigger.location"}
+{"k":"ev","t":613021208,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":627494750,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":627512250,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is off."}
+{"k":"set","t":627691333,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":627699833,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":627735125,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":627737666,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":627824541,"f":"c.cacheIcon","s":"setImage","v":"off"}
+{"k":"set","t":627830875,"f":"c.cacheIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":627840000,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":627842041,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is off."}
+{"k":"set","t":672011708,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":672031291,"f":"c.installCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":672033458,"f":"c.reinstallBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":672037375,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Demucs v4"}
+{"k":"set","t":672041958,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":672043333,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":672044708,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":672046250,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":672047625,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":672051416,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":672052625,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":672207125,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":672214416,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":1020992583,"e":"cmd","v":"quit "}
+{"k":"ev","t":1021941208,"e":"willTerminate","v":""}

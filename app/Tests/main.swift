@@ -95,6 +95,7 @@ rootScriptTests()
 // build.sh's refusal of an uncommitted tree
 
 signedReleaseTests()
+oneVersionTests()                   // OneVersionTests.swift: carried apps, the version shown, no betas
 reportTests()
 prepareTests()
 publicReleaseTests()
@@ -180,6 +181,20 @@ for p in [g + "/support/../outside", g + "/support/sub/..", g + "/support/./sub"
 check(kept(g + "/support"), "refuses a root itself unless asked for")
 check(kept(g + "/elsewhere/support/x"), "refuses a path outside every rule that only ends like one")
 check(safeRemove(g + "/support/never/there", whole: false, gd), "a path that isn't there is gone")
+mk(g + "/support/locked"); touch(g + "/support/locked/x"); chmod(g + "/support/locked", 0o600)   // x can't be looked up (EACCES)
+let lockedGone = safeRemove(g + "/support/locked/x", whole: false, gd)
+chmod(g + "/support/locked", 0o755)
+check(!lockedGone && exists(g + "/support/locked/x"), "a path that can't be looked up (not ENOENT) isn't reported gone")
+try? fm.removeItem(atPath: g + "/support/locked")
+// the gate: a folder on the way, a root or an app it can't look up (not ENOENT) is refused, not "not there"
+mk(g + "/support/locked/sub"); chmod(g + "/support/locked", 0o600)
+mk(g + "/shut/root"); plistApp(g + "/shut/X.app", id: bundleID); chmod(g + "/shut", 0o600)
+let shutGate = Deletable(inside: [], roots: [g + "/shut/root"], files: [], apps: [g + "/shut/X.app"])
+let mayShut = [mayRemove(g + "/support/locked/sub/x", whole: false, gd), mayRemove(g + "/shut/root", whole: true, shutGate),
+               mayRemove(g + "/shut/X.app", whole: false, shutGate)]
+chmod(g + "/support/locked", 0o755); chmod(g + "/shut", 0o755)
+check(mayShut == [false, false, false], "the gate refuses a folder on the way, a root and an app it can't look up (\(mayShut))")
+try? fm.removeItem(atPath: g + "/support/locked"); try? fm.removeItem(atPath: g + "/shut")
 touch(g + "/agent.plist"); touch(g + "/agent.plist.bak")
 check(gone(g + "/agent.plist"), "removes an exact file")
 check(kept(g + "/agent.plist.bak"), "refuses a file next to an exact one")
@@ -338,15 +353,6 @@ func notUpdated(_ u: UpdateCase, _ line: String) -> Bool { exists(u.dir + "/resu
 func resultOf(_ u: UpdateCase) -> String { ((try? String(contentsOfFile: u.dir + "/result", encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
 
 check(runTool("/bin/sh", ["-n", "-c", Controller.updateScript]).0 == 0, "update script: parses")
-check(updateFailedMessage(nil).hasPrefix("RB Stems Plus wasn't changed. If macOS said") && !updateFailedMessage(nil).contains("install command"),
-      "a failed update doesn't send users to the install command")
-check(updateFailedMessage(updateFailureReason("failed sign\n")) == "RB Stems Plus wasn't changed. The new version couldn't be signed. If macOS said RB Stems Plus was prevented from modifying apps, allow it, then choose Update RB Stems Plus again. Otherwise try again later.",
-      "a failed update says why in one sentence, then the next step")
-check(["app", "download", "staging", "copy", "copy-check", "sign", "swap"].allSatisfy { k in
-          updateFailureReason("failed \(k)").map { $0.hasSuffix(".") && $0.first?.isUppercase == true } == true },
-      "every reason the update script gives has a sentence")
-check(updateFailureReason("failed\n") == nil && updateFailureReason("failed rm -rf") == nil && updateFailureReason("") == nil
-      && updateFailureReason("failed sign extra") == nil, "an older or unknown result: no reason, only the next step")
 check(Controller.updateScript.components(separatedBy: "# step: ").count == 3, "update script: its two steps are marked")
 check(Controller.updateScript.components(separatedBy: "/bin/mv").count == 2 && Controller.updateScript.contains("/bin/mv -f \"$BUSY.$$\" \"$BUSY\""),
       "update script: no app is moved aside (its one mv writes the busy marker): the two apps are exchanged in one step")
@@ -540,6 +546,21 @@ clearOriginals(); put(oursData, orig + "/hdemucs.onnx")
 check(mm().migrateLegacy() && exists(orig + "/ours-\(oursSha).onnx") && !exists(orig + "/hdemucs.onnx"), "1.0's saved model that is ours is set aside, and the user is told")
 check(mm().savedOriginals().isEmpty && !mm().restore().ok && live() == oursSha, "a set-aside model of ours is never put back")
 check(!mm().migrateLegacy(), "the migration runs once")
+// ... with a saved copy that can't be checked: it may be Pioneer's, so no "no saved copy" notice (review MQ3)
+clearOriginals(); put(oursData, orig + "/hdemucs.onnx"); put(dataB, orig + "/\(shaB).onnx"); chmod(orig + "/\(shaB).onnx", 0o000)
+let migratedUnknown = mm().migrateLegacy()
+chmod(orig + "/\(shaB).onnx", 0o644)
+check(!migratedUnknown && exists(orig + "/ours-\(oursSha).onnx") && sha256(orig + "/\(shaB).onnx") == shaB && live() == oursSha,
+      "MQ3: 1.0's saved model of ours set aside next to a copy at 000: no notice, the copy untouched")
+// MODELS_INFO's facts (modelsInfoFacts, review MQ2) from one hashed check: a good saved copy verifies,
+// and the Help page is the saved copy's
+clearOriginals(); put(dataA, orig + "/\(shaA).onnx")
+let infoGood = modelsInfoFacts(mm())
+check(infoGood.saved && infoGood.verified && infoGood.url == removeAnywayHelpURL, "MQ2: a good saved copy: saved, verified, the saved copy's Help page")
+put(Data("damaged".utf8), orig + "/\(shaA).onnx")
+let infoBad = modelsInfoFacts(mm())
+check(infoBad.saved && !infoBad.verified && infoBad.url == noSavedModelHelpURL, "MQ2: a damaged saved copy: saved, not verified, the no-saved-copy page")
+clearOriginals()
 
 // MARK: what stays after "Remove RB Stems Plus anyway"
 
@@ -584,52 +605,154 @@ check(!r.ok && live() == shaB && noTemps() && r.message.contains("changed meanwh
 put(dataA, rbModel); r = changing.installOurs(from: ourSource, sha: oursSha)
 check(!r.ok && live() == shaB && noTemps(), "install: rekordbox's model changed just before the rename: left as it is (\(r.message))")
 
+// rekordbox's model can't be looked up (lstat fails, not with ENOENT): never taken for "no model".
+// The model's lookups are counted; those numbered in `at` fail with EIO.
+func faulty(_ at: Set<Int>) -> Models {
+    var m = mm(), n = 0
+    m.lookup = { p in
+        guard p == rbModel else { return fileLookup(p) }
+        n += 1
+        return at.contains(n) ? .unreadable(EIO) : fileLookup(p)
+    }
+    return m
+}
+for at in [[1], [2], [1, 2]] as [Set<Int>] {
+    clearOriginals(); setEngine("0002"); put(dataA, rbModel)
+    r = faulty(at).installOurs(from: ourSource, sha: oursSha)
+    check(!r.ok && live() == shaA && noTemps() && mm().savedOriginals().allSatisfy { $0.sha == shaA },
+          "install: rekordbox's model unreadable at lookup \(at.sorted()): not replaced (\(r.message))")
+    clearOriginals(); put(dataA, orig + "/\(shaA).onnx"); put(Data("0002\n".utf8), orig + "/\(shaA).engine"); put(dataX, rbModel)
+    r = faulty(at).restore()
+    check(!r.ok && live() == shaX && noTemps() && mm().verifiedOriginals() == [shaA],
+          "restore: an unknown model unreadable at lookup \(at.sorted()): not put back over (\(r.message))")
+    put(oursData, rbModel)
+    r = faulty(at).restore()
+    check(!r.ok && live() == oursSha && noTemps() && mm().verifiedOriginals() == [shaA],
+          "restore: our model unreadable at lookup \(at.sorted()): not put back over (\(r.message))")
+}
+check(modelLeftBehind(faulty([1])) == "rekordbox's stems model can't be read.", "anyway: an unreadable model isn't said to be missing")
+// no model at the first lookup, one appears before the last, and that lookup fails: it is never
+// replaced unread (install and restore)
+clearOriginals(); setEngine("0002"); put(dataA, orig + "/\(shaA).onnx"); put(Data("0002\n".utf8), orig + "/\(shaA).engine")
+for restoring in [false, true] {
+    try? fm.removeItem(atPath: rbModel)
+    var planted = faulty([2]); planted.willReplace = { put(dataB, rbModel) }
+    r = restoring ? planted.restore() : planted.installOurs(from: ourSource, sha: oursSha)
+    check(!r.ok && live() == shaB && noTemps() && mm().verifiedOriginals() == [shaA] && !exists(orig + "/\(shaB).onnx"),
+          "\(restoring ? "restore" : "install"): a model that appeared and can't be read at the last lookup isn't replaced (\(r.message))")
+}
+// rekordbox's model a link (here to the saved original): never hashed through it, so restore
+// doesn't take it for Pioneer's model in place
+try? fm.removeItem(atPath: rbModel); symlink(orig + "/\(shaA).onnx", rbModel)
+r = mm().restore()
+check(!r.ok && fileType(rbModel) == S_IFLNK && mm().verifiedOriginals() == [shaA] && noTemps(),
+      "restore: rekordbox's model as a link isn't read through: fails, nothing changed (\(r.message))")
+try? fm.removeItem(atPath: rbModel)
+
+// rekordbox's model folder linked from elsewhere, or unreadable: not "isn't there" (the uninstall
+// would then delete the originals with our model still in place)
+let realModels = md + "/elsewhere", linkedModels = md + "/linked"
+mk(realModels); put(oursData, realModels + "/hdemucs.onnx"); symlink(realModels, linkedModels)
+clearOriginals(); put(dataA, orig + "/\(shaA).onnx"); put(Data("0002\n".utf8), orig + "/\(shaA).engine")
+let linked = Models(dir: linkedModels, originals: orig, ours: [oursSha], gate: mgate)
+r = linked.restore()
+check(!r.ok && sha256(realModels + "/hdemucs.onnx") == oursSha && fileType(linkedModels) == S_IFLNK && mm().verifiedOriginals() == [shaA]
+      && modelLeftBehind(linked) == "rekordbox's stems model can't be read.",
+      "restore: a linked model folder isn't \"not there\": fails, nothing changed (\(r.message))")
+// ... and install refuses it: nothing saved, the folder behind the link unchanged
+clearOriginals(); put(dataA, realModels + "/hdemucs.onnx")
+r = linked.installOurs(from: ourSource, sha: oursSha)
+check(!r.ok && sha256(realModels + "/hdemucs.onnx") == shaA && fileType(linkedModels) == S_IFLNK
+      && ((try? fm.contentsOfDirectory(atPath: orig)) ?? ["?"]).isEmpty && !exists(realModels + "/.hdemucs.new"),
+      "install: a linked model folder is refused: nothing saved, nothing replaced (\(r.message))")
+put(dataA, orig + "/\(shaA).onnx"); put(Data("0002\n".utf8), orig + "/\(shaA).engine")
+func folderFault(_ e: Int32) -> Models {
+    var m = mm()
+    m.lookup = { p in p == rbm ? .unreadable(e) : fileLookup(p) }
+    return m
+}
+put(oursData, rbModel)
+r = folderFault(EACCES).restore()
+check(!r.ok && live() == oursSha && noTemps() && modelLeftBehind(folderFault(EIO)) == "rekordbox's stems model can't be read.",
+      "restore: a model folder that can't be looked up fails (\(r.message))")
+check(folderFault(ENOTDIR).restore().ok && live() == oursSha && modelLeftBehind(folderFault(ENOTDIR)) == "rekordbox has no stems model.",
+      "restore: ENOTDIR at the model folder: not there, nothing put back, and no model left behind")
+let fileAsFolder = md + "/a-file"
+touch(fileAsFolder)
+let fileFolder = Models(dir: fileAsFolder, originals: orig, ours: [oursSha], gate: mgate)
+check(fileFolder.restore().ok && fileType(fileAsFolder) == S_IFREG && modelLeftBehind(fileFolder) == "rekordbox has no stems model.",
+      "restore: a file where the model folder goes: not there, nothing put back, and no model left behind")
+
 // MARK: "Remove RB Stems Plus anyway": never for a full disk, never deleting a saved original that verifies
 
 var asked: [(title: String, text: String, buttons: [String])] = []
-func anyway(_ r: Outcome, answer: String) -> AnywayChoice {
-    asked = []
-    return removeAnywayChoice(r, mm(), ask: { asked.append(($0, $1, $2)); return answer }, log: { _ in })
-}
 clearOriginals(); put(dataA, rbModel); setEngine("0002")
 _ = mm().installOurs(from: ourSource, sha: oursSha)
 let full = Outcome(ok: false, message: "There isn't enough free space to put rekordbox's own stems model back.", noSpace: true)
-check(anyway(full, answer: "OK") == .stop && asked.count == 1 && asked[0].title == "Uninstall stopped" && asked[0].buttons == ["OK"]
-      && asked[0].text == "There isn't enough free space to put rekordbox's own stems model back. Nothing was deleted. Free up some space and try again.",
-      "anyway: a full disk says to free some space, and offers nothing")
 let lasting = Outcome(ok: false, message: unknownModelMessage)
-check(anyway(lasting, answer: "Cancel") == .stop && asked.count == 1 && asked[0].buttons == ["Cancel", removeAnywayButton, "Open Help"]
-      && asked[0].text == unknownModelMessage + " Nothing was deleted.\n\nRemove RB Stems Plus Anyway deletes only its own files and keeps its saved copy of rekordbox's own stems model. To get rekordbox's own stems model back, click Open Help.",
-      "anyway: offered with Cancel first, saying the saved copy stays; cancelled: nothing")
-check(anyway(lasting, answer: "Open Help") == .help(url: removeAnywayHelpURL) && modelHelpURL(mm()) == removeAnywayHelpURL,
-      "anyway: Open Help stops, nothing deleted, and opens how to put the saved copy back")
-if case .remove(let about, let keep) = anyway(lasting, answer: removeAnywayButton) {
-    check(keep && about.contains("The saved copy of rekordbox's own stems model stays in \(orig).") && about.hasPrefix("rekordbox still has the Demucs v4 model."),
-          "anyway: a saved original that verifies is kept, and the user told where (\(about))")
-} else { check(false, "anyway: a saved original that verifies is kept, and the user told where") }
+check(modelHelpURL(mm()) == removeAnywayHelpURL, "the help for a saved copy that verifies: how to put it back")
 put(Data("damaged".utf8), orig + "/\(shaA).onnx")
-if case .remove(let about, let keep) = anyway(Outcome(ok: false, message: "The saved copy of rekordbox's own stems model is damaged."), answer: removeAnywayButton) {
-    check(!keep && !asked[0].text.contains("keeps") && about == "rekordbox still has the Demucs v4 model. To get rekordbox's own stems model back, click Open Help.",
-          "anyway: with no saved original that verifies, everything goes")
-} else { check(false, "anyway: with no saved original that verifies, everything goes") }
-check(anyway(Outcome(ok: false, message: "x"), answer: "Open Help") == .help(url: noSavedModelHelpURL) && modelHelpURL(mm()) == noSavedModelHelpURL,
-      "anyway: with no saved original that verifies, Open Help shows how to do without one")
-
-// the complete uninstall's confirmation: "exactly how it was" only when that holds
-check(uninstallEverythingMessage(othersCache: false, noSavedModel: false, stems: " (1.2 GB)")
-      == "rekordbox goes back to exactly how it was. Your music and rekordbox library aren't touched.\n\nRB Stems Plus will be deleted, including the stems it saved (1.2 GB).",
-      "uninstall confirmation: the approved text when rekordbox can go back exactly")
-for (others, noSaved) in [(true, false), (false, true), (true, true)] {
-    let m = uninstallEverythingMessage(othersCache: others, noSavedModel: noSaved, stems: "")
-    check(!m.contains("exactly") && m.contains("another account") == others && m.contains("no saved copy") == noSaved
-          && m.hasSuffix("RB Stems Plus will be deleted, including the stems it saved."),
-          "uninstall confirmation: no promise when \(others ? "Stems Cache is another account's" : "")\(others && noSaved ? " and " : "")\(noSaved ? "there's no saved model" : "")")
+check(modelHelpURL(mm()) == noSavedModelHelpURL, "with no saved original that verifies, the help for doing without one")
+check(!originalsKept(mm()), "with no saved original that verifies, \"anyway\" keeps nothing (MODELS_INFO's verified: no)")
+// a folder of originals that can't be listed (EACCES) is never taken for "none saved": with an
+// unknown model in place, restore and install don't take it for Pioneer's, and "anyway" keeps the folder
+clearOriginals(); setEngine("0002"); put(dataA, orig + "/\(shaA).onnx"); put(Data("0002\n".utf8), orig + "/\(shaA).engine"); put(dataX, rbModel)
+chmod(orig, 0o300)
+let rUnlisted = mm().restore(), iUnlisted = mm().installOurs(from: ourSource, sha: oursSha)
+let aUnlisted = originalsKept(mm())
+chmod(orig, 0o755)
+check(!rUnlisted.ok && !iUnlisted.ok && live() == shaX && noTemps() && sha256(orig + "/\(shaA).onnx") == shaA && !exists(orig + "/\(shaX).onnx"),
+      "originals that can't be listed: restore and install fail, nothing changed (\(rUnlisted.message) / \(iUnlisted.message))")
+check(aUnlisted, "anyway: originals that can't be listed are kept (originalsKept, MODELS_INFO's verified)")
+// ... nor a folder that lists but whose copies can't be looked up (0600, 0400): with an unknown
+// model in place, restore and install stop (review SR2)
+for mode in [0o600, 0o400] as [mode_t] {
+    clearOriginals(); setEngine("0002"); put(dataA, orig + "/\(shaA).onnx"); put(Data("0002\n".utf8), orig + "/\(shaA).engine"); put(dataX, rbModel)
+    chmod(orig, mode)
+    let rM = mm().restore(), iM = mm().installOurs(from: ourSource, sha: oursSha)
+    chmod(orig, 0o755)
+    check(!rM.ok && rM.message == originalsUnreadableMessage && !iM.ok && iM.message == originalsUnreadableMessage && live() == shaX && noTemps()
+          && sha256(orig + "/\(shaA).onnx") == shaA && !exists(orig + "/\(shaX).onnx"),
+          "originals at \(String(mode, radix: 8)): restore and install stop, nothing changed (\(rM.message) / \(iM.message))")
 }
-check(uninstallEverythingMessage(othersCache: true, noSavedModel: true, stems: "").hasPrefix(
-        "There's no saved copy of rekordbox's own stems model to put back. Stems Cache was installed from another account on this Mac. Your music")
-      && uninstallEverythingMessage(othersCache: true, noSavedModel: false, stems: "").hasPrefix(
-        "rekordbox gets its own stems model back. Stems Cache was installed from another account on this Mac. Your music"),
-      "uninstall confirmation: the unusual cases state the fact only")
+// one scan per decision (review MP1): the saved copy's lookup fails once (EIO), the next one works.
+// Two scans could disagree (one "nothing saved", the other "nothing unknown"); one can't
+let savedA = orig + "/\(shaA).onnx"
+func oneShot(_ path: String) -> Models {
+    var m = mm(), fired = false
+    m.lookup = { p in
+        if p == path && !fired { fired = true; return .unreadable(EIO) }
+        return fileLookup(p)
+    }
+    return m
+}
+clearOriginals(); setEngine("0002"); put(dataA, savedA); put(Data("0002\n".utf8), orig + "/\(shaA).engine")
+check(originalsKept(oneShot(savedA)), "MP1: a saved copy whose lookup fails once: still kept")
+put(dataX, rbModel)
+r = oneShot(savedA).restore()
+check(!r.ok && r.message == originalsUnreadableMessage && live() == shaX && sha256(savedA) == shaA && noTemps(),
+      "MP1: restore over an unknown model, the saved copy's lookup failing once: refused, the backup kept (\(r.message))")
+r = oneShot(savedA).installOurs(from: ourSource, sha: oursSha)
+check(!r.ok && r.message == originalsUnreadableMessage && live() == shaX && noTemps(), "MP1: install refuses (\(r.message))")
+var failedHash = mm()
+failedHash.hashFile = { p in p == savedA ? nil : sha256(p) }
+check(originalsKept(failedHash) && failedHash.originalsCheck().unknown && failedHash.verifiedOriginals().isEmpty,
+      "MP1: a copy whose read fails while it is hashed: unknown, kept")
+// a good copy next to one that can't be read (review MP6): put back; only an unknown copy alone fails
+let savedB = orig + "/\(shaB).onnx"
+clearOriginals(); setEngine("0002"); put(dataA, savedA); put(Data("0002\n".utf8), orig + "/\(shaA).engine")
+put(dataB, savedB); chmod(savedB, 0o000); put(oursData, rbModel)
+r = mm().restore()
+check(r.ok && live() == shaA && noTemps(), "MP6: ours live, one good copy and one unreadable: put back (\(r.message))")
+try? fm.removeItem(atPath: rbModel)
+r = mm().restore()
+check(r.ok && live() == shaA && noTemps() && fileType(savedB) == S_IFREG, "MP6: no model, one good copy and one unreadable: put back, the other untouched (\(r.message))")
+try? fm.removeItem(atPath: rbModel); try? fm.removeItem(atPath: savedA)
+r = mm().restore()
+chmod(savedB, 0o644)
+check(!r.ok && r.message == originalsUnreadableMessage && live() == nil && sha256(savedB) == shaB && noTemps(),
+      "MP6: no model, only an unreadable copy: refused (\(r.message))")
+
 
 // deleting this account's folders, with or without the originals
 let own = tmp + "/own", osup = own + "/support", oorig = osup + "/originals", ocache = own + "/cache", ologs = own + "/logs"
@@ -647,19 +770,62 @@ check(removeOwn(keep: false) && !exists(osup) && !exists(ocache) && !exists(olog
 ownLayout(); try? fm.removeItem(atPath: ocache); touch(outside + "/stem"); symlink(outside, ocache)
 check(!removeOwn(keep: false) && fileType(ocache) == S_IFLNK && exists(outside + "/stem") && !exists(osup) && !exists(ologs),
       "a saved stems folder that is a link: refused, nor what it points to; the rest goes")
-
-// the final alert: what stays
-check(ownFilesRemovedText("rekordbox is back to how it was.", app: .deleted, othersCache: false, cacheLink: false) == "rekordbox is back to how it was.",
-      "final: nothing to add")
-check(ownFilesRemovedText("A.", app: .otherAccount, othersCache: false, cacheLink: false) == "A. RB Stems Plus stays in the Applications folder: it belongs to another account on this Mac."
-      && ownFilesRemovedText("A.", app: .cantDelete, othersCache: false, cacheLink: false) == "A. RB Stems Plus couldn't delete itself: drag it to the Trash.",
-      "final: says when the app stays")
-check(ownFilesRemovedText("A.", app: .deleted, othersCache: true, cacheLink: false) == "A. Other accounts on this Mac that use RB Stems Plus need to paste the install command again.",
-      "final: the app deleted while Stems Cache stays for another account: says they need the install command")
-check(!ownFilesRemovedText("A.", app: .otherAccount, othersCache: true, cacheLink: false).contains("Other accounts on this Mac that use")
-      && !ownFilesRemovedText("A.", app: .cantDelete, othersCache: true, cacheLink: false).contains("Other accounts on this Mac that use"),
-      "final: the app not deleted: nothing about other accounts' install")
-check(ownFilesRemovedText("A.", app: .deleted, othersCache: false, cacheLink: true) == "A. " + cacheLinkLine, "final: says the saved stems folder is a link")
+// the originals folder is kept by identity, not by name
+if pathconf(tmp, _PC_CASE_SENSITIVE) == 0 {
+    ownLayout(); _ = rename(oorig, osup + "/Originals")
+    check(removeOwn(keep: true) && (try? fm.contentsOfDirectory(atPath: osup)) == ["Originals"] && exists(osup + "/Originals/\(shaA).onnx"),
+          "anyway: an originals folder renamed to another case stays")
+} else {
+    print("skip anyway: an originals folder renamed to another case (the test folder's volume is case-sensitive)")
+}
+ownLayout(); chmod(osup, 0o300)                                // support can't be listed
+var keptAll = removeOwn(keep: true)
+chmod(osup, 0o755)
+check(!keptAll && exists(oorig + "/\(shaA).onnx") && exists(osup + "/installed"), "anyway: support can't be listed: false, nothing in it deleted")
+ownLayout(); chmod(osup, 0o600)                                // the originals folder can't be looked up
+keptAll = removeOwn(keep: true)
+chmod(osup, 0o755)
+check(!keptAll && exists(oorig + "/\(shaA).onnx") && exists(osup + "/installed"), "anyway: the originals folder can't be looked up: false, nothing in support deleted")
+// ... nor when its lookup gives ENOTDIR (a file on the way: support/installed is a file) while
+// support itself is reachable
+ownLayout()
+check(!removeOwnFolders(keepOriginals: true, support: osup, originals: osup + "/installed/originals", others: [], ogate)
+      && exists(oorig + "/\(shaA).onnx") && fileType(osup + "/installed") == S_IFREG && exists(osup + "/busy") && exists(osup + "/payload"),
+      "anyway: an originals lookup that gives ENOTDIR: false, nothing in support deleted")
+// a saved copy that can't be checked (mode 000, the only one) is "unknown", never "none": restore
+// stops, "anyway" keeps the folder and its Help is the saved copy's, and the folder stays (review SR1)
+func ownModels() -> Models {
+    Models(dir: rbm, originals: oorig, ours: [oursSha], gate: Deletable(inside: [oorig], roots: [], files: [rbm + "/.hdemucs.new", rbm + "/.hdemucs.restore"], apps: []))
+}
+// whether "anyway" keeps the folder: the core's remove-anyway flow keeps it by MODELS_INFO's
+// FACT_ORIGINALS_VERIFIED, which is originalsKept (removeAnywayChoice moved to flows.c)
+func anywayKeeps(_ m: Models) -> Bool? { originalsKept(m) }
+ownLayout(); put(dataA, oorig + "/\(shaA).onnx"); put(oursData, rbModel); setEngine("0002"); chmod(oorig + "/\(shaA).onnx", 0o000)
+let rUnknown = ownModels().restore(), keepUnknown = anywayKeeps(ownModels()), helpUnknown = modelHelpURL(ownModels())
+let ownGone = removeOwnFolders(keepOriginals: keepUnknown ?? false, support: osup, originals: oorig, others: [], ogate)
+chmod(oorig + "/\(shaA).onnx", 0o644)
+check(!rUnknown.ok && rUnknown.message == originalsUnreadableMessage && live() == oursSha && keepUnknown == true
+      && helpUnknown == removeAnywayHelpURL && ownGone && sha256(oorig + "/\(shaA).onnx") == shaA,
+      "anyway: a saved copy that can't be read is kept, never taken for none (\(rUnknown.message), keep \(String(describing: keepUnknown)))")
+// 1.0's saved model left in originals (migrateLegacy couldn't move it) and unreadable: unknown,
+// never "none saved" (review MP2)
+ownLayout(); put(oursData, rbModel); setEngine("0002")
+try? fm.removeItem(atPath: oorig + "/\(shaA).onnx"); try? fm.removeItem(atPath: oorig + "/\(shaA).engine")
+put(dataA, oorig + "/hdemucs.onnx"); chmod(oorig + "/hdemucs.onnx", 0o000)
+let rLegacy = ownModels().restore(), keepLegacy = originalsKept(ownModels())
+let legacyRemoved = removeOwnFolders(keepOriginals: keepLegacy, support: osup, originals: oorig, others: [], ogate)
+chmod(oorig + "/hdemucs.onnx", 0o644)
+check(!rLegacy.ok && rLegacy.message == originalsUnreadableMessage && live() == oursSha && keepLegacy && legacyRemoved
+      && sha256(oorig + "/hdemucs.onnx") == shaA,
+      "MP2: 1.0's saved model unreadable: restore refused, kept, and it survives removeOwnFolders (\(rLegacy.message))")
+// "anyway" promises the saved copy only when the folder stays: a linked originals goes with the
+// rest (removeOwnFolders), so it isn't promised (review SR4)
+ownLayout(); mk(own + "/elsewhere"); put(dataA, own + "/elsewhere/\(shaA).onnx"); try? fm.removeItem(atPath: oorig); symlink(own + "/elsewhere", oorig)
+check(ownModels().savedOriginals().isEmpty && ownModels().verifiedOriginals().isEmpty && !ownModels().originalsUnknown
+      && !ownModels().originalsStays && !originalsKept(ownModels()) && anywayKeeps(ownModels()) == false && sha256(own + "/elsewhere/\(shaA).onnx") == shaA
+      && modelHelpURL(ownModels()) == noSavedModelHelpURL,
+      "anyway: a linked originals folder: nothing counts as saved through it, it isn't promised as kept, and its Help is the no-saved-copy page (review MS4, SR4, MP5)")
+try? fm.removeItem(atPath: oorig)
 
 // MARK: the app is deleted only by the account that owns it
 
@@ -667,46 +833,6 @@ touch(tmp + "/owned")
 check(ownedByThisAccount(tmp + "/owned"), "an app this account owns may be deleted")
 check(!ownedByThisAccount(tmp + "/owned", uid: getuid() + 1), "an app another account owns is left")
 check(!ownedByThisAccount(tmp + "/nothing"), "nothing there: not ours to delete")
-
-// MARK: removing Stems Cache once rekordbox is gone: the root folder only if the user agrees
-
-/// removeCache with these answers; returns its result and the steps it took, in order.
-func cacheRemoval(folder: Bool, root: Bool = true, run: Controller.RootOutcome = .done, agree: Bool = true,
-                  removed: Controller.RootOutcome = .done) -> (CacheRemoval, [String]) {
-    var steps: [String] = []
-    let r = removeCache(CacheRemovalSteps(
-        rekordboxFolder: { folder }, rootFolder: { root },
-        uninstall: { steps.append("uninstall"); return run },
-        askRootFolder: { steps.append("ask"); return agree },
-        removeRootFolder: { steps.append("remove-root-folder"); return removed },
-        log: { _ in }))
-    return (r, steps)
-}
-var rc = cacheRemoval(folder: true)
-check(rc.0 == .removed && rc.1 == ["uninstall"], "rekordbox there: the uninstall alone, nothing asked")
-rc = cacheRemoval(folder: true, run: .failed(RootExit.notPioneers))
-check(rc.0 == .failed(RootExit.notPioneers) && rc.1 == ["uninstall"], "rekordbox's folder without rekordbox.app (exit 10): failed, the root folder never offered")
-rc = cacheRemoval(folder: true, run: .failed(Controller.cancelled))
-check(rc.0 == .failed(Controller.cancelled) && rc.1 == ["uninstall"], "password cancelled: failed, nothing asked")
-rc = cacheRemoval(folder: true, run: .rekordboxMissing)
-check(rc.0 == .removed && rc.1 == ["uninstall", "ask", "remove-root-folder"], "rekordbox gone during the run: asked, then the root folder removed")
-rc = cacheRemoval(folder: false)
-check(rc.0 == .removed && rc.1 == ["ask", "remove-root-folder"], "rekordbox's folder missing: no uninstall run (one password), asked, removed")
-rc = cacheRemoval(folder: false, agree: false)
-check(rc.0 == .keptRootFolder && rc.1 == ["ask"], "the user cancels: the root folder stays, nothing run")
-rc = cacheRemoval(folder: false, removed: .failed(RootExit.alreadyRunning))
-check(rc.0 == .failed(RootExit.alreadyRunning) && rc.1 == ["ask", "remove-root-folder"], "removing the root folder fails: failed, with the script's code")
-rc = cacheRemoval(folder: true, run: .failed(RootExit.installerRunning))
-check(cacheFailureReason(rc.0) == "Wait until rekordbox's installer or updater has finished, then try again.",
-      "Uninstall stopped says the root script's own reason (\(cacheFailureReason(rc.0)))")
-check(cacheFailureReason(.failed(RootExit.rolledBack)) == "rekordbox has its original files again. See the log in this window."
-      && cacheFailureReason(.failed(Controller.cancelled)) == "See the log in this window." && cacheFailureReason(.removed) == "See the log in this window.",
-      "Uninstall stopped: otherwise the log")
-check(rootFolderCleanupMessage.contains("If you moved it, click Cancel and put it back first."), "the root-folder question mentions a moved rekordbox")
-check(cacheRemoval(folder: true, run: .failed(Controller.cancelled)).0.userStopped
-      && !CacheRemoval.failed(RootExit.alreadyRunning).userStopped && !CacheRemoval.failed(Controller.notRun).userStopped
-      && !CacheRemoval.removed.userStopped && !CacheRemoval.keptRootFolder.userStopped,
-      "Uninstall stopped: no alert after a cancel, as everywhere")
 
 // MARK: the password sheet asks until the password is right or the user cancels
 
@@ -722,93 +848,12 @@ check(passwords(["right"]) == (true, [false]), "password: right the first time")
 check(passwords(["a", "b", "c", "d", "right"]) == (true, [false, true, true, true, true]),
       "password: no limit on tries; each sheet after a wrong one says Wrong password")
 check(passwords(["a", nil]) == (false, [false, true]), "password: Cancel stops, after any number of tries")
-check(keptRootFolderMessage.contains("nothing else was deleted"), "keeping the copy of rekordbox's files says the complete uninstall stopped")
-
-// MARK: what a root run says: only the Stems Cache install takes long; a reinstall is named so
-
-check(Controller.rootRunTexts("install") == ("Installing Stems Cache (this takes about a minute)…", "Install failed")
-      && Controller.rootRunTexts("reinstall") == ("Reinstalling Stems Cache (this takes about a minute)…", "Reinstall failed"),
-      "root run: install and reinstall say they take about a minute, and fail as themselves")
-check(["uninstall", "remove-root-folder"].allSatisfy { !Controller.rootRunTexts($0).status.contains("minute") && Controller.rootRunTexts($0).failedTitle == "Uninstall failed" },
-      "root run: uninstalls don't claim to take long")
-
-// MARK: the confirmations say what happens, never mentioning the password
-
-let floorLine = " Stems Cache will stop saving stems while your disk has less than 26 GB free."
-check(installNote("Install Demucs v4", reinstall: false, paused: 50_000_000_000)
-      == "Replaces rekordbox's stems model with Demucs v4. rekordbox's own model is kept, so it can be put back."
-      && installNote("Install Stems Cache", reinstall: false, paused: nil) == "Saves the stems rekordbox separates, with either stems model, so they load much faster the next time."
-      && installNote("Install Demucs v4 + Stems Cache", reinstall: false, paused: nil)
-         == "Replaces rekordbox's stems model with Demucs v4, and saves the stems it separates so they load much faster the next time."
-      && installNote("Install Stems Cache", reinstall: false, paused: 25_600_000_000)
-         == "Saves the stems rekordbox separates, with either stems model, so they load much faster the next time." + floorLine,
-      "install: what the command does, and the free-space floor only for Stems Cache")
-check(installNote("Reinstall Demucs v4", reinstall: true, paused: 25_600_000_000) == "Installs the latest version of Demucs v4 again."
-      && installNote("Reinstall Demucs v4 + Stems Cache", reinstall: true, paused: nil) == "Installs the latest version of Demucs v4 and Stems Cache again."
-      && installNote("Reinstall Stems Cache", reinstall: true, paused: nil) == "Installs the latest version of Stems Cache again."
-      && installNote("Reinstall Demucs v4 + Stems Cache", reinstall: true, paused: 25_600_000_000)
-         == "Installs the latest version of Demucs v4 and Stems Cache again." + floorLine,
-      "reinstall: names what the button names, and the free-space floor as Install does")
-check(uninstallNote("Uninstall Demucs v4") == "Puts rekordbox's own stems model back."
-      && uninstallNote("Uninstall Stems Cache") == "Stops saving stems and puts rekordbox's original files back. The stems already saved are kept.",
-      "uninstall: what the command does, and the saved stems kept")
-check(([installNote("Install Demucs v4 + Stems Cache", reinstall: false, paused: 50_000_000_000),
-        installNote("Reinstall Demucs v4 + Stems Cache", reinstall: true, paused: 50_000_000_000),
-        uninstallNote("Uninstall Demucs v4"), uninstallNote("Uninstall Stems Cache"), uninstallEverythingMessage(othersCache: true, noSavedModel: true, stems: "")]
-       + ["install", "reinstall", "uninstall", "remove-root-folder"].map { Controller.rootRunTexts($0).status })
-      .allSatisfy { !$0.lowercased().contains("password") }, "no confirmation or status line mentions the password")
-check([installNote("Install Demucs v4 + Stems Cache", reinstall: false, paused: nil), installNote("Reinstall Stems Cache", reinstall: true, paused: nil),
-       uninstallEverythingMessage(othersCache: true, noSavedModel: true, stems: "")]
-      .allSatisfy { !$0.contains("permission") && !$0.contains("ask") && !$0.contains("quit") },
-      "confirmations say what the command does, not side events (permission prompts, questions, quitting)")
 
 // MARK: the help pages
 
 check(troubleshootingURL == "https://github.com/Gabe-LS/rbstemsplus/blob/main/docs/troubleshooting.md"
       && noSavedModelHelpURL.hasPrefix(troubleshootingURL + "#") && removeAnywayHelpURL.hasPrefix(troubleshootingURL + "#"),
       "Help › RB Stems Plus Troubleshooting opens the troubleshooting page; its sections are on it")
-
-// MARK: a standard account: why the Stems Cache buttons are off
-
-check(standardAccountLine(admin: true, cacheTraces: true, cacheChosen: true) == nil, "standard account line: none for an administrator")
-check(standardAccountLine(admin: false, cacheTraces: false, cacheChosen: false) == nil, "standard account line: none with nothing of Stems Cache to remove")
-check(standardAccountLine(admin: false, cacheTraces: true, cacheChosen: false) == "Removing Stems Cache needs an administrator account.",
-      "standard account line: Stems Cache from another account, its uninstall buttons off: says why")
-check(standardAccountLine(admin: false, cacheTraces: true, cacheChosen: true) == "Reinstalling or removing Stems Cache needs an administrator account.",
-      "standard account line: this account's Stems Cache: Reinstall and the uninstalls are off: says why")
-
-// MARK: the watcher's Reinstall Now: only what went missing
-
-func parts(_ p: (model: Bool, cache: Bool)) -> [Bool] { [p.model, p.cache] }
-check(parts(missingParts(chosen: (true, true), plusPresent: false, cachePresent: true)) == [true, false]
-      && reinstallLabel((true, false)) == "Reinstall Demucs v4",
-      "Reinstall Now after Demucs v4 is off: Demucs v4 alone (no password), the intact Stems Cache left alone")
-check(parts(missingParts(chosen: (true, true), plusPresent: true, cachePresent: false)) == [false, true]
-      && reinstallLabel((false, true)) == "Reinstall Stems Cache", "Reinstall Now after a rekordbox update: Stems Cache alone")
-check(parts(missingParts(chosen: (true, true), plusPresent: false, cachePresent: false)) == [true, true]
-      && reinstallLabel((true, true)) == "Reinstall Demucs v4 + Stems Cache", "Reinstall Now with both off: both")
-check(parts(missingParts(chosen: (true, false), plusPresent: true, cachePresent: false)) == [false, false]
-      && parts(missingParts(chosen: (false, false), plusPresent: false, cachePresent: false)) == [false, false],
-      "Reinstall Now: never what wasn't chosen, nothing when nothing chosen went missing")
-
-// MARK: the Stems Cache update: offered when rekordbox's isn't the latest payload.json's
-
-let shaOld = String(repeating: "a", count: 64), shaNew = String(repeating: "b", count: 64)
-func due(present: Bool = true, chosen: Bool = true, installed: String? = shaOld, latest: String = shaNew,
-         appUpdate: Bool = false, blocked: Bool = false) -> Bool {
-    cacheUpdateDue(present: present, chosen: chosen, installed: installed, latest: latest, appUpdatePending: appUpdate, blocked: { blocked })
-}
-check(due(), "Stems Cache update: rekordbox's isn't the latest payload.json's: offered")
-check(!due(installed: shaNew), "Stems Cache update: rekordbox's is the latest: not offered")
-check(!due(present: false) && !due(chosen: false), "Stems Cache update: not in rekordbox, or another account's choice: not offered")
-check(!due(installed: nil), "Stems Cache update: rekordbox's library unreadable: not offered")
-check(!due(latest: "not a checksum"), "Stems Cache update: a payload.json bridge checksum that isn't one: not offered")
-check(!due(appUpdate: true), "Stems Cache update: an RB Stems Plus update waiting: not offered (the new app asks)")
-check(!due(blocked: true), "Stems Cache update: Stems Cache can't be installed here now: not offered")
-var blockedAsked = false
-_ = cacheUpdateDue(present: true, chosen: true, installed: shaNew, latest: shaNew, appUpdatePending: false, blocked: { blockedAsked = true; return false })
-check(!blockedAsked, "Stems Cache update: the slow install check isn't run when there's nothing to update")
-check(!cacheUpdateMessage.contains(appVersion) && !cacheUpdateMessage.contains("drive"), "Stems Cache update: the question names no version or feature")
 
 // MARK: payload.json downloaded at launch (manifestDue)
 
@@ -829,13 +874,6 @@ check(!listAsked, "payload.json: the version-list check isn't run when a downloa
 // MARK: Stems Cache offline: from a saved payload.json at most 7 days old, with its bridge here
 
 let day: TimeInterval = 86_400
-check(cacheFromSavedPayload(unverified: false, age: 2 * day, bridgeVerified: true), "offline: a 2-day-old saved payload.json with its bridge: allowed")
-check(cacheFromSavedPayload(unverified: false, age: 7 * day, bridgeVerified: true) && !cacheFromSavedPayload(unverified: false, age: 7 * day + 1, bridgeVerified: true),
-      "offline: up to 7 days old, not a second more")
-check(!cacheFromSavedPayload(unverified: false, age: day, bridgeVerified: false), "offline: the bridge missing or not matching its checksum: refused")
-check(!cacheFromSavedPayload(unverified: true, age: day, bridgeVerified: true), "offline: after a download that didn't verify: refused")
-check(!cacheFromSavedPayload(unverified: false, age: nil, bridgeVerified: true) && !cacheFromSavedPayload(unverified: false, age: -60, bridgeVerified: true),
-      "offline: no saved payload.json, or one dated in the future: refused")
 
 // MARK: the reinstall reminders: off when the watcher's LaunchAgent is there but launchd won't run it
 
@@ -857,64 +895,14 @@ check(watcherOff(plistThere: true, loaded: false, disabled: true) && watcherOff(
       "reminders: turned off in Login Items: off")
 check(watcherOff(plistThere: true, loaded: false, disabled: false), "reminders: there but not loaded: off")
 check(!watcherOff(plistThere: false, loaded: false, disabled: true), "reminders: no watcher installed: nothing to say")
-check(watcherOffLine == "Reinstall reminders are off. Turn on RB Stems Plus Watcher in System Settings › General › Login Items & Extensions.", "reminders: the status line names the watcher helper")
 
 // MARK: an action asked for earlier waits for rekordbox to be closed, never dead-ends
 
-/// queuedStart with rekordbox open for `openFor` checks and these answers; returns the result and
-/// how many times the user was asked.
-func queued(updating: [Bool] = [false], openFor: Int, answers: [Bool]) -> (QueuedStart, Int) {
-    var u = updating, open = openFor, a = answers, asked = 0
-    let r = queuedStart(updating: { u.count > 1 ? u.removeFirst() : u[0] },
-                        rekordboxOpen: { open -= 1; return open >= 0 },
-                        tryAgain: { asked += 1; return a.isEmpty ? false : a.removeFirst() })
-    return (r, asked)
-}
-check(queued(openFor: 0, answers: []) == (.start, 0), "queued action: rekordbox closed: starts at once, nothing asked")
-check(queued(openFor: 2, answers: [true, true]) == (.start, 2), "queued action: rekordbox open: Try Again until it is closed, then starts")
-check(queued(openFor: 3, answers: [true, false]) == (.cancelled, 2), "queued action: Cancel at rekordbox open: not started")
-check(queued(updating: [true], openFor: 1, answers: [true]) == (.updating, 0), "queued action: rekordbox updating: refused, nothing asked")
-check(queued(updating: [false, true], openFor: 1, answers: [true]) == (.updating, 1), "queued action: an update started while waiting: refused")
 let req = tmp + "/request"
 check(reinstallRequestAge(req) == nil && takeReinstallRequest(req) == nil, "request: none")
 writeReinstallRequest(req)
 check((reinstallRequestAge(req) ?? 99) < 5 && exists(req), "request: its age is read without taking it (kept while rekordbox is open)")
 check((takeReinstallRequest(req, Deletable(inside: [], roots: [], files: [req], apps: [])) ?? 99) < 5 && !exists(req) && reinstallRequestAge(req) == nil, "request: taken once the reinstall starts or is turned down")
-
-// MARK: the watcher's dialog: a reinstall only of what can be reinstalled
-
-func dialog(_ model: Bool, _ cache: Bool, engineOK: Bool = true, rbOK: Bool = true, plusWorks: Bool = false) -> (title: String, message: String, buttons: [String]) {
-    watcherDialog(modelOff: model, cacheOff: cache, engine: "0003", rekordbox: "7.2.20", engineOK: engineOK, rekordboxOK: rbOK, plusWorks: plusWorks)
-}
-let notYet = ["OK", "Don't Ask Again for This Version"], reinstall = ["Reinstall Now", "Remind Me Later", "Don't Ask Again for This Version"]
-var w = dialog(false, true, plusWorks: true)
-check(w.title == "rekordbox was updated" && w.message == "Stems Cache is off (Demucs v4 still works). Reinstall it to reuse the stems it has saved." && w.buttons == reinstall,
-      "watcher: Stems Cache off: the approved text")
-w = dialog(true, true)
-check(w.buttons == reinstall && w.message.contains("Reinstall them"), "watcher: both off, both supported: reinstall them")
-w = dialog(true, true, rbOK: false)
-check(w.buttons == reinstall && w.message.contains("Reinstall Demucs v4 to separate tracks with it.") && w.message.contains("rekordbox 7.2.20") && !w.message.contains("Reinstall them"),
-      "watcher: both off, rekordbox not supported: reinstall Demucs v4, and says Stems Cache stays off (\(w.message))")
-w = dialog(true, true, engineOK: false)
-check(w.buttons == reinstall && w.message.contains("Reinstall Stems Cache") && w.message.contains("STEMS Engine 0003") && !w.message.contains("needs Demucs v4")
-      && w.message.contains("Demucs v4 isn't available for STEMS Engine 0003 yet"),
-      "watcher: both off, STEMS Engine not supported: Stems Cache alone is offered (it works with rekordbox's own model) (\(w.message))")
-w = dialog(true, true, engineOK: false, rbOK: false)
-check(w.buttons == notYet && w.message.contains("STEMS Engine 0003") && w.message.contains("rekordbox 7.2.20"),
-      "watcher: both off, neither version supported: names both (\(w.message))")
-w = dialog(true, false, engineOK: false)
-check(w.title == "rekordbox installed a new STEMS Engine" && w.buttons == notYet && w.message.hasPrefix("Demucs v4 is off. It isn't available for STEMS Engine 0003 yet."),
-      "watcher: Demucs v4 off, STEMS Engine not supported")
-w = dialog(false, true, rbOK: false)
-check(w.title == "rekordbox was updated" && w.buttons == notYet && w.message.hasPrefix("Stems Cache is off. It doesn't support rekordbox 7.2.20 yet."),
-      "watcher: Stems Cache off, rekordbox not supported")
-w = dialog(true, false)
-check(w.title == "rekordbox put its own stems model back" && w.buttons == reinstall
-      && w.message == "Demucs v4 is off. Reinstall it to separate tracks with Demucs v4 instead of rekordbox's own model.", "watcher: Demucs v4 off: reinstall it")
-rc = cacheRemoval(folder: false, root: false)
-check(rc.0 == .removed && rc.1.isEmpty, "rekordbox and the root folder both gone: nothing to ask or run")
-rc = cacheRemoval(folder: true, root: false, run: .rekordboxMissing)
-check(rc.0 == .removed && rc.1 == ["uninstall"], "rekordbox gone during the run, no root folder: nothing asked")
 
 // MARK: free space, as the bridge measures it
 
@@ -928,11 +916,9 @@ check(cacheFreeFloor(disk: 256 * gb) == 25_600_000_000, "a 256 GB disk: a 25.6 G
 check(cacheFreeFloor(disk: 1000 * gb) == 50 * gb && cacheFreeFloor(disk: 2000 * gb) == 50 * gb, "a 1 TB or 2 TB disk: a 50 GB floor")
 check(cacheFreeFloor(disk: 500 * gb) == 50 * gb && cacheFreeFloor(disk: 499 * gb) == 49_900_000_000, "50 GB from a 500 GB disk up")
 check(cacheFreeFloor(disk: nil) == 50 * gb && cacheFreeFloor(disk: 0) == 50 * gb, "a disk whose size can't be read: a 50 GB floor")
-check(cachePausedTip(25_600_000_000) == "Stems Cache stopped saving stems: your disk has less than 26 GB free."
-      && cachePausedAtInstall(25_600_000_000) == "Stems Cache will stop saving stems while your disk has less than 26 GB free.",
-      "the texts give the floor in whole GB, rounded (25.6 GB: 26)")
+check(cachePausedTip(25_600_000_000) == "Stems Cache stopped saving stems: your disk has less than 26 GB free.",
+      "the tip gives the floor in whole GB, rounded (25.6 GB: 26)")
 check(cachePausedTip(50 * gb) == "Stems Cache stopped saving stems: your disk has less than 50 GB free."
-      && cachePausedAtInstall(50 * gb) == "Stems Cache will stop saving stems while your disk has less than 50 GB free."
       && cacheFloorGB(25_400_000_000) == 25 && cacheFloorGB(25_500_000_000) == 26, "50 GB says 50; 25.4 GB says 25, 25.5 GB 26")
 check(cachePausedFloor(free: 25_600_000_000 - 1, disk: 256 * gb) == 25_600_000_000 && cachePausedFloor(free: 25_600_000_000, disk: 256 * gb) == nil,
       "a 256 GB disk: paused under 25.6 GB only (exactly at the floor saves, as in the bridge)")
@@ -951,41 +937,6 @@ check((finderFreeBytes(tmp) ?? 0) > 0 && (statfsFreeBytes(tmp) ?? 0) > 0 && abs(
       "the real measures answer for the temporary folder")
 check(statfsFreeBytes(tmp + "/not-there") == nil && finderFreeBytes(tmp + "/not-there") == nil, "a path that isn't there has no count")
 check(FileManager.default.fileExists(atPath: cacheVolumePath()) && defaultCacheDir.hasPrefix(cacheVolumePath()), "the cache's disk is measured at the cache folder or above it")
-
-// MARK: the status lights: on, installed but not working right now, off
-
-check(plusLight(installed: true) == (.on, "Demucs v4 is on.") && plusLight(installed: false) == (.off, "Demucs v4 is off."),
-      "Demucs v4 light: green when on, red when off")
-/// the Stems Cache light with rekordbox's own model unless said otherwise: this account chose it,
-/// rekordbox_model on, a bridge listing the model, STEMS Engine 0002, no low disk
-func cl(installed: Bool = true, plusOn: Bool = false, chosen: Bool = true, rekordboxModel: Bool = true, bridgeModels: [String]? = [String(repeating: "a", count: 64)],
-        model: String? = String(repeating: "a", count: 64), engine: String = "0002", pausedFloor: Int64? = nil) -> (look: LightLook, tip: String) {
-    cacheLight(installed: installed, plusOn: plusOn, chosen: chosen, rekordboxModel: rekordboxModel, bridgeModels: bridgeModels, model: model, engine: engine, pausedFloor: pausedFloor)
-}
-check(cl(plusOn: true) == (.on, "Stems Cache is on.") && cl() == (.on, "Stems Cache is on."),
-      "Stems Cache light: green when installed and saving, with Demucs v4 or with rekordbox's own (listed) model")
-check(cl(installed: false, pausedFloor: 50 * gb) == (.off, "Stems Cache is off.") && cl(installed: false, plusOn: true, chosen: false) == (.off, "Stems Cache is off."),
-      "Stems Cache light: red when not installed, whatever else")
-check(cl(plusOn: true, chosen: false, rekordboxModel: false, bridgeModels: nil, model: nil) == (.on, "Stems Cache is on."),
-      "Stems Cache light: with Demucs v4, green as in 1.0 (another account's bridge, an older bridge: it saves the Demucs v4 model's stems)")
-check(cl(chosen: false) == (.limited, "Stems Cache was installed from another account on this Mac. Click Install Stems Cache to use it here."),
-      "Stems Cache light: rekordbox's own model, Stems Cache from another account: yellow, pointing at Install Stems Cache")
-check(cl(rekordboxModel: false) == (.limited, "Stems Cache doesn't save the stems of rekordbox's own model: rekordbox_model is 0 in config.ini."),
-      "Stems Cache light: rekordbox_model turned off by hand: yellow, saying where")
-check(cl(bridgeModels: nil) == (.limited, "Stems Cache needs an update to save the stems of rekordbox's own model. Click Reinstall Stems Cache."),
-      "Stems Cache light: an older bridge (no list): yellow, Reinstall Stems Cache")
-check(cl(model: String(repeating: "b", count: 64), engine: "0003")
-      == (.limited, "Stems Cache doesn't support STEMS Engine 0003 yet. When an RB Stems Plus update supports it, click Reinstall Stems Cache."),
-      "Stems Cache light: a model the bridge doesn't list: yellow, naming the STEMS Engine")
-check(cl(model: nil) == (.on, "Stems Cache is on."), "Stems Cache light: the model's checksum not worked out yet: not judged")
-check(cl(engine: "") == (.limited, "Stems Cache starts saving stems once rekordbox has downloaded its STEMS Engine."),
-      "Stems Cache light: no STEMS Engine yet: yellow, saying when it starts")
-check(cl(plusOn: true, pausedFloor: 25_600_000_000) == (.limited, "Stems Cache stopped saving stems: your disk has less than 26 GB free.")
-      && cl(pausedFloor: 25_600_000_000) == (.limited, "Stems Cache stopped saving stems: your disk has less than 26 GB free."),
-      "Stems Cache light: yellow under the free-space floor, giving the floor, with either model")
-check(![cl(chosen: false), cl(rekordboxModel: false), cl(bridgeModels: nil), cl(model: String(repeating: "b", count: 64)), cl(engine: "")]
-        .contains { $0.tip.contains("needs Demucs v4") || $0.tip.contains("only with Demucs v4") || $0.tip.contains("Install Demucs v4") },
-      "Stems Cache light: never says it needs Demucs v4")
 
 // MARK: the model feature is called Demucs v4 wherever the user reads it (the app stays RB Stems Plus)
 

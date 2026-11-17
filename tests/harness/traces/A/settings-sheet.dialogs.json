@@ -1,0 +1,25 @@
+[
+ {
+  "n": 1,
+  "dialog": "Settings / Stems Cache uses these settings the next time rekordbox opens. / Stems Cache location: This Mac / Stems Cache size limit (GB) / [20] / Remove stems unused for (days) / [60] {Change…, Use This Mac (off), Save*, Clear Saved Stems (off), Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ },
+ {
+  "n": 2,
+  "dialog": "Size out of range / Enter a size from 0.1 to 100,000 GB. {OK*}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": []
+ },
+ {
+  "n": 3,
+  "dialog": "Settings / Stems Cache uses these settings the next time rekordbox opens. / Stems Cache location: This Mac / Stems Cache size limit (GB) / [abc] / Remove stems unused for (days) / [60] {Change…, Use This Mac (off), Save*, Clear Saved Stems (off), Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": []
+ }
+]

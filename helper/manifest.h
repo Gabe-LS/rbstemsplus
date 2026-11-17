@@ -12,11 +12,13 @@
  *   file <size> <mtime in ns> <complete 0|1> <entries> <path>
  *   <64 hex: an entry's key>              (one line per entry)
  *
- * A path with a newline isn't recorded. */
+ * A path with a newline isn't recorded. Paths are compared with common/path_rules.h's paths_same
+ * (helper.md §4); the folder is opened, and the file written and renamed, through common/'s file
+ * layer. */
 #ifndef RBSP_MANIFEST_H
 #define RBSP_MANIFEST_H
 #include <stddef.h>
-#include <sys/stat.h>
+#include "plat_helper.h"
 
 typedef struct {
     char *path;
@@ -40,8 +42,8 @@ typedef struct {
 int manifest_read(const char *dir, const char *name, manifest *m);
 void manifest_free(manifest *m);
 
-/* a new file record (its size and time from ST), or NULL when PATH can't be recorded */
-mfile *manifest_file(manifest *m, const char *path, const struct stat *st);
+/* a new file record (its size and time from FI), or NULL when PATH can't be recorded */
+mfile *manifest_file(manifest *m, const char *path, const plat_finfo *fi);
 void mfile_key(mfile *f, const char *key);       /* once per key */
 
 /* removes the records of files that aren't among PATHS (N of them) */
@@ -51,13 +53,11 @@ void manifest_drop_last(manifest *m);            /* takes the newest record out 
 /* the record for PATH, whatever its size and time (the last one), or NULL */
 const mfile *manifest_by_path(const manifest *m, const char *path);
 
-/* the record for PATH whose size and time are ST's, or NULL */
-const mfile *manifest_find(const manifest *m, const char *path, const struct stat *st);
+/* the record for PATH whose size and time are FI's, or NULL */
+const mfile *manifest_find(const manifest *m, const char *path, const plat_finfo *fi);
 
 /* writes M as DIR/NAME.manifest, with EARLIER's records for paths M hasn't (EARLIER may be NULL).
  * 0, or -1 and *why */
 int manifest_write(const char *dir, const char *name, const manifest *m, const manifest *earlier, char *why, size_t n);
-
-long long mtime_ns(const struct stat *st);
 
 #endif

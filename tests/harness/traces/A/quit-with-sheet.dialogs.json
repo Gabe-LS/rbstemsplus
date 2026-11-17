@@ -1,0 +1,18 @@
+[
+ {
+  "n": 1,
+  "dialog": "Install Demucs v4? / Replaces rekordbox's stems model with Demucs v4. rekordbox's own model is kept, so it can be put back. {Install*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ },
+ {
+  "n": 2,
+  "dialog": "Download failed / Nothing was changed. Check your internet connection and try again. {OK*}",
+  "origin": "main-queue-block",
+  "work_queue": "blocked (asked from the work queue, or busy)",
+  "window_changed_under_it": []
+ }
+]

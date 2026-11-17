@@ -1,0 +1,11 @@
+[
+ {
+  "n": 1,
+  "dialog": "Reinstall Stems Cache? / Installs the latest version of Stems Cache again. Stems Cache will stop saving stems while \"RBSPSTICK\" has less than 0 GB free. {Reinstall*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ }
+]

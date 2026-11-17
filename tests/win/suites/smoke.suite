@@ -1,0 +1,9 @@
+# tests/win/vm-run.sh's own check (T16): the VM's facts as SYSTEM, a step as the logged-in user
+# through hidden.exe and through conhost --headless (no window either way), and the served build.
+#   tests/win/vm-run.sh run "clean Windows" smoke
+# MODE        SECS NAME          SCRIPT
+need http
+sys           120  facts         smoke/facts.ps1
+user          180  user          smoke/user.ps1
+user-signed   180  user-signed   smoke/user.ps1
+sys           120  http          smoke/http.ps1

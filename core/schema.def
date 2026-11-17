@@ -1,0 +1,119 @@
+/* schema.def: every snapshot section, table, field and row column, once (mac-core §3.1, §3.4).
+ * X-macro rows, read by core.h (the C and Swift ids), core/schema.c (the metadata) and
+ * core/tools/gen_ids.c (the C# ids).
+ *
+ *   SECTION(id, doc)
+ *   TABLE(id, section, os, doc)
+ *   FIELD(id, section, kind, os, doc)       kind: str | flag | i64 | f64
+ *   COLUMN(id, table, kind, os, doc)
+ *
+ * os: all | mac | win. A win row exists only under CORE_WIN_POLICY (core.h), so it never reaches
+ * the Mac objects; a mac row is dropped from a Windows-only build later, if one is made.
+ * Rules: rows are added, never renamed or reordered among existing ones once G4 freezes the
+ * schema (1.4.0). SECTION rows are never tagged and never added after API v1.
+ *
+ * STARTER ROWS: the view model (M4) and texts and lights (M5) complete this table. The rows below
+ * are the API v1 scaffold's: enough for the tests and the G1 API spike.
+ */
+#ifndef SECTION
+#define SECTION(id, doc)
+#endif
+#ifndef TABLE
+#define TABLE(id, section, os, doc)
+#endif
+#ifndef FIELD
+#define FIELD(id, section, kind, os, doc)
+#endif
+#ifndef COLUMN
+#define COLUMN(id, table, kind, os, doc)
+#endif
+
+SECTION(S_APP,      "lights, tips, accessibility texts, buttons and their titles, status lines, notice, window title")
+SECTION(S_STATUS,   "the Status tab: the prepared-playlists table")
+SECTION(S_PREPARE,  "the Prepare tab: outline, track rows, footer, buttons")
+SECTION(S_SETTINGS, "the Settings sheet's state")
+
+TABLE(T_STATUS_SETS,   S_STATUS,  all, "prepared playlists (kept sets)")
+TABLE(T_PREP_OUTLINE,  S_PREPARE, all, "the playlist tree, flattened in pre-order")
+TABLE(T_PREP_TRACKS,   S_PREPARE, all, "the chosen playlist's tracks and their estimate")
+
+FIELD(F_WINDOW_TITLE,             S_APP, str,  all, "the window's title (TEST BUILD marked)")
+FIELD(F_STATUS_LINE,              S_APP, str,  all, "the Manage tab's status line")
+FIELD(F_NOTICE,                   S_APP, str,  all, "the notice line (update available, ...)")
+FIELD(F_SPINNER,                  S_APP, flag, all, "the spinner runs")
+FIELD(F_LIGHT_PLUS_LOOK,          S_APP, i64,  all, "Demucs v4's light: look id")
+FIELD(F_LIGHT_PLUS_TIP,           S_APP, str,  all, "Demucs v4's light: tooltip")
+FIELD(F_LIGHT_PLUS_AX,            S_APP, str,  all, "Demucs v4's light: accessibility text")
+FIELD(F_LIGHT_CACHE_LOOK,         S_APP, i64,  all, "Stems Cache's light: look id")
+FIELD(F_LIGHT_CACHE_TIP,          S_APP, str,  all, "Stems Cache's light: tooltip")
+FIELD(F_LIGHT_CACHE_AX,           S_APP, str,  all, "Stems Cache's light: accessibility text")
+FIELD(F_INSTALL_PLUS_ENABLED,     S_APP, flag, all, "Install Demucs v4: enabled")
+FIELD(F_INSTALL_CACHE_ENABLED,    S_APP, flag, all, "Install Stems Cache: enabled")
+FIELD(F_REINSTALL_TITLE,          S_APP, str,  all, "the Reinstall button's title")
+FIELD(F_UPDATE_VISIBLE,           S_APP, flag, all, "Update RB Stems Plus… is shown")
+FIELD(F_TAB,                      S_APP, i64,  all, "the tab shown (core_tab): core-owned; {\"ev\":\"tab\"} keeps it in step with the user")
+FIELD(F_LOG_SHOW_SEQ,             S_APP, i64,  all, "one-shot: show the log and scroll it to the end, once per new value")
+
+FIELD(F_STATUS_EMPTY_TEXT,        S_STATUS, str, all, "what the Status tab says with no prepared playlist")
+FIELD(F_STATUS_SELECTED_ROW,      S_STATUS, i64, all, "the prepared playlist selected, or -1")
+
+FIELD(F_PREP_FOOTER,              S_PREPARE, str,  all, "the footer under the track list")
+FIELD(F_PREP_PROGRESS,            S_PREPARE, f64,  all, "the run's progress, 0-1")
+FIELD(F_PREP_PREPARE_ENABLED,     S_PREPARE, flag, all, "Prepare: enabled")
+FIELD(F_PREP_KEEP_ENABLED,        S_PREPARE, flag, all, "the one Prepare button is on and reads Keep (F_PREP_PREPARE_ENABLED && the title is Keep)")
+FIELD(F_PREP_SELECTED_ROW,        S_PREPARE, i64,  all, "the outline row selected, or -1")
+FIELD(F_PREP_RUN_ROW,             S_PREPARE, i64,  all, "the track row being prepared, or -1")
+FIELD(F_PREP_SCROLL_ROW,          S_PREPARE, i64,  all, "one-shot: the track row to scroll into view ...")
+FIELD(F_PREP_SCROLL_SEQ,          S_PREPARE, i64,  all, "... once per new value of this")
+FIELD(F_PREP_FOCUS_SEQ,           S_PREPARE, i64,  all, "one-shot: move the keyboard focus to the outline, once per new value")
+
+FIELD(F_SET_LOCATION_LABEL,       S_SETTINGS, str, all, "Stems Cache location: <drive>")
+FIELD(F_SET_MAX_GB,               S_SETTINGS, str, all, "the size limit field's text")
+
+/* the view model's rows (M4): the Manage tab's buttons as Controller.refresh and busy set them */
+FIELD(F_REINSTALL_ENABLED,        S_APP, flag, all, "the combined Reinstall (reinstallBtn: the watcher's request, an interrupted reinstall; not shown)")
+FIELD(F_REINSTALL_PLUS_ENABLED,   S_APP, flag, all, "Reinstall Demucs v4: enabled")
+FIELD(F_REINSTALL_CACHE_ENABLED,  S_APP, flag, all, "Reinstall Stems Cache: enabled")
+FIELD(F_SETTINGS_ENABLED,         S_APP, flag, all, "Settings…: enabled")
+FIELD(F_UNINSTALL_PLUS_ENABLED,   S_APP, flag, all, "Uninstall Demucs v4: enabled")
+FIELD(F_UNINSTALL_CACHE_ENABLED,  S_APP, flag, all, "Uninstall Stems Cache: enabled")
+FIELD(F_UNINSTALL_ALL_ENABLED,    S_APP, flag, all, "Uninstall RB Stems Plus Completely (the app menu): enabled")
+/* the Prepare tab as PrepareTab.update() sets it (M4) */
+FIELD(F_PREP_NAME,                S_PREPARE, str,  all, "the playlist's name above the summary (nameLabel)")
+FIELD(F_PREP_INFO,                S_PREPARE, str,  all, "the summary block's text (info, the label colour)")
+FIELD(F_PREP_INFO_SUB,            S_PREPARE, str,  all, "... and its second part, after a line break, in the secondary colour (\"\": none)")
+FIELD(F_PREP_PREPARE_TITLE,       S_PREPARE, str,  all, "the Prepare button's title: Prepare, or Keep (F_PREP_KEEP_ENABLED: on with that title)")
+FIELD(F_PREP_CHECK_ENABLED,       S_PREPARE, flag, all, "Check Again: enabled")
+FIELD(F_PREP_UNTIL,               S_PREPARE, str,  all, "the \"Keep the stems until\" date, YYYY-MM-DD, local time (the core's: {\"ev\":\"until\"} sets it)")
+FIELD(F_PREP_UNTIL_ENABLED,       S_PREPARE, flag, all, "the date picker: enabled")
+FIELD(F_PREP_RUNNING,             S_PREPARE, flag, all, "a run goes: the bar, Pause and Stop shown; Check Again, Prepare and the gap hidden")
+FIELD(F_PREP_PAUSE_TITLE,         S_PREPARE, str,  all, "Pause or Resume")
+FIELD(F_PREP_OUTLINE_ENABLED,     S_PREPARE, flag, all, "the playlists' outline: enabled")
+/* the Status tab as StatusTab.updateButtons() sets it (M4) */
+FIELD(F_STATUS_AGAIN_ENABLED,     S_STATUS, flag, all, "Prepare Again: enabled")
+FIELD(F_STATUS_STOP_ENABLED,      S_STATUS, flag, all, "Stop Keeping…: enabled")
+FIELD(F_STATUS_RUN_LINE,          S_STATUS, str,  all, "the line beside the buttons: the run's summary, \"\" none")
+FIELD(F_PREP_OUTLINE_SCROLL_SEQ,  S_PREPARE, i64,  all, "one-shot: scroll F_PREP_SELECTED_ROW's outline row into view, once per new value. A selection the core makes sends no {\"ev\":\"select\"} back")
+
+COLUMN(C_SET_NAME,       T_STATUS_SETS, str, all, "playlist name")
+COLUMN(C_SET_TRACKS,     T_STATUS_SETS, str, all, "track count, or –")
+COLUMN(C_SET_UNTIL,      T_STATUS_SETS, str, all, "kept until (date), or –")
+COLUMN(C_SET_STATE,      T_STATUS_SETS, str, all, "Ready, Checking…, Not checked, a run's summary")
+
+COLUMN(C_OUT_ID,         T_PREP_OUTLINE, str,  all, "rekordbox's playlist id (the stable key)")
+COLUMN(C_OUT_PARENT,     T_PREP_OUTLINE, i64,  all, "the parent's row, or -1")
+COLUMN(C_OUT_DEPTH,      T_PREP_OUTLINE, i64,  all, "depth, 0 at the top")
+COLUMN(C_OUT_KIND,       T_PREP_OUTLINE, i64,  all, "0 folder, 1 playlist, 2 intelligent, 3 another kind (drawn as a playlist that can't be prepared)")
+COLUMN(C_OUT_TITLE,      T_PREP_OUTLINE, str,  all, "the title shown, track count included")
+COLUMN(C_OUT_SECONDARY,  T_PREP_OUTLINE, flag, all, "drawn as secondary (can't be prepared)")
+COLUMN(C_OUT_OPEN,       T_PREP_OUTLINE, flag, all, "the core's decision: a folder shown open")
+
+COLUMN(C_TRK_NAME,       T_PREP_TRACKS, str, all, "track")
+COLUMN(C_TRK_RESULT,     T_PREP_TRACKS, str, all, "Ready, To prepare, Preparing…, Checking…")
+COLUMN(C_TRK_WHY,        T_PREP_TRACKS, str, all, "the secondary note")
+
+
+#undef SECTION
+#undef TABLE
+#undef FIELD
+#undef COLUMN

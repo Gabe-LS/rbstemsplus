@@ -1,0 +1,27 @@
+# T17: the bootstrap in a real powershell.exe 5.1 (release.md section 8 Level 2; the bootstrap
+# review's VM parts A and B; SAC; Mark of the Web; faults). From "clean Windows" (Smart App
+# Control in Evaluation). Not from a snapshot with SAC On: its user steps start through the
+# unsigned hidden.exe, which SAC may block before the SAC refusal is reached; the SAC On case waits
+# for a suite through user-signed (conhost --headless) and is by hand until then (by-hand.md).
+#   tests/win/vm-run.sh stage               # also the TEST build's fixture releases (stage-dist.sh)
+#   tests/win/vm-run.sh run "clean Windows" bootstrap
+# The share holds the TEST build in dist-test/ (bootstrap.ps1, payload.json, its .sig and the
+# Windows zip: scripts/build.sh --test http://10.211.55.2:8766/ ..., copied in), and stage makes
+# from it dist-test/fault-{zip,json,sig}/ and dist-test/bad-version/ (a payload whose
+# windows.app.version isn't the zip's app, signed with the test key that signed the TEST build,
+# never a release key). Steps that lack theirs SKIP; version-refused also needs a bootstrap with
+# Test-RbspAppVersion (w6/win-bootstrap-app).
+include lib/vmlib.ps1
+need http
+need file repo/tests/win/bootstrap/bootstrap.tests.ps1
+need file dist-test/bootstrap.ps1
+# MODE       SECS NAME              SCRIPT
+user         600  unit-51           bootstrap/unit.ps1
+user         180  cl-refusal        bootstrap/cl.ps1
+user-high    180  elevated-refusal  bootstrap/elevated.ps1
+user         120  audit-before      audit/snapshot.ps1
+user         600  install           bootstrap/install.ps1
+user         300  version-refused   bootstrap/version-refused.ps1
+user         600  faults            bootstrap/faults.ps1
+sys          180  expand-archive    bootstrap/expand-archive.ps1
+user         120  audit-installed   audit/snapshot.ps1

@@ -80,7 +80,9 @@ a leaner setting and peaks at about 1.52 GB, with the same speed and the same st
 
 ## Before you install
 
-- **A Mac.** Tested on macOS 26 Tahoe on an Apple Silicon Mac.
+- **A Mac.** Tested on macOS 26 Tahoe on an Apple Silicon Mac. Older versions, from macOS 12,
+  should work but are untested, and so should Intel Macs (untested too; preparing playlists needs
+  Apple silicon).
 - **rekordbox 7** in `/Applications/rekordbox 7`, with STEMS working, and turned on at least
   once so rekordbox has downloaded its **STEMS Engine** (the files STEMS needs).
 - **An administrator account** on the Mac (the one that can install apps), for Stems Cache.
@@ -331,7 +333,8 @@ RB Stems Plus knows; Stems Cache only with the rekordbox versions it was tested 
 7.2.19 at release). The list is updated online, and the app tells you if your version isn't on it
 yet.
 
-**Which Macs? Windows?** Mac only. Tested on macOS 26 Tahoe on an Apple Silicon Mac.
+**Which Macs? Windows?** Mac only. Tested on macOS 26 Tahoe on an Apple Silicon Mac. Older
+versions, from macOS 12, should work but are untested. Intel Macs should work too, untested.
 
 **Do I need both features?** No. Each works on its own: Demucs v4 changes the model, Stems Cache
 saves the stems of whichever model rekordbox uses. Install one, both, or add the other later.

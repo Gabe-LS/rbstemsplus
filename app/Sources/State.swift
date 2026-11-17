@@ -21,21 +21,6 @@ func dismissed() -> Set<String> {
     Set(((try? String(contentsOfFile: dismissedFile, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init))
 }
 
-func remember(_ keys: [String]) {
-    let all = dismissed().union(keys).sorted().joined(separator: "\n") + "\n"
-    try? all.write(toFile: dismissedFile, atomically: true, encoding: .utf8)
-}
-
-/// What went missing from what the user chose, as prompt keys (version-specific, so "Don't ask
-/// again for this version" asks again after the next change).
-func missingKeys() -> [String] {
-    let c = chosen()
-    var keys: [String] = []
-    if c.cache && !stemsCachePresent() { keys.append("cache:\(rekordboxVersion())") }
-    if c.model && !stemsPlusPresent() { keys.append("model:\(engineVersion())") }
-    return keys.filter { !dismissed().contains($0) }
-}
-
 // MARK: - request: the watcher's "Reinstall now"
 
 func writeReinstallRequest(_ path: String = requestFile) {
@@ -59,10 +44,6 @@ func takeReinstallRequest(_ path: String = requestFile, _ gate: Deletable = dele
 }
 
 // MARK: - the stems Stems Cache saved
-
-/// The size of the stems this Mac's folder holds, measured now (the bridge's entry-size rule,
-/// Location.swift): " (about 1.2 GB)", or "" for none. Off the main thread: LocationMonitor.
-func savedStemsSize() -> String { entriesSize(defaultCacheDir).map(aboutSize) ?? "" }
 
 /// Whether the saved stems folder is a link. The app doesn't open with one (startupProblem), but
 /// one may be made while it runs: then nothing clears or deletes it, nor what it points to.
@@ -137,10 +118,6 @@ func cachePausedFloor(_ folder: String = defaultCacheDir) -> Int64? {
 /// `drive`: the chosen drive's name, nil on this Mac.
 func cachePausedTip(_ floor: Int64, drive: String? = nil) -> String {
     "Stems Cache stopped saving stems: \(drive.map { "\"\($0)\"" } ?? "your disk") has less than \(cacheFloorGB(floor)) GB free."
-}
-/// Said when installing or reinstalling Stems Cache while it would be paused under `floor`.
-func cachePausedAtInstall(_ floor: Int64, drive: String? = nil) -> String {
-    "Stems Cache will stop saving stems while \(drive.map { "\"\($0)\"" } ?? "your disk") has less than \(cacheFloorGB(floor)) GB free."
 }
 
 // MARK: - busy: the app is half-way through a change

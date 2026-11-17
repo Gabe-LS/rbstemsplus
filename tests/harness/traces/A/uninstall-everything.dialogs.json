@@ -1,0 +1,38 @@
+[
+ {
+  "n": 1,
+  "dialog": "Uninstall RB Stems Plus? / rekordbox gets its own stems model back. Stems Cache was installed from another account on this Mac. Your music and rekordbox library aren't touched.\n\nRB Stems Plus will be deleted, including the stems it saved. {Uninstall*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.installCacheBtn.en",
+   "c.installPlusBtn.en",
+   "c.settingsBtn.en",
+   "c.spinner.anim",
+   "c.status.str",
+   "c.uninstallCacheBtn.en"
+  ]
+ },
+ {
+  "n": 2,
+  "dialog": "Stems Cache from another account / Stems Cache was installed from another account on this Mac. Removing it turns it off in every account. {Remove*, Keep}",
+  "origin": "main-queue-block",
+  "work_queue": "blocked (asked from the work queue, or busy)",
+  "window_changed_under_it": [
+   "c.installCacheBtn.en",
+   "c.installPlusBtn.en",
+   "c.settingsBtn.en",
+   "c.spinner.anim",
+   "c.status.str",
+   "c.uninstallCacheBtn.en",
+   "tab.sel"
+  ]
+ },
+ {
+  "n": 3,
+  "dialog": "RB Stems Plus is uninstalled / rekordbox has its own stems model again. Stems Cache stays for the other account. Other accounts on this Mac that use RB Stems Plus need to paste the install command again. {Done*}",
+  "origin": "main-queue-block",
+  "work_queue": "blocked (asked from the work queue, or busy)",
+  "window_changed_under_it": []
+ }
+]

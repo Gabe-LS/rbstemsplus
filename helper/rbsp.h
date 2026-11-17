@@ -75,4 +75,17 @@ void aac_outputs_free(aac_outputs *o);
 void chunk_at(const track *t, size_t i, float *c);
 size_t n_chunks(size_t n);
 
+/* The performance timing lines (helper/build.sh --test-timing, helper/tests/perf.sh; never a
+ * release): "rbsp-timing ..." on stderr, times in ns of mach_absolute_time's clock. TIMING(...)
+ * marks the statements that exist only there. */
+#ifdef RBSP_TEST_TIMING
+#include <time.h>
+#define TIMING(...) __VA_ARGS__
+static inline uint64_t t_now(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
+extern uint64_t t_resample;             /* decode.c: the resampler's time for the current file */
+extern uint64_t t_ort;                  /* model.c: the last model_run's ONNX Runtime Run alone */
+#else
+#define TIMING(...)
+#endif
+
 #endif

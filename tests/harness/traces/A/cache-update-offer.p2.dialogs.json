@@ -1,0 +1,11 @@
+[
+ {
+  "n": 1,
+  "dialog": "Stems Cache update / An update for Stems Cache is available. Updating it asks for your password, and rekordbox needs to be closed. Until then, Stems Cache keeps working as it is. {Update*, Not Now}",
+  "origin": "main-queue-block",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ }
+]

@@ -1,0 +1,510 @@
+{"k":"start","t":0,"mode":"trace","pid":59683,"launch_ns":-10371125,"arch":"arm64"}
+{"k":"set","t":84552666,"f":"status.againBtn","s":"setTitle","v":"Prepare Again"}
+{"k":"set","t":84573750,"f":"status.stopBtn","s":"setTitle","v":"Stop Keeping…"}
+{"k":"ev","t":91862541,"e":"tabShown","v":"Status"}
+{"k":"ev","t":118577625,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":119052458,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":119066791,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is on."}
+{"k":"set","t":119425750,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":119436916,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":119497666,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":119506750,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":119732833,"f":"c.cacheIcon","s":"setImage","v":"on"}
+{"k":"set","t":119741083,"f":"c.cacheIcon","s":"setContentTintColor","v":"#34c759"}
+{"k":"set","t":119759750,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":119766416,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"ev","t":127493250,"e":"cmd","v":"event 15000 windowDrawn 1"}
+{"k":"set","t":1114626875,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1114713791,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1114728000,"f":"c.reinstallBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1114742541,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Stems Cache"}
+{"k":"set","t":1114756625,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1114758541,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1114760083,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1114765666,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1114767333,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1114770583,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1114772208,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1114932833,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":1114944750,"e":"tp","v":"refresh.end"}
+{"k":"set","t":1116695125,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1116716458,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1116722583,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"set","t":1118327750,"f":"status.table","s":"reloadData","v":"0"}
+{"k":"ev","t":1154890625,"e":"didBecomeActive","v":""}
+{"k":"ev","t":1154902000,"e":"tp","v":"trigger.activate"}
+{"k":"ev","t":1165956666,"e":"windowDrawn","v":""}
+{"k":"frame","t":1165954041,"n":2,"busy":1022257583,"d":{"app.active":"1","app.modal":"","c.cacheIcon.hid":"0","c.cacheIcon.img":"on","c.cacheIcon.tint":"#34c759","c.cacheIcon.tip":"Stems Cache is on.","c.cacheLabel.hid":"0","c.cacheLabel.str":"Stems Cache","c.cacheLabel.tip":"Stems Cache is on.","c.installCacheBtn.en":"0","c.installCacheBtn.hid":"0","c.installCacheBtn.title":"Install Stems Cache","c.installPlusBtn.en":"1","c.installPlusBtn.hid":"0","c.installPlusBtn.title":"Install Demucs v4","c.plusIcon.hid":"0","c.plusIcon.img":"off","c.plusIcon.tint":"#ff383c","c.plusIcon.tip":"Demucs v4 is off.","c.plusLabel.hid":"0","c.plusLabel.str":"Demucs v4","c.plusLabel.tip":"Demucs v4 is off.","c.reinstallBtn.en":"1","c.reinstallBtn.hid":"0","c.reinstallBtn.title":"Reinstall Stems Cache","c.reinstallCacheBtn.en":"1","c.reinstallCacheBtn.hid":"0","c.reinstallCacheBtn.title":"Reinstall Stems Cache","c.reinstallPlusBtn.en":"0","c.reinstallPlusBtn.hid":"0","c.reinstallPlusBtn.title":"Reinstall Demucs v4","c.settingsBtn.en":"1","c.settingsBtn.hid":"0","c.settingsBtn.title":"Settings…","c.spinner.anim":"0","c.spinner.hid":"0","c.status.hid":"0","c.status.str":"","c.uninstallAllBtn.en":"1","c.uninstallAllBtn.hid":"0","c.uninstallAllBtn.title":"Uninstall RB Stems Plus Completely","c.uninstallCacheBtn.en":"1","c.uninstallCacheBtn.hid":"0","c.uninstallCacheBtn.title":"Uninstall Stems Cache","c.uninstallPlusBtn.en":"0","c.uninstallPlusBtn.hid":"0","c.uninstallPlusBtn.title":"Uninstall Demucs v4","c.updateItem.en":"1","c.updateItem.hid":"1","c.updateItem.title":"Update RB Stems Plus…","c.view0.hid":"0","c.view0.str":"Demucs v4","c.view1.hid":"0","c.view1.str":"Stems Cache","menu.App.About RB Stems Plus.en":"1","menu.App.About RB Stems Plus.hid":"0","menu.App.About RB Stems Plus.title":"About RB Stems Plus","menu.App.Hide RB Stems Plus.en":"1","menu.App.Hide RB Stems Plus.hid":"0","menu.App.Hide RB Stems Plus.title":"Hide RB Stems Plus","menu.App.Quit RB Stems Plus.en":"1","menu.App.Quit RB Stems Plus.hid":"0","menu.App.Quit RB Stems Plus.title":"Quit RB Stems Plus","menu.App.Settings….en":"1","menu.App.Settings….hid":"0","menu.App.Settings….title":"Settings…","menu.App.Uninstall RB Stems Plus….en":"1","menu.App.Uninstall RB Stems Plus….hid":"0","menu.App.Uninstall RB Stems Plus….title":"Uninstall RB Stems Plus…","menu.App.en":"1","menu.App.hid":"0","menu.App.title":"NSMenuItem","menu.Edit.AutoFill.Contact….en":"0","menu.Edit.AutoFill.Contact….hid":"0","menu.Edit.AutoFill.Contact….title":"Contact…","menu.Edit.AutoFill.Credit Card….en":"0","menu.Edit.AutoFill.Credit Card….hid":"0","menu.Edit.AutoFill.Credit Card….title":"Credit Card…","menu.Edit.AutoFill.Passwords….en":"0","menu.Edit.AutoFill.Passwords….hid":"0","menu.Edit.AutoFill.Passwords….title":"Passwords…","menu.Edit.AutoFill.en":"1","menu.Edit.AutoFill.hid":"0","menu.Edit.AutoFill.title":"AutoFill","menu.Edit.Copy.en":"0","menu.Edit.Copy.hid":"0","menu.Edit.Copy.title":"Copy","menu.Edit.Cut.en":"0","menu.Edit.Cut.hid":"0","menu.Edit.Cut.title":"Cut","menu.Edit.Emoji & Symbols#2.en":"1","menu.Edit.Emoji & Symbols#2.hid":"1","menu.Edit.Emoji & Symbols#2.title":"Emoji & Symbols","menu.Edit.Emoji & Symbols#3.en":"1","menu.Edit.Emoji & Symbols#3.hid":"1","menu.Edit.Emoji & Symbols#3.title":"Emoji & Symbols","menu.Edit.Emoji & Symbols.en":"1","menu.Edit.Emoji & Symbols.hid":"0","menu.Edit.Emoji & Symbols.title":"Emoji & Symbols","menu.Edit.Paste.en":"0","menu.Edit.Paste.hid":"0","menu.Edit.Paste.title":"Paste","menu.Edit.Select All.en":"0","menu.Edit.Select All.hid":"0","menu.Edit.Select All.title":"Select All","menu.Edit.Start Dictation…#2.en":"1","menu.Edit.Start Dictation…#2.hid":"1","menu.Edit.Start Dictation…#2.title":"Start Dictation…","menu.Edit.Start Dictation….en":"1","menu.Edit.Start Dictation….hid":"0","menu.Edit.Start Dictation….title":"Start Dictation…","menu.Edit.en":"1","menu.Edit.hid":"0","menu.Edit.title":"NSMenuItem","menu.Help.Create Report.en":"1","menu.Help.Create Report.hid":"0","menu.Help.Create Report.title":"Create Report","menu.Help.RB Stems Plus Help.en":"1","menu.Help.RB Stems Plus Help.hid":"0","menu.Help.RB Stems Plus Help.title":"RB Stems Plus Help","menu.Help.RB Stems Plus Troubleshooting.en":"1","menu.Help.RB Stems Plus Troubleshooting.hid":"0","menu.Help.RB Stems Plus Troubleshooting.title":"RB Stems Plus Troubleshooting","menu.Help.Report an Issue.en":"1","menu.Help.Report an Issue.hid":"0","menu.Help.Report an Issue.title":"Report an Issue","menu.Help.en":"1","menu.Help.hid":"0","menu.Help.title":"NSMenuItem","menu.Manage.Demucs v4.Install.en":"1","menu.Manage.Demucs v4.Install.hid":"0","menu.Manage.Demucs v4.Install.title":"Install","menu.Manage.Demucs v4.Reinstall.en":"0","menu.Manage.Demucs v4.Reinstall.hid":"0","menu.Manage.Demucs v4.Reinstall.title":"Reinstall","menu.Manage.Demucs v4.Uninstall….en":"0","menu.Manage.Demucs v4.Uninstall….hid":"0","menu.Manage.Demucs v4.Uninstall….title":"Uninstall…","menu.Manage.Demucs v4.en":"1","menu.Manage.Demucs v4.hid":"0","menu.Manage.Demucs v4.title":"Demucs v4","menu.Manage.Show Log.en":"1","menu.Manage.Show Log.hid":"0","menu.Manage.Show Log.title":"Show Log","menu.Manage.Stems Cache.Install.en":"0","menu.Manage.Stems Cache.Install.hid":"0","menu.Manage.Stems Cache.Install.title":"Install","menu.Manage.Stems Cache.Reinstall.en":"1","menu.Manage.Stems Cache.Reinstall.hid":"0","menu.Manage.Stems Cache.Reinstall.title":"Reinstall","menu.Manage.Stems Cache.Uninstall….en":"1","menu.Manage.Stems Cache.Uninstall….hid":"0","menu.Manage.Stems Cache.Uninstall….title":"Uninstall…","menu.Manage.Stems Cache.en":"1","menu.Manage.Stems Cache.hid":"0","menu.Manage.Stems Cache.title":"Stems Cache","menu.Manage.en":"1","menu.Manage.hid":"0","menu.Manage.title":"NSMenuItem","menu.Prepare.Check Again.en":"0","menu.Prepare.Check Again.hid":"0","menu.Prepare.Check Again.title":"Check Again","menu.Prepare.Pause.en":"0","menu.Prepare.Pause.hid":"0","menu.Prepare.Pause.title":"Pause","menu.Prepare.Prepare Playlist….en":"1","menu.Prepare.Prepare Playlist….hid":"0","menu.Prepare.Prepare Playlist….title":"Prepare Playlist…","menu.Prepare.Stop.en":"0","menu.Prepare.Stop.hid":"0","menu.Prepare.Stop.title":"Stop","menu.Prepare.en":"1","menu.Prepare.hid":"0","menu.Prepare.title":"NSMenuItem","menu.View.Manage.en":"1","menu.View.Manage.hid":"0","menu.View.Manage.title":"Manage","menu.View.Prepare.en":"1","menu.View.Prepare.hid":"0","menu.View.Prepare.title":"Prepare","menu.View.Status.en":"1","menu.View.Status.hid":"0","menu.View.Status.title":"Status","menu.View.en":"1","menu.View.hid":"0","menu.View.title":"NSMenuItem","menu.Window.Close All.en":"1","menu.Window.Close All.hid":"0","menu.Window.Close All.title":"Close All","menu.Window.Close.en":"1","menu.Window.Close.hid":"0","menu.Window.Close.title":"Close","menu.Window.Minimize.en":"1","menu.Window.Minimize.hid":"0","menu.Window.Minimize.title":"Minimize","menu.Window.en":"1","menu.Window.hid":"0","menu.Window.title":"NSMenuItem","prepare.bar.hid":"0","prepare.bar.val":"0.000","prepare.checkBtn.en":"1","prepare.checkBtn.hid":"0","prepare.checkBtn.title":"Button","prepare.info.hid":"0","prepare.info.str":"","prepare.nameLabel.hid":"0","prepare.nameLabel.str":"Choose a playlist","prepare.outline.en":"1","prepare.outline.hid":"0","prepare.outline.rows":"0","prepare.outline.sel":"-1","prepare.pauseBtn.en":"1","prepare.pauseBtn.hid":"0","prepare.pauseBtn.title":"Button","prepare.prepareBtn.en":"1","prepare.prepareBtn.hid":"0","prepare.prepareBtn.title":"Button","prepare.runGap.hid":"0","prepare.stopBtn.en":"1","prepare.stopBtn.hid":"0","prepare.stopBtn.title":"Button","prepare.tracksTable.en":"1","prepare.tracksTable.hid":"0","prepare.tracksTable.rows":"0","prepare.tracksTable.sel":"-1","prepare.until.days":"-9444","prepare.until.en":"1","prepare.until.hid":"0","status.againBtn.en":"0","status.againBtn.hid":"0","status.againBtn.title":"Prepare Again","status.cacheTip.hid":"0","status.cacheTip.str":"Stems Cache is on.","status.plusTip.hid":"0","status.plusTip.str":"Demucs v4 is off.","status.runLine.hid":"0","status.runLine.str":"","status.stopBtn.en":"0","status.stopBtn.hid":"0","status.stopBtn.title":"Stop Keeping…","status.table.en":"1","status.table.hid":"0","status.table.rows":"0","status.table.sel":"-1","status.view0.hid":"0","status.view0.str":"Prepared playlists","status.view1.hid":"0","status.view1.str":"Up to 5 playlists, each kept until its date. Stems Cache leaves their stems alone until then.","tab.sel":"0","win.key":"1","win.mini":"0","win.sheet":"","win.title":"Status - TEST BUILD, downloads from http://192.168.64.1:8765/","win.vis":"1"}}
+{"k":"ev","t":1169356541,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":1169885250,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":1169901375,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is on."}
+{"k":"set","t":1170105708,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":1170114750,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":1170136500,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1170145708,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1170244750,"f":"c.cacheIcon","s":"setImage","v":"on"}
+{"k":"set","t":1170253291,"f":"c.cacheIcon","s":"setContentTintColor","v":"#34c759"}
+{"k":"set","t":1170267458,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":1170269875,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":1170740083,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1170748208,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1170749875,"f":"c.reinstallBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1170753083,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Stems Cache"}
+{"k":"set","t":1170755500,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1170756750,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1170758041,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1170759166,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1170760500,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1170765000,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1170766250,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1170846708,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":1170853458,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":1170921416,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":1171264125,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":1171273875,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is on."}
+{"k":"set","t":1171375875,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":1171384291,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":1171395041,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1171396958,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1171476833,"f":"c.cacheIcon","s":"setImage","v":"on"}
+{"k":"set","t":1171484000,"f":"c.cacheIcon","s":"setContentTintColor","v":"#34c759"}
+{"k":"set","t":1171491416,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":1171493166,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":1171902416,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1171910416,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1171912125,"f":"c.reinstallBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1171913958,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Stems Cache"}
+{"k":"set","t":1171916458,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1171917750,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1171919083,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1171920125,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1171921333,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1171923541,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1171924666,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1171994416,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":1172001375,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":1172049625,"e":"tp","v":"trigger.location"}
+{"k":"ev","t":1172056208,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":1172417416,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":1172425375,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is on."}
+{"k":"set","t":1172521958,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":1172529000,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":1172538416,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1172540291,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1172624208,"f":"c.cacheIcon","s":"setImage","v":"on"}
+{"k":"set","t":1172630833,"f":"c.cacheIcon","s":"setContentTintColor","v":"#34c759"}
+{"k":"set","t":1172637250,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":1172639000,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":1173102000,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1173111291,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1173112833,"f":"c.reinstallBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1173114708,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Stems Cache"}
+{"k":"set","t":1173117000,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1173118291,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1173119583,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1173120625,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1173121791,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1173123875,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1173125125,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1173192000,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":1173202416,"e":"tp","v":"refresh.end"}
+{"k":"set","t":1173234583,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1173243541,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1173246958,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"set","t":1174357166,"f":"status.table","s":"reloadData","v":"0"}
+{"k":"ev","t":1174366833,"e":"tp","v":"trigger.location"}
+{"k":"ev","t":1174368541,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":1174801291,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":1174811250,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is on."}
+{"k":"set","t":1174968375,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":1174977375,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":1174990166,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1174992083,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1175078750,"f":"c.cacheIcon","s":"setImage","v":"on"}
+{"k":"set","t":1175086750,"f":"c.cacheIcon","s":"setContentTintColor","v":"#34c759"}
+{"k":"set","t":1175093500,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":1175095416,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":1175539458,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1175548000,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1175549666,"f":"c.reinstallBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1175551625,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Stems Cache"}
+{"k":"set","t":1175553916,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1175555291,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1175556750,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1175557958,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1175559250,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1175561375,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1175562375,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1175629708,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":1175638041,"e":"tp","v":"refresh.end"}
+{"k":"set","t":1175727000,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1175736333,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1175738833,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"set","t":1176890125,"f":"status.table","s":"reloadData","v":"0"}
+{"k":"ev","t":1176903958,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":1177316208,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":1177326708,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is on."}
+{"k":"set","t":1177525666,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":1177540875,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":1177563833,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1177566541,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":1177681000,"f":"c.cacheIcon","s":"setImage","v":"on"}
+{"k":"set","t":1177692250,"f":"c.cacheIcon","s":"setContentTintColor","v":"#34c759"}
+{"k":"set","t":1177703916,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":1177706375,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":1178223375,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1178233208,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1178235125,"f":"c.reinstallBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1178237416,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Stems Cache"}
+{"k":"set","t":1178240208,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1178241583,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1178242916,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1178244083,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1178245291,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1178248125,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1178249208,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1178334708,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":1178343041,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":1183611500,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":1618467208,"e":"cmd","v":"tab Prepare"}
+{"k":"set","t":1619479666,"f":"prepare.outline","s":"reloadData","v":"0"}
+{"k":"set","t":1621597125,"f":"prepare.prepareBtn","s":"setTitle","v":"Prepare"}
+{"k":"set","t":1621639250,"f":"prepare.checkBtn","s":"setTitle","v":"Check Again"}
+{"k":"set","t":1621650791,"f":"prepare.pauseBtn","s":"setTitle","v":"Pause"}
+{"k":"set","t":1621658291,"f":"prepare.stopBtn","s":"setTitle","v":"Stop"}
+{"k":"set","t":1621719666,"f":"prepare.bar","s":"stopAnimation","v":"0"}
+{"k":"set","t":1625784666,"f":"prepare.nameLabel","s":"setStringValue","v":"Choose a playlist"}
+{"k":"set","t":1625858041,"f":"prepare.info","s":"setAttributedStringValue","v":"Choose a playlist on the left to see what preparing it takes. Its stems are kept until the date below, then Stems Cache treats them like any others."}
+{"k":"set","t":1625902125,"f":"prepare.prepareBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1625916791,"f":"prepare.prepareBtn","s":"setTitle","v":"Prepare"}
+{"k":"set","t":1625931125,"f":"prepare.checkBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1625935583,"f":"prepare.until","s":"setEnabled","v":"1"}
+{"k":"set","t":1626015041,"f":"prepare.pauseBtn","s":"setHidden","v":"1"}
+{"k":"set","t":1626044291,"f":"prepare.stopBtn","s":"setHidden","v":"1"}
+{"k":"set","t":1626102000,"f":"prepare.bar","s":"setHidden","v":"1"}
+{"k":"set","t":1626113916,"f":"prepare.checkBtn","s":"setHidden","v":"0"}
+{"k":"set","t":1626116625,"f":"prepare.prepareBtn","s":"setHidden","v":"0"}
+{"k":"set","t":1626119208,"f":"prepare.runGap","s":"setHidden","v":"0"}
+{"k":"set","t":1626122250,"f":"prepare.pauseBtn","s":"setTitle","v":"Pause"}
+{"k":"set","t":1626126375,"f":"prepare.bar","s":"setDoubleValue","v":"0.000"}
+{"k":"set","t":1626142916,"f":"prepare.outline","s":"setEnabled","v":"1"}
+{"k":"set","t":1626153083,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1626165333,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1626172500,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"set","t":1643768541,"f":"prepare.tracksTable","s":"reloadData","v":"0"}
+{"k":"set","t":1643790208,"f":"prepare.nameLabel","s":"setStringValue","v":"Choose a playlist"}
+{"k":"set","t":1643808958,"f":"prepare.info","s":"setAttributedStringValue","v":"Choose a playlist on the left to see what preparing it takes. Its stems are kept until the date below, then Stems Cache treats them like any others."}
+{"k":"set","t":1643817291,"f":"prepare.prepareBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1643819958,"f":"prepare.prepareBtn","s":"setTitle","v":"Prepare"}
+{"k":"set","t":1643822250,"f":"prepare.checkBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1643826750,"f":"prepare.until","s":"setEnabled","v":"1"}
+{"k":"set","t":1643828541,"f":"prepare.pauseBtn","s":"setHidden","v":"1"}
+{"k":"set","t":1643830208,"f":"prepare.stopBtn","s":"setHidden","v":"1"}
+{"k":"set","t":1643831875,"f":"prepare.bar","s":"setHidden","v":"1"}
+{"k":"set","t":1643833375,"f":"prepare.checkBtn","s":"setHidden","v":"0"}
+{"k":"set","t":1643834791,"f":"prepare.prepareBtn","s":"setHidden","v":"0"}
+{"k":"set","t":1643836416,"f":"prepare.runGap","s":"setHidden","v":"0"}
+{"k":"set","t":1643838041,"f":"prepare.pauseBtn","s":"setTitle","v":"Pause"}
+{"k":"set","t":1643840333,"f":"prepare.bar","s":"setDoubleValue","v":"0.000"}
+{"k":"set","t":1643851125,"f":"prepare.outline","s":"setEnabled","v":"1"}
+{"k":"set","t":1643855875,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1643857500,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1643860708,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"ev","t":1654337708,"e":"tabShown","v":"Prepare"}
+{"k":"ev","t":1654955833,"e":"cmd","v":"wait 5000 prepare.outline.rows=5"}
+{"k":"frame","t":1655299416,"n":62,"busy":37350375,"d":{"prepare.bar.hid":"1","prepare.checkBtn.en":"0","prepare.checkBtn.title":"Check Again","prepare.info.str":"Choose a playlist on the left to see what preparing it takes. Its stems are kept until the date below, then Stems Cache treats them like any others.","prepare.pauseBtn.hid":"1","prepare.pauseBtn.title":"Pause","prepare.prepareBtn.en":"0","prepare.prepareBtn.title":"Prepare","prepare.stopBtn.hid":"1","prepare.stopBtn.title":"Stop","prepare.until.days":"10","prepare.view0.hid":"0","prepare.view0.str":"Keep the stems until","tab.sel":"1","win.title":"Prepare - TEST BUILD, downloads from http://192.168.64.1:8765/"}}
+{"k":"set","t":1716141958,"f":"prepare.outline","s":"reloadData","v":"3"}
+{"k":"set","t":1720884875,"f":"status.table","s":"reloadData","v":"0"}
+{"k":"set","t":1720910125,"f":"prepare.nameLabel","s":"setStringValue","v":"Choose a playlist"}
+{"k":"set","t":1720931625,"f":"prepare.info","s":"setAttributedStringValue","v":"Choose a playlist on the left to see what preparing it takes. Its stems are kept until the date below, then Stems Cache treats them like any others."}
+{"k":"set","t":1720938000,"f":"prepare.prepareBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1720940291,"f":"prepare.prepareBtn","s":"setTitle","v":"Prepare"}
+{"k":"set","t":1720942250,"f":"prepare.checkBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1720945458,"f":"prepare.until","s":"setEnabled","v":"1"}
+{"k":"set","t":1720946583,"f":"prepare.pauseBtn","s":"setHidden","v":"1"}
+{"k":"set","t":1720947708,"f":"prepare.stopBtn","s":"setHidden","v":"1"}
+{"k":"set","t":1720949500,"f":"prepare.bar","s":"setHidden","v":"1"}
+{"k":"set","t":1720950416,"f":"prepare.checkBtn","s":"setHidden","v":"0"}
+{"k":"set","t":1720951458,"f":"prepare.prepareBtn","s":"setHidden","v":"0"}
+{"k":"set","t":1720952500,"f":"prepare.runGap","s":"setHidden","v":"0"}
+{"k":"set","t":1720953541,"f":"prepare.pauseBtn","s":"setTitle","v":"Pause"}
+{"k":"set","t":1720955208,"f":"prepare.bar","s":"setDoubleValue","v":"0.000"}
+{"k":"set","t":1720964375,"f":"prepare.outline","s":"setEnabled","v":"1"}
+{"k":"set","t":1720968458,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1720974625,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1720977875,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"set","t":1722102666,"f":"prepare.tracksTable","s":"reloadData","v":"0"}
+{"k":"set","t":1722114166,"f":"prepare.nameLabel","s":"setStringValue","v":"Choose a playlist"}
+{"k":"set","t":1722126791,"f":"prepare.info","s":"setAttributedStringValue","v":"Choose a playlist on the left to see what preparing it takes. Its stems are kept until the date below, then Stems Cache treats them like any others."}
+{"k":"set","t":1722133166,"f":"prepare.prepareBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1722134833,"f":"prepare.prepareBtn","s":"setTitle","v":"Prepare"}
+{"k":"set","t":1722136625,"f":"prepare.checkBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1722138458,"f":"prepare.until","s":"setEnabled","v":"1"}
+{"k":"set","t":1722139708,"f":"prepare.pauseBtn","s":"setHidden","v":"1"}
+{"k":"set","t":1722141083,"f":"prepare.stopBtn","s":"setHidden","v":"1"}
+{"k":"set","t":1722142458,"f":"prepare.bar","s":"setHidden","v":"1"}
+{"k":"set","t":1722143375,"f":"prepare.checkBtn","s":"setHidden","v":"0"}
+{"k":"set","t":1722144625,"f":"prepare.prepareBtn","s":"setHidden","v":"0"}
+{"k":"set","t":1722145833,"f":"prepare.runGap","s":"setHidden","v":"0"}
+{"k":"set","t":1722146791,"f":"prepare.pauseBtn","s":"setTitle","v":"Pause"}
+{"k":"set","t":1722148125,"f":"prepare.bar","s":"setDoubleValue","v":"0.000"}
+{"k":"set","t":1722152750,"f":"prepare.outline","s":"setEnabled","v":"1"}
+{"k":"set","t":1722155250,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1722156208,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1722157750,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"frame","t":1725956541,"n":76,"busy":9957041,"d":{"prepare.outline.r0":"v Sets","prepare.outline.r1":"    Friday  (3)","prepare.outline.r2":"    Late  (1)","prepare.outline.r3":"  Warm-up  (2)","prepare.outline.r4":"  Smart","prepare.outline.rows":"5"}}
+{"k":"ev","t":1729933583,"e":"cmd","v":"select 2"}
+{"k":"set","t":1731175000,"f":"prepare.tracksTable","s":"reloadData","v":"0"}
+{"k":"set","t":1731197958,"f":"prepare.nameLabel","s":"setStringValue","v":"Friday"}
+{"k":"set","t":1731225125,"f":"prepare.info","s":"setAttributedStringValue","v":"Checking the playlist…"}
+{"k":"set","t":1731245666,"f":"prepare.prepareBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1731249000,"f":"prepare.prepareBtn","s":"setTitle","v":"Prepare"}
+{"k":"set","t":1731276833,"f":"prepare.checkBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":1731286333,"f":"prepare.until","s":"setEnabled","v":"1"}
+{"k":"set","t":1731288833,"f":"prepare.pauseBtn","s":"setHidden","v":"1"}
+{"k":"set","t":1731290166,"f":"prepare.stopBtn","s":"setHidden","v":"1"}
+{"k":"set","t":1731291708,"f":"prepare.bar","s":"setHidden","v":"1"}
+{"k":"set","t":1731292833,"f":"prepare.checkBtn","s":"setHidden","v":"0"}
+{"k":"set","t":1731294041,"f":"prepare.prepareBtn","s":"setHidden","v":"0"}
+{"k":"set","t":1731295208,"f":"prepare.runGap","s":"setHidden","v":"0"}
+{"k":"set","t":1731296583,"f":"prepare.pauseBtn","s":"setTitle","v":"Pause"}
+{"k":"set","t":1731298625,"f":"prepare.bar","s":"setDoubleValue","v":"0.000"}
+{"k":"set","t":1731307541,"f":"prepare.outline","s":"setEnabled","v":"1"}
+{"k":"set","t":1731312500,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1731313750,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":1731316458,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"frame","t":1731428333,"n":78,"busy":1731750,"d":{"menu.Prepare.Check Again.en":"1","prepare.checkBtn.en":"1","prepare.info.str":"Checking the playlist…","prepare.nameLabel.str":"Friday","prepare.outline.sel":"1"}}
+{"k":"ev","t":1736680875,"e":"cmd","v":"wait 5000 prepare.prepareBtn.en=1"}
+{"k":"set","t":1800166833,"f":"prepare.tracksTable","s":"reloadData","v":"3"}
+{"k":"frame","t":1800186000,"n":91,"busy":88000,"d":{"prepare.tracksTable.r0":"friday-a.mp3 | Checking… | ","prepare.tracksTable.r1":"friday-b.mp3 | Checking… | ","prepare.tracksTable.r2":"friday-c.mp3 | Checking… | ","prepare.tracksTable.rows":"3"}}
+{"k":"set","t":1916898000,"f":"prepare.tracksTable","s":"reloadDataForRowIndexes","v":"0"}
+{"k":"frame","t":1917120500,"n":111,"busy":1214166,"d":{"prepare.tracksTable.r0":"friday-a.mp3 | Ready | "}}
+{"k":"set","t":2027086875,"f":"prepare.tracksTable","s":"reloadDataForRowIndexes","v":"1"}
+{"k":"frame","t":2027257833,"n":132,"busy":941958,"d":{"prepare.tracksTable.r1":"friday-b.mp3 | To prepare | 5 min"}}
+{"k":"set","t":2132215416,"f":"prepare.tracksTable","s":"reloadDataForRowIndexes","v":"2"}
+{"k":"frame","t":2132376208,"n":150,"busy":946541,"d":{"prepare.tracksTable.r2":"friday-c.mp3 | To prepare | 3 min"}}
+{"k":"ev","t":2236693125,"e":"tp","v":"estimate.lastline"}
+{"k":"set","t":2302183041,"f":"prepare.tracksTable","s":"reloadData","v":"3"}
+{"k":"set","t":2302213166,"f":"prepare.nameLabel","s":"setStringValue","v":"Friday"}
+{"k":"set","t":2302253208,"f":"prepare.info","s":"setAttributedStringValue","v":"1 track ready, 2 to prepare (8 min of music). About 133 MB and 2 min. Prepared playlists will use 256 MB of the 15.0 GB they may use (75% of Stems Cache's 20 GB limit)."}
+{"k":"set","t":2302300208,"f":"prepare.prepareBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":2302311250,"f":"prepare.prepareBtn","s":"setTitle","v":"Prepare"}
+{"k":"set","t":2302314833,"f":"prepare.checkBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":2302317791,"f":"prepare.until","s":"setEnabled","v":"1"}
+{"k":"set","t":2302320000,"f":"prepare.pauseBtn","s":"setHidden","v":"1"}
+{"k":"set","t":2302321750,"f":"prepare.stopBtn","s":"setHidden","v":"1"}
+{"k":"set","t":2302323416,"f":"prepare.bar","s":"setHidden","v":"1"}
+{"k":"set","t":2302324791,"f":"prepare.checkBtn","s":"setHidden","v":"0"}
+{"k":"set","t":2302326333,"f":"prepare.prepareBtn","s":"setHidden","v":"0"}
+{"k":"set","t":2302327666,"f":"prepare.runGap","s":"setHidden","v":"0"}
+{"k":"set","t":2302328875,"f":"prepare.pauseBtn","s":"setTitle","v":"Pause"}
+{"k":"set","t":2302330791,"f":"prepare.bar","s":"setDoubleValue","v":"0.000"}
+{"k":"set","t":2302335833,"f":"prepare.outline","s":"setEnabled","v":"1"}
+{"k":"set","t":2302340041,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2302341458,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2302344708,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"frame","t":2302943541,"n":179,"busy":1265583,"d":{"prepare.info.str":"1 track ready, 2 to prepare (8 min of music). About 133 MB and 2 min. Prepared playlists will use 256 MB of the 15.0 GB they may use (75% of Stems Cache's 20 GB limit).","prepare.prepareBtn.en":"1"}}
+{"k":"ev","t":2335570875,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":2790300958,"e":"didResignActive","v":""}
+{"k":"ev","t":2796779708,"e":"cmd","v":"wait 5000 app.active=0"}
+{"k":"frame","t":2796874791,"n":256,"busy":7971583,"d":{"app.active":"0","menu.Window.Close.en":"0","menu.Window.Minimize.en":"0","win.key":"0"}}
+{"k":"ev","t":2806590208,"e":"cmd","v":"count didBecomeActive"}
+{"k":"ev","t":2813248166,"e":"cmd","v":"count reopen"}
+{"k":"ev","t":2853293541,"e":"cmd","v":"event 5000 didBecomeActive 2"}
+{"k":"ev","t":2859075000,"e":"reopen","v":""}
+{"k":"ev","t":2859688708,"e":"didBecomeActive","v":""}
+{"k":"ev","t":2859705000,"e":"tp","v":"trigger.activate"}
+{"k":"frame","t":2864666416,"n":276,"busy":7336791,"d":{"app.active":"1","menu.Window.Close.en":"1","menu.Window.Minimize.en":"1","win.key":"1"}}
+{"k":"ev","t":2867876750,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":2868226666,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":2868237708,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is on."}
+{"k":"set","t":2868350875,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":2868361041,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":2868376791,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":2868378916,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":2868459166,"f":"c.cacheIcon","s":"setImage","v":"on"}
+{"k":"set","t":2868465333,"f":"c.cacheIcon","s":"setContentTintColor","v":"#34c759"}
+{"k":"set","t":2868473208,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":2868475041,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":2868896958,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":2868904625,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2868906416,"f":"c.reinstallBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":2868908833,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Stems Cache"}
+{"k":"set","t":2868911250,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2868912625,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":2868914041,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":2868915125,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2868916416,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":2868918875,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":2868920000,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":2869001416,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":2869007666,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":2897909166,"e":"cmd","v":"wait 2000 app.active=1"}
+{"k":"ev","t":2902683583,"e":"cmd","v":"event 3000 reopen 1"}
+{"k":"ev","t":2909946416,"e":"cmd","v":"quiet 400 15000"}
+{"k":"set","t":2935118416,"f":"status.table","s":"reloadData","v":"0"}
+{"k":"set","t":2935133583,"f":"prepare.nameLabel","s":"setStringValue","v":"Friday"}
+{"k":"set","t":2935169000,"f":"prepare.info","s":"setAttributedStringValue","v":"Stems Cache is turned off in config.ini (enabled=0)."}
+{"k":"set","t":2935202541,"f":"prepare.prepareBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2935210958,"f":"prepare.prepareBtn","s":"setTitle","v":"Prepare"}
+{"k":"set","t":2935213541,"f":"prepare.checkBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":2935215833,"f":"prepare.until","s":"setEnabled","v":"1"}
+{"k":"set","t":2935217583,"f":"prepare.pauseBtn","s":"setHidden","v":"1"}
+{"k":"set","t":2935218791,"f":"prepare.stopBtn","s":"setHidden","v":"1"}
+{"k":"set","t":2935220041,"f":"prepare.bar","s":"setHidden","v":"1"}
+{"k":"set","t":2935220916,"f":"prepare.checkBtn","s":"setHidden","v":"0"}
+{"k":"set","t":2935221833,"f":"prepare.prepareBtn","s":"setHidden","v":"0"}
+{"k":"set","t":2935222875,"f":"prepare.runGap","s":"setHidden","v":"0"}
+{"k":"set","t":2935223791,"f":"prepare.pauseBtn","s":"setTitle","v":"Pause"}
+{"k":"set","t":2935225250,"f":"prepare.bar","s":"setDoubleValue","v":"0.000"}
+{"k":"set","t":2935230041,"f":"prepare.outline","s":"setEnabled","v":"1"}
+{"k":"set","t":2935233166,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2935234166,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2935236583,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"set","t":2936547250,"f":"prepare.tracksTable","s":"reloadData","v":"3"}
+{"k":"set","t":2936557125,"f":"prepare.nameLabel","s":"setStringValue","v":"Friday"}
+{"k":"set","t":2936569875,"f":"prepare.info","s":"setAttributedStringValue","v":"Stems Cache is turned off in config.ini (enabled=0)."}
+{"k":"set","t":2936573541,"f":"prepare.prepareBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2936575166,"f":"prepare.prepareBtn","s":"setTitle","v":"Prepare"}
+{"k":"set","t":2936577125,"f":"prepare.checkBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":2936578583,"f":"prepare.until","s":"setEnabled","v":"1"}
+{"k":"set","t":2936579916,"f":"prepare.pauseBtn","s":"setHidden","v":"1"}
+{"k":"set","t":2936581166,"f":"prepare.stopBtn","s":"setHidden","v":"1"}
+{"k":"set","t":2936582250,"f":"prepare.bar","s":"setHidden","v":"1"}
+{"k":"set","t":2936583291,"f":"prepare.checkBtn","s":"setHidden","v":"0"}
+{"k":"set","t":2936584375,"f":"prepare.prepareBtn","s":"setHidden","v":"0"}
+{"k":"set","t":2936585583,"f":"prepare.runGap","s":"setHidden","v":"0"}
+{"k":"set","t":2936586875,"f":"prepare.pauseBtn","s":"setTitle","v":"Pause"}
+{"k":"set","t":2936588416,"f":"prepare.bar","s":"setDoubleValue","v":"0.000"}
+{"k":"set","t":2936593166,"f":"prepare.outline","s":"setEnabled","v":"1"}
+{"k":"set","t":2936595708,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2936596791,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":2936598500,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"frame","t":2937121708,"n":291,"busy":2086708,"d":{"prepare.info.str":"Stems Cache is turned off in config.ini (enabled=0).","prepare.prepareBtn.en":"0","prepare.tracksTable.r0":"friday-a.mp3 | Not checked | ","prepare.tracksTable.r1":"friday-b.mp3 | Not checked | ","prepare.tracksTable.r2":"friday-c.mp3 | Not checked | "}}
+{"k":"set","t":3003972708,"f":"prepare.tracksTable","s":"reloadData","v":"3"}
+{"k":"ev","t":3385917666,"e":"cmd","v":"wait 5000 app.active=0"}
+{"k":"ev","t":3389865125,"e":"didResignActive","v":""}
+{"k":"frame","t":3395155000,"n":368,"busy":6221500,"d":{"app.active":"0","menu.Window.Close.en":"0","menu.Window.Minimize.en":"0","win.key":"0"}}
+{"k":"ev","t":3434679250,"e":"cmd","v":"count didBecomeActive"}
+{"k":"ev","t":3443608125,"e":"cmd","v":"count reopen"}
+{"k":"ev","t":3475226125,"e":"didBecomeActive","v":""}
+{"k":"ev","t":3475238625,"e":"tp","v":"trigger.activate"}
+{"k":"ev","t":3479607583,"e":"cmd","v":"event 5000 didBecomeActive 3"}
+{"k":"frame","t":3479792041,"n":383,"busy":5830291,"d":{"app.active":"1","menu.Window.Close.en":"1","menu.Window.Minimize.en":"1","win.key":"1"}}
+{"k":"set","t":3482163708,"f":"prepare.tracksTable","s":"reloadData","v":"3"}
+{"k":"set","t":3482177041,"f":"prepare.nameLabel","s":"setStringValue","v":"Friday"}
+{"k":"set","t":3482193833,"f":"prepare.info","s":"setAttributedStringValue","v":"Stems Cache is turned off in config.ini (enabled=0)."}
+{"k":"set","t":3482198500,"f":"prepare.prepareBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3482200333,"f":"prepare.prepareBtn","s":"setTitle","v":"Prepare"}
+{"k":"set","t":3482202291,"f":"prepare.checkBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3482204333,"f":"prepare.until","s":"setEnabled","v":"1"}
+{"k":"set","t":3482206416,"f":"prepare.pauseBtn","s":"setHidden","v":"1"}
+{"k":"set","t":3482207708,"f":"prepare.stopBtn","s":"setHidden","v":"1"}
+{"k":"set","t":3482209375,"f":"prepare.bar","s":"setHidden","v":"1"}
+{"k":"set","t":3482210916,"f":"prepare.checkBtn","s":"setHidden","v":"0"}
+{"k":"set","t":3482212291,"f":"prepare.prepareBtn","s":"setHidden","v":"0"}
+{"k":"set","t":3482214083,"f":"prepare.runGap","s":"setHidden","v":"0"}
+{"k":"set","t":3482215625,"f":"prepare.pauseBtn","s":"setTitle","v":"Pause"}
+{"k":"set","t":3482218083,"f":"prepare.bar","s":"setDoubleValue","v":"0.000"}
+{"k":"set","t":3482223750,"f":"prepare.outline","s":"setEnabled","v":"1"}
+{"k":"set","t":3482227500,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3482228708,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3482231583,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"ev","t":3483304416,"e":"tp","v":"refresh.begin"}
+{"k":"set","t":3483655791,"f":"status.plusTip","s":"setStringValue","v":"Demucs v4 is off."}
+{"k":"set","t":3483667750,"f":"status.cacheTip","s":"setStringValue","v":"Stems Cache is on."}
+{"k":"set","t":3483771166,"f":"c.plusIcon","s":"setImage","v":"off"}
+{"k":"set","t":3483782125,"f":"c.plusIcon","s":"setContentTintColor","v":"#ff383c"}
+{"k":"set","t":3483794833,"f":"c.plusIcon","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":3483797125,"f":"c.plusLabel","s":"setToolTip","v":"Demucs v4 is off."}
+{"k":"set","t":3483877583,"f":"c.cacheIcon","s":"setImage","v":"on"}
+{"k":"set","t":3483887416,"f":"c.cacheIcon","s":"setContentTintColor","v":"#34c759"}
+{"k":"set","t":3483892666,"f":"c.cacheIcon","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":3483894250,"f":"c.cacheLabel","s":"setToolTip","v":"Stems Cache is on."}
+{"k":"set","t":3484293708,"f":"c.installPlusBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3484303708,"f":"c.installCacheBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3484305500,"f":"c.reinstallBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3484307416,"f":"c.reinstallBtn","s":"setTitle","v":"Reinstall Stems Cache"}
+{"k":"set","t":3484309958,"f":"c.reinstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3484311500,"f":"c.reinstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3484312958,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3484313958,"f":"c.uninstallPlusBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3484315333,"f":"c.uninstallCacheBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3484317875,"f":"c.settingsBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3484319041,"f":"c.uninstallAllBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3484394416,"f":"c.status","s":"setStringValue","v":""}
+{"k":"ev","t":3484403333,"e":"tp","v":"refresh.end"}
+{"k":"ev","t":3485899083,"e":"cmd","v":"wait 2000 app.active=1"}
+{"k":"ev","t":3490820083,"e":"cmd","v":"event 3000 reopen 2"}
+{"k":"ev","t":3490875333,"e":"reopen","v":""}
+{"k":"ev","t":3531285416,"e":"cmd","v":"wait 5000 prepare.prepareBtn.en=1"}
+{"k":"set","t":3548871625,"f":"status.table","s":"reloadData","v":"0"}
+{"k":"set","t":3548887250,"f":"prepare.nameLabel","s":"setStringValue","v":"Friday"}
+{"k":"set","t":3548941583,"f":"prepare.info","s":"setAttributedStringValue","v":""}
+{"k":"set","t":3548951166,"f":"prepare.prepareBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3548954166,"f":"prepare.prepareBtn","s":"setTitle","v":"Prepare"}
+{"k":"set","t":3548956083,"f":"prepare.checkBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3548958541,"f":"prepare.until","s":"setEnabled","v":"1"}
+{"k":"set","t":3548960541,"f":"prepare.pauseBtn","s":"setHidden","v":"1"}
+{"k":"set","t":3548962041,"f":"prepare.stopBtn","s":"setHidden","v":"1"}
+{"k":"set","t":3548963458,"f":"prepare.bar","s":"setHidden","v":"1"}
+{"k":"set","t":3548964666,"f":"prepare.checkBtn","s":"setHidden","v":"0"}
+{"k":"set","t":3548965833,"f":"prepare.prepareBtn","s":"setHidden","v":"0"}
+{"k":"set","t":3548967208,"f":"prepare.runGap","s":"setHidden","v":"0"}
+{"k":"set","t":3548968500,"f":"prepare.pauseBtn","s":"setTitle","v":"Pause"}
+{"k":"set","t":3548970333,"f":"prepare.bar","s":"setDoubleValue","v":"0.000"}
+{"k":"set","t":3548976125,"f":"prepare.outline","s":"setEnabled","v":"1"}
+{"k":"set","t":3548979250,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3548980333,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3548982791,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"set","t":3550652666,"f":"prepare.tracksTable","s":"reloadData","v":"3"}
+{"k":"set","t":3550662875,"f":"prepare.nameLabel","s":"setStringValue","v":"Friday"}
+{"k":"set","t":3550682250,"f":"prepare.info","s":"setAttributedStringValue","v":"Checking the playlist…"}
+{"k":"set","t":3550687666,"f":"prepare.prepareBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3550689625,"f":"prepare.prepareBtn","s":"setTitle","v":"Prepare"}
+{"k":"set","t":3550691500,"f":"prepare.checkBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":3550692875,"f":"prepare.until","s":"setEnabled","v":"1"}
+{"k":"set","t":3550694375,"f":"prepare.pauseBtn","s":"setHidden","v":"1"}
+{"k":"set","t":3550695708,"f":"prepare.stopBtn","s":"setHidden","v":"1"}
+{"k":"set","t":3550696833,"f":"prepare.bar","s":"setHidden","v":"1"}
+{"k":"set","t":3550697875,"f":"prepare.checkBtn","s":"setHidden","v":"0"}
+{"k":"set","t":3550699125,"f":"prepare.prepareBtn","s":"setHidden","v":"0"}
+{"k":"set","t":3550700208,"f":"prepare.runGap","s":"setHidden","v":"0"}
+{"k":"set","t":3550701333,"f":"prepare.pauseBtn","s":"setTitle","v":"Pause"}
+{"k":"set","t":3550702750,"f":"prepare.bar","s":"setDoubleValue","v":"0.000"}
+{"k":"set","t":3550706833,"f":"prepare.outline","s":"setEnabled","v":"1"}
+{"k":"set","t":3550709291,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3550710208,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":3550711916,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"frame","t":3551235333,"n":396,"busy":2449000,"d":{"prepare.info.str":"Checking the playlist…","prepare.tracksTable.r0":"friday-a.mp3 | Checking… | ","prepare.tracksTable.r1":"friday-b.mp3 | Checking… | ","prepare.tracksTable.r2":"friday-c.mp3 | Checking… | "}}
+{"k":"set","t":3617680958,"f":"prepare.tracksTable","s":"reloadData","v":"3"}
+{"k":"set","t":3728913458,"f":"prepare.tracksTable","s":"reloadDataForRowIndexes","v":"0"}
+{"k":"frame","t":3729115250,"n":427,"busy":1144333,"d":{"prepare.tracksTable.r0":"friday-a.mp3 | Ready | "}}
+{"k":"set","t":3842699208,"f":"prepare.tracksTable","s":"reloadDataForRowIndexes","v":"1"}
+{"k":"frame","t":3842945666,"n":445,"busy":1178250,"d":{"prepare.tracksTable.r1":"friday-b.mp3 | To prepare | 5 min"}}
+{"k":"set","t":3949645708,"f":"prepare.tracksTable","s":"reloadDataForRowIndexes","v":"2"}
+{"k":"frame","t":3949886500,"n":462,"busy":1339833,"d":{"prepare.tracksTable.r2":"friday-c.mp3 | To prepare | 3 min"}}
+{"k":"ev","t":4069658458,"e":"tp","v":"estimate.lastline"}
+{"k":"set","t":4137447875,"f":"prepare.tracksTable","s":"reloadData","v":"3"}
+{"k":"set","t":4137475708,"f":"prepare.nameLabel","s":"setStringValue","v":"Friday"}
+{"k":"set","t":4137521041,"f":"prepare.info","s":"setAttributedStringValue","v":"1 track ready, 2 to prepare (8 min of music). About 133 MB and 2 min. Prepared playlists will use 256 MB of the 15.0 GB they may use (75% of Stems Cache's 20 GB limit)."}
+{"k":"set","t":4137575666,"f":"prepare.prepareBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":4137587291,"f":"prepare.prepareBtn","s":"setTitle","v":"Prepare"}
+{"k":"set","t":4137590958,"f":"prepare.checkBtn","s":"setEnabled","v":"1"}
+{"k":"set","t":4137593583,"f":"prepare.until","s":"setEnabled","v":"1"}
+{"k":"set","t":4137596375,"f":"prepare.pauseBtn","s":"setHidden","v":"1"}
+{"k":"set","t":4137598083,"f":"prepare.stopBtn","s":"setHidden","v":"1"}
+{"k":"set","t":4137599916,"f":"prepare.bar","s":"setHidden","v":"1"}
+{"k":"set","t":4137601541,"f":"prepare.checkBtn","s":"setHidden","v":"0"}
+{"k":"set","t":4137603250,"f":"prepare.prepareBtn","s":"setHidden","v":"0"}
+{"k":"set","t":4137605041,"f":"prepare.runGap","s":"setHidden","v":"0"}
+{"k":"set","t":4137606791,"f":"prepare.pauseBtn","s":"setTitle","v":"Pause"}
+{"k":"set","t":4137609291,"f":"prepare.bar","s":"setDoubleValue","v":"0.000"}
+{"k":"set","t":4137615708,"f":"prepare.outline","s":"setEnabled","v":"1"}
+{"k":"set","t":4137621291,"f":"status.againBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":4137622708,"f":"status.stopBtn","s":"setEnabled","v":"0"}
+{"k":"set","t":4137626083,"f":"status.runLine","s":"setStringValue","v":""}
+{"k":"frame","t":4138276208,"n":493,"busy":1370333,"d":{"prepare.info.str":"1 track ready, 2 to prepare (8 min of music). About 133 MB and 2 min. Prepared playlists will use 256 MB of the 15.0 GB they may use (75% of Stems Cache's 20 GB limit).","prepare.prepareBtn.en":"1"}}
+{"k":"ev","t":4152010375,"e":"cmd","v":"quiet 400 15000"}
+{"k":"ev","t":4607989833,"e":"cmd","v":"quit "}
+{"k":"ev","t":4611189958,"e":"willTerminate","v":""}

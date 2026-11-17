@@ -1,0 +1,30 @@
+# T17: the app's own update (release.md section 7, section 8's "install, update ... a carried
+# release"; app.md 5.4). Three TEST releases in the share, each a whole release folder made by
+# scripts/build.sh --test http://10.211.55.2:8766/current/ (the URL the TEST app checks):
+#   dist-test/a/        the first release (installed by the one-liner)
+#   dist-test/carried/  a later payload_version whose windows.app.version is a's (carried)
+#   dist-test/new/      a release with a newer windows.app.version (an update)
+# The switch steps copy one of them into dist-test/current/ from the VM (as SYSTEM); the last
+# step deletes current/ again from the VM side (files the VM writes in the share are root's on
+# the Mac). A run that stops before switch-clean leaves current/ there, which the Mac can't delete
+# and a later run would serve: delete it from the VM before the next run (the VM running, e.g.
+# after --keep): echo "Remove-Item -Recurse -Force '\\Mac\win\dist-test\current'" | tests/win/vm-run.sh sys 60
+# From "clean Windows":
+#   tests/win/vm-run.sh stage
+#   tests/win/vm-run.sh run "clean Windows" update
+include lib/vmlib.ps1
+need http
+need file repo/core/texts.def
+# new/ is this commit's release (--record: its payload's commit is HEAD); a/ and carried/ are
+# older ones, recorded as they are (current/ is the switch steps' copy, never named)
+need fixture dist-test/a/payload.json
+need fixture dist-test/carried/payload.json
+need candidate dist-test/new/payload.json
+# MODE       SECS NAME              SCRIPT
+sys          120  switch-a          update/switch.ps1
+user         600  install           update/install.ps1
+sys          120  switch-carried    update/switch.ps1
+user         300  carried           update/carried.ps1
+sys          120  switch-new        update/switch.ps1
+user         600  update            update/update.ps1
+sys          120  switch-clean      update/switch.ps1

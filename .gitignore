@@ -3,3 +3,6 @@ build/
 dist/
 dist-test/
 *.onnx
+gates-archive/
+__pycache__/
+*.pyc

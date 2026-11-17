@@ -1,16 +1,16 @@
 /* manifest.c: kept sets' manifests (manifest.h) */
 #include "manifest.h"
+#include "path_rules.h"
 #include <errno.h>
-#include <fcntl.h>
-#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
+#ifdef _WIN32
+#define getline plat_getline                    /* mingw-w64 has none; the Mac keeps libSystem's */
+#endif
 
 static const char HEAD[] = "rbstemsplus-manifest 1";
-
-long long mtime_ns(const struct stat *st) { return (long long)st->st_mtimespec.tv_sec * 1000000000LL + st->st_mtimespec.tv_nsec; }
 
 static int hex64(const char *s) {
     if (strlen(s) != 64) return 0;
@@ -39,9 +39,9 @@ static mfile *add(manifest *m, const char *path) {
     return f;
 }
 
-mfile *manifest_file(manifest *m, const char *path, const struct stat *st) {
+mfile *manifest_file(manifest *m, const char *path, const plat_finfo *fi) {
     mfile *f = add(m, path);
-    if (f) { f->size = (long long)st->st_size; f->mtime_ns = mtime_ns(st); }
+    if (f) { f->size = (long long)fi->size; f->mtime_ns = (long long)fi->mtime_ns; }
     return f;
 }
 
@@ -69,7 +69,7 @@ void manifest_keep_only(manifest *m, char **paths, size_t n) {
     size_t to = 0;
     for (size_t i = 0; i < m->n; i++) {
         size_t j = 0;
-        while (j < n && strcmp(paths[j], m->f[i].path)) j++;
+        while (j < n && !paths_same(paths[j], m->f[i].path)) j++;
         if (j < n) m->f[to++] = m->f[i];
         else { free(m->f[i].path); free(m->f[i].keys); }
     }
@@ -78,24 +78,27 @@ void manifest_keep_only(manifest *m, char **paths, size_t n) {
 
 const mfile *manifest_by_path(const manifest *m, const char *path) {
     const mfile *f = NULL;
-    for (size_t i = 0; i < m->n; i++) if (!strcmp(m->f[i].path, path)) f = &m->f[i];
+    for (size_t i = 0; i < m->n; i++) if (paths_same(m->f[i].path, path)) f = &m->f[i];
     return f;
 }
 
-const mfile *manifest_find(const manifest *m, const char *path, const struct stat *st) {
+const mfile *manifest_find(const manifest *m, const char *path, const plat_finfo *fi) {
     for (size_t i = 0; i < m->n; i++)
-        if (!strcmp(m->f[i].path, path) && m->f[i].size == (long long)st->st_size && m->f[i].mtime_ns == mtime_ns(st)) return &m->f[i];
+        if (paths_same(m->f[i].path, path) && m->f[i].size == (long long)fi->size && m->f[i].mtime_ns == (long long)fi->mtime_ns) return &m->f[i];
     return NULL;
 }
 
 int manifest_read(const char *dir, const char *name, manifest *m) {
     memset(m, 0, sizeof *m);
-    char p[PATH_MAX + 100];
-    snprintf(p, sizeof p, "%s/%s.manifest", dir, name);
-    int fd = open(p, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC);
-    struct stat st;
-    FILE *in = fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) ? fdopen(fd, "r") : NULL;
-    if (!in) { if (fd >= 0) close(fd); return -1; }
+    char p[300];                                /* a name in the folder: at most 255 bytes */
+    plat_dir d;
+    plat_file fd;
+    if (snprintf(p, sizeof p, "%s.manifest", name) >= (int)sizeof p || plat_dir_open(dir, &d)) return -1;
+    /* a regular file, no link followed, never blocking on a FIFO */
+    int e = plat_file_open_at(d, p, INT64_MAX, NULL, &fd);
+    plat_dir_close(d);
+    FILE *in = e ? NULL : plat_file_stdio(fd, "r");
+    if (!in) { plat_file_close(fd); return -1; }
     char *line = NULL;
     size_t cap = 0;
     ssize_t r;
@@ -143,14 +146,24 @@ static void put(FILE *o, const mfile *f) {
 }
 
 int manifest_write(const char *dir, const char *name, const manifest *m, const manifest *earlier, char *why, size_t n) {
-    char tmp[PATH_MAX + 100], path[PATH_MAX + 100];
-    snprintf(tmp, sizeof tmp, "%s/.%s.manifest.%d.tmp", dir, name, getpid());
-    snprintf(path, sizeof path, "%s/%s.manifest", dir, name);
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC, 0644);
-    FILE *o = fd >= 0 ? fdopen(fd, "w") : NULL;
+    char tmp[320], path[300];
+    plat_dir d;
+    plat_file fd = {0};
+    int e = 0;
+    FILE *o = NULL;
+    if (snprintf(tmp, sizeof tmp, ".%s.manifest.%d.tmp", name, plat_pid()) >= (int)sizeof tmp
+        || snprintf(path, sizeof path, "%s.manifest", name) >= (int)sizeof path) e = ENAMETOOLONG;
+    else if (!(e = plat_dir_open(dir, &d))) {
+        plat_unlink_at(d, tmp);                 /* an earlier process's with this pid */
+        if (!(e = plat_file_create_at(d, tmp, 0, &fd)) && !(o = plat_file_stdio(fd, "w"))) {
+            e = errno ? errno : EIO;
+            plat_file_close(fd);
+            plat_unlink_at(d, tmp);
+        }
+        if (!o) plat_dir_close(d);
+    }
     if (!o) {
-        if (fd >= 0) close(fd);
-        snprintf(why, n, "the set's manifest can't be written: %s", strerror(errno));
+        snprintf(why, n, "the set's manifest can't be written: %s", strerror(e));
         return -1;
     }
     fprintf(o, "%s\nhelper %s\nmodel %s\nplaylist %s\nrate %lld %.3f %d\n", HEAD, m->helper, m->model,
@@ -158,15 +171,16 @@ int manifest_write(const char *dir, const char *name, const manifest *m, const m
     for (size_t i = 0; i < m->n; i++) put(o, &m->f[i]);
     for (size_t i = 0; earlier && i < earlier->n; i++) {
         int seen = 0;
-        for (size_t j = 0; j < m->n && !seen; j++) seen = !strcmp(m->f[j].path, earlier->f[i].path);
+        for (size_t j = 0; j < m->n && !seen; j++) seen = paths_same(m->f[j].path, earlier->f[i].path);
         if (!seen) put(o, &earlier->f[i]);
     }
-    int bad = fflush(o) || fsync(fileno(o));
-    bad |= fclose(o);
-    if (bad || rename(tmp, path)) {
-        snprintf(why, n, "the set's manifest can't be written: %s", strerror(errno));
-        unlink(tmp);
-        return -1;
+    int bad = (e = plat_stdio_sync(o)) != 0;   /* the stream owns fd now: never touched again */
+    if (fclose(o) && !bad) { bad = 1; e = errno ? errno : EIO; }
+    if (!bad && (e = plat_rename_at(d, tmp, d, path)) != 0) bad = 1;
+    if (bad) {
+        snprintf(why, n, "the set's manifest can't be written: %s", strerror(e));
+        plat_unlink_at(d, tmp);
     }
-    return 0;
+    plat_dir_close(d);
+    return bad ? -1 : 0;
 }

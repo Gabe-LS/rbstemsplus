@@ -1,0 +1,18 @@
+# T17: the platform test exes in the VM, from the reviews' VM lists: plat-win-test on NTFS and on
+# exFAT (MQ4, models2-rr1's VM cases 1-2), location-win-test (T3c's ruling, cases 1, 2, 4 and 5),
+# the win/c test exes unelevated and elevated (app.md section 7). x64 and arm64: on an ARM64 VM
+# the x64 builds run under Prism too. From "clean Windows":
+#   tests/win/vm-run.sh stage --build       # outside the Mac sandbox (win/c's Swift fixtures)
+#   tests/win/vm-run.sh run "clean Windows" platform
+# stage --build builds winc-wintest, winc-app-wintest, plat-win-test, checked.dll,
+# location-win-test and fixtures.txt for both architectures. A step whose exe
+# (for an architecture) isn't staged SKIPs. The location step maps \\Mac\win as a drive in its
+# own session when none is there. The cases a run can't drive are in by-hand.md.
+include lib/vmlib.ps1
+need vm
+# MODE       SECS NAME                SCRIPT
+sys          300  vhd                 platform/vhd.ps1
+user         600  plat-win-test       platform/plat-win-test.ps1
+user         600  location            platform/location.ps1
+user         600  wintests            platform/wintests.ps1
+user-high    600  wintests-elevated   platform/wintests.ps1

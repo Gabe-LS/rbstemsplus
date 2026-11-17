@@ -22,9 +22,6 @@ struct LocationSnapshot: Equatable {
     /// the app's probe of the chosen folder (also while an older bridge saves on this Mac)
     var probe: LocationProbe?
 
-    /// Whether the chosen folder can be cleared or deleted now.
-    var chosenAvailable: Bool { probe == .available }
-
     /// The chosen folder as it can be deleted now (its path and marker id), or nil.
     var deletableGate: LocationGate? {
         guard probe == .available else { return nil }

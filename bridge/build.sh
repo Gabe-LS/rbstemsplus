@@ -7,6 +7,8 @@
 #   bridge/build.sh --test REAL_PATH OUT  for bridge/tests only: the bridge loads the real library
 #                                         from REAL_PATH instead of the contract path
 #                                         (RBSTEMS_SANITIZE=1: with ASan and UBSan)
+#   bridge/build.sh --test-timing REAL_PATH OUT   the same test build with the performance timing
+#                                         lines (bridge/tests/perf.sh; never a release)
 #   bridge/build.sh --fuzz OUT            bridge/tests/fuzz.c with ASan and UBSan, for this Mac's
 #                                         architecture only, into OUT/fuzz
 #
@@ -15,6 +17,9 @@
 # every build; libFLAC is then built from it, per architecture, every time, in a scratch folder:
 # no library built earlier is reused. The result is reproducible: the same source and toolchain
 # give the same bytes. Needs Xcode's command line tools, nothing else.
+#
+# Next to the bridge, OUT/libonnxruntime.1.18.0.dylib.inputs: the repository files that reach its
+# bytes (from the compiles' depfiles, and this script), for the Mac carry-forward (release.sh).
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/.." && pwd)"
@@ -29,13 +34,15 @@ LIB=libonnxruntime.1.18.0.dylib
 
 test_path=
 fuzz=
+timing=
 if [ "${1:-}" = "--fuzz" ]; then
   [ $# -eq 2 ] || { echo "usage: $0 --fuzz OUT" >&2; exit 2; }
   fuzz=1
   ARCHS="$(uname -m)"
   shift
-elif [ "${1:-}" = "--test" ]; then
-  [ $# -eq 3 ] || { echo "usage: $0 --test REAL_PATH OUT" >&2; exit 2; }
+elif [ "${1:-}" = "--test" ] || [ "${1:-}" = "--test-timing" ]; then
+  [ $# -eq 3 ] || { echo "usage: $0 $1 REAL_PATH OUT" >&2; exit 2; }
+  [ "$1" = "--test" ] || timing=1
   test_path="$2"
   case "$test_path" in *'"'*|*'\'*) echo "REAL_PATH can't contain \" or \\" >&2; exit 2 ;; esac
   shift 2
@@ -106,10 +113,12 @@ fi
 # ---------------------------------------------------------------- the bridge
 
 defines=
+tdef=
 note="release"
 if [ -n "$test_path" ]; then
   defines="-DRBSTEMS_TEST_REAL_PATH=\"$test_path\""
   note="TEST: real library from $test_path"
+  if [ -n "$timing" ]; then tdef=-DRBSTEMS_TEST_TIMING; note="$note, TIMING lines"; fi
 fi
 # research only: RBSTEMS_DUMP_DIR=/Users/Shared/rbstems-dump writes every chunk rekordbox sends
 # there (scripts/build.sh refuses it for a release)
@@ -125,7 +134,7 @@ for arch in $ARCHS; do
   extra=
   if [ -n "$test_path" ] && [ "${RBSTEMS_SANITIZE:-}" = 1 ]; then extra="$sanitize"; fi
   clang -dynamiclib -O2 -arch "$arch" -mmacosx-version-min=$MIN_MACOS -Wall -Wextra -fvisibility=hidden $extra \
-    ${defines:+"$defines"} ${dump:+"$dump"} -I"$here" -I"$prefix/include" \
+    ${defines:+"$defines"} ${tdef:+"$tdef"} ${dump:+"$dump"} -I"$here" -I"$prefix/include" -MD -MF "$scratch/bridge-$arch.d" \
     "$here/rbstems_bridge.c" "$prefix/lib/libFLAC.a" -framework CoreFoundation -framework Accelerate \
     -Wl,-exported_symbol,_OrtGetApiBase \
     -Wl,-exported_symbol,_OrtSessionOptionsAppendExecutionProvider_CPU \
@@ -136,6 +145,14 @@ done
 lipo -create "$out/$LIB.arm64" "$out/$LIB.x86_64" -output "$out/$LIB"
 rm -f "$out/$LIB.arm64" "$out/$LIB.x86_64"
 codesign -f -s - "$out/$LIB"
+# the bridge's input list (the Mac carry-forward, scripts/mac-inputs.py): every repository file
+# its compiles read (the depfiles) and this script, which pins libFLAC
+# (the parser's own status checked, and an empty list refused: the list from before stays then)
+deps="$(python3 -I "$root/scripts/mac-inputs.py" deps "$root" "$scratch"/bridge-*.d)" \
+  || { echo "bridge/build.sh: the depfiles of $LIB couldn't be read" >&2; exit 1; }
+[ -n "$deps" ] || { echo "bridge/build.sh: no input list for $LIB" >&2; exit 1; }
+printf '%s\nbridge/build.sh\n' "$deps" | LC_ALL=C sort -u > "$out/$LIB.inputs.tmp"
+mv "$out/$LIB.inputs.tmp" "$out/$LIB.inputs"
 
 # ---------------------------------------------------------------- checks
 
@@ -159,6 +176,7 @@ if [ -z "$test_path" ]; then
   grep -aqF "$REAL_PATH" "$lib" || fail "the contract path $REAL_PATH is not in the release build"
   if grep -aq "TEST BUILD" "$lib"; then fail "a release build contains the test path override"; fi
   if grep -aq "RBSTEMS_TEST_" "$lib"; then fail "a release build reads test settings from the environment"; fi
+  if grep -aq "timing run=" "$lib"; then fail "a release build has the performance timing lines"; fi
 fi
 codesign --verify --strict "$lib" || fail "signature does not verify"
 echo "built $lib ($archs, macOS $MIN_MACOS+, $note)"

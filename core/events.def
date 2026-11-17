@@ -1,0 +1,55 @@
+/* events.def: the low-rate events core_event takes (mac-core §3.3), as {"ev":"<name>", ...}.
+ *
+ *   EVENT(id, name, os, keys)
+ *     keys: the other members it may have, space-separated; any other member is CORE_E_UNKNOWN.
+ *           Each handler checks its members' types and ranges before it acts (CORE_E_ARG).
+ *
+ * Every event that names a row carries "gen": the table's list_gen in the snapshot the shell
+ * rendered. An event whose gen isn't current is ignored, quietly (no dialog).
+ * Results from workers, flows and helper lines never come this way: they are typed jobs on main.
+ * Window close and quit asked are core_close_asked (they need an answer at once).
+ * Internal to the core (the event ids aren't in core.h): adding an event changes no ABI.
+ *
+ * Windows (W-core, app.md §4.3): the shell's activation aggregator is the only source of
+ * "activated". Its sources are Application.Activated (WM_ACTIVATEAPP: activation moving between
+ * our thread and another app's) and the main window leaving Minimized; several in one dispatcher
+ * turn send one event; activation moving among our own windows (dialogs, the folder picker,
+ * Settings, About, all owned by the main window) sends none, so closing a dialog never re-checks.
+ * Leaving Minimized is "activated" on Windows (Windows activates the window it restores), never
+ * "deminiaturized" as well. While a UAC elevation is in flight the activations still come, during
+ * the action that elevates: the core defers them as it defers any activation during an action
+ * (quietDuringAction), and front_facts carries CORE_FRONT_ELEVATING. A second start of the app sends
+ * "activated" then "check_request" to the first copy, as main.swift:169-172. "facts_warm" (Windows
+ * only): after an activation whose refresh found Pioneer's ORT unchecked (FACT_LIB_UNCHECKED), the
+ * shell reads the files again on a worker (core_win_warm_facts) and sends it when that ends: one
+ * refresh, nothing else.
+ */
+#ifndef EVENT
+#define EVENT(id, name, os, keys)
+#endif
+
+EVENT(EV_START,          "start",          all, "")            /* after core_new: read the cheap facts, set the start state */
+EVENT(EV_SHOWN,          "shown",          all, "")            /* the window is on screen: welcome, update result, resume, request, cache offer */
+EVENT(EV_ACTIVATED,      "activated",      all, "")
+EVENT(EV_DEACTIVATED,    "deactivated",    all, "")
+EVENT(EV_DEMINIATURIZED, "deminiaturized", all, "")            /* a quiet Prepare re-check only (Controller.swift:346) */
+EVENT(EV_REOPENED,       "reopened",       all, "")            /* open -a / a Dock click on the open app: checkRequest only (main.swift:167-170) */
+EVENT(EV_TAB,            "tab",            all, "tab")         /* tab: 0 status, 1 prepare, 2 manage */
+EVENT(EV_SELECT,         "select",         all, "table row gen") /* table: a table's name; row: its row, or -1 */
+EVENT(EV_FOLDER,         "folder",         all, "row open gen")  /* an outline row opened or closed, from user input only */
+EVENT(EV_CLICK,          "click",          all, "id")          /* id: a button's name */
+EVENT(EV_MENU,           "menu",           all, "id")          /* id: a menus.def item's event */
+EVENT(EV_MOUNT,          "mount",          all, "path")
+EVENT(EV_UNMOUNT,        "unmount",        all, "path")
+EVENT(EV_RENAME,         "rename",         all, "path name")   /* a volume renamed (LocationMonitor.swift:118) */
+EVENT(EV_BRIDGE_STATE,   "bridge_state",   all, "")
+EVENT(EV_SETTINGS,       "settings",       all, "key value")   /* a Settings edit */
+EVENT(EV_UNTIL,          "until",          all, "date")        /* Prepare's "until" date picker: date, YYYY-MM-DD */
+EVENT(EV_CHECK_REQUEST,  "check_request",  all, "")            /* the watcher's request changed / a second start */
+EVENT(EV_WATCH,          "watch",          all, "")            /* the watcher: the host's change notification starts a round */
+
+EVENT(EV_LOCATION,       "location",       all, "")            /* LocationMonitor.onChange: the host's location snapshot changed (M4; until its memo moves into the core) */
+
+EVENT(EV_FACTS_WARM,     "facts_warm",     win, "")            /* Windows: the shell's warm-up on activation ended (app.md §2 rule 1, HF2): one refresh, the files' pins and sha256 now memoised */
+
+#undef EVENT

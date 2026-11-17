@@ -209,10 +209,6 @@ func writeConfig(maxGB: Double, maxDays: Double, file: String = configFile) -> B
     writeConfigValues([("max_gb", configNumber(maxGB)), ("max_days", configNumber(maxDays))], file: file)
 }
 
-/// Turns saving rekordbox's own model's stems on or off for this account (rekordbox_model).
-@discardableResult
-func writeRekordboxModel(_ on: Bool) -> Bool { writeConfigValues([("rekordbox_model", on ? "1" : "0")]) }
-
 /// Where the stems are saved: our folder `dir` (always double-quoted: the path rules keep '"'
 /// out of it) and the marker's `id`; nil dir: this Mac (both keys removed).
 @discardableResult

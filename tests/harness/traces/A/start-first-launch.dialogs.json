@@ -1,0 +1,11 @@
+[
+ {
+  "n": 1,
+  "dialog": "Welcome to RB Stems Plus / Demucs v4 replaces rekordbox's own stems model with Meta's Demucs v4 separation model. The first separation of a track takes longer, and the two models split some sounds differently: listen and keep the one you prefer.\n\nStems Cache saves the separated stems, with either model, so a track's stems load much faster the next time. It changes one file inside rekordbox, so macOS will ask you to allow RB Stems Plus to change rekordbox.\n\nRB Stems Plus is unofficial: it isn't made or supported by AlphaTheta or Pioneer DJ. {Continue*}",
+  "origin": "main-queue-block",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ }
+]

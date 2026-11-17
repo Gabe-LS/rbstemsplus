@@ -1,0 +1,205 @@
+# deps.lock: every file a Windows build downloads, with its SHA-256, and the licence of each part
+# we use (release.md §9.1). Read by scripts/deps.sh (one awk reader, no JSON tool):
+# `deps.sh fetch NAME` and `deps.sh group NAME DIR` are the one way the Windows builds download,
+# `deps.sh licence NAME DIR` checks a component's licence files, `deps.sh check` (make check) is
+# the offline gate.
+#
+# Stanzas are separated by a blank line; `key = value` lines; `#` starts a comment line. Two kinds:
+#  - a download record: what is fetched (kind = archive | file), its url (https only) and sha256;
+#    group = a name for files fetched together into one folder (`deps.sh group`);
+#  - a component record, named <download>.<part>: one way we use a part of a download. from = the
+#    download (or downloads) it comes from; use = ships | links | build | test; spdx; licence-file
+#    (paths inside the download, or the file itself) with licence-sha256 in the same order
+#    (licence-from = the download holding them, when that isn't `from`); notice = the NOTICE or
+#    win/NOTICE.txt heading that covers it, or none (why).
+#
+# The Mac's pins stay where they are (bridge/build.sh FLAC_*, helper/build.sh SQLCIPHER_* and
+# PYREKORDBOX_*, scripts/win-cc.sh LLVM_MINGW_*): their rows here hold the same values and
+# `deps.sh check` compares the two, so the Mac files don't move (release.md §9.1).
+#
+# Not here yet (release.md T1-T6): pocketfft and BlocksRuntime, which scripts/win-deps.sh fetches
+# with its own pins, and the .NET and NuGet rows.
+
+[llvm-mingw]
+version = 20261104
+kind = archive
+url = https://github.com/mstorsjo/llvm-mingw/releases/download/20261104/llvm-mingw-20261104-ucrt-macos-universal.tar.xz
+sha256 = 66cbd5178c4a71b0d473e68ede172f8eb7d15d023e67f39201d0a69e21f6bf3c
+platform = windows
+checked = T28 2026-11-09
+
+[llvm-mingw.runtime]
+from = llvm-mingw
+use = links
+spdx = ZPL-2.1 AND ISC AND BSD-2-Clause AND MIT AND LicenseRef-mingw-w64-runtime-notices AND Apache-2.0 WITH LLVM-exception
+licence-file = x86_64-w64-mingw32/share/mingw32/COPYING.MinGW-w64-runtime.txt, LICENSE.TXT
+licence-sha256 = 1db8da07b436c68833c0673ffee3d9fcb2526047f3820b81661865dfedc79a1f, 8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee
+notice = win/NOTICE.txt: mingw-w64 runtime (in every C program and library)
+checked = T28 2026-11-09
+
+[llvm-mingw.tools]
+from = llvm-mingw
+use = build
+spdx = ISC AND Apache-2.0 WITH LLVM-exception AND ZPL-2.1 AND LGPL-2.1-or-later AND GPL-3.0-or-later
+licence-file = LICENSE.TXT
+licence-sha256 = 8d85c1057d742e597985c7d4e6320b015a9139385cff4cbae06ffc0ebe89afee
+notice = none (build only)
+checked = T28 2026-11-09
+
+[flac]
+version = 1.5.0
+kind = archive
+url = https://downloads.xiph.org/releases/flac/flac-1.5.0.tar.xz
+sha256 = f2c1c76592a82ffff8413ba3c4a1299b6c7ab06c734dee03fd88630485c2b920
+platform = both
+checked = T28 2026-11-09
+
+[flac.lib]
+from = flac
+use = links
+spdx = BSD-3-Clause
+licence-file = flac-1.5.0/COPYING.Xiph
+licence-sha256 = 7866ee98760fc1f0156b4fe6bf530257e02be487ab3fd94e2b63799dd32d6b2c
+notice = NOTICE: libFLAC (statically linked into the Stems Cache bridge and the prepare helper)
+checked = T28 2026-11-09
+
+[sqlcipher]
+version = 4.19.0
+kind = archive
+url = https://github.com/sqlcipher/sqlcipher/archive/refs/tags/v4.19.0.tar.gz
+sha256 = 7075f96cbabe45b4ecfc2e6b1745a625f856f695b0827a5506ce9ed85b906aa0
+platform = both
+checked = T28 2026-11-09
+
+[sqlcipher.lib]
+from = sqlcipher
+use = links
+spdx = BSD-3-Clause AND LicenseRef-SQLite-PublicDomain
+licence-file = sqlcipher-4.19.0/LICENSE.md
+licence-sha256 = 2a2826f6acf46fa650730cf42cbb22a642be33a7ef119c9c4f4bf6daf3bef48e
+notice = NOTICE: SQLCipher (compiled into the prepare helper)
+checked = T28 2026-11-09
+
+[pyrekordbox-database]
+version = 2dcb57f2ea907c51fa15850f5433ec09ff3223ff
+kind = file
+url = https://raw.githubusercontent.com/dylanljones/pyrekordbox/2dcb57f2ea907c51fa15850f5433ec09ff3223ff/pyrekordbox/masterdb/database.py
+sha256 = 1f9dc4ba70f079942eaf4a6fd3fcf8d1816fcd03a5723408f512e3b3683c7a3b
+platform = both
+checked = T28 2026-11-09
+
+[pyrekordbox-utils]
+version = 2dcb57f2ea907c51fa15850f5433ec09ff3223ff
+kind = file
+url = https://raw.githubusercontent.com/dylanljones/pyrekordbox/2dcb57f2ea907c51fa15850f5433ec09ff3223ff/pyrekordbox/utils.py
+sha256 = 7da83d3de766a2f352001e77b0caff92872569239d449648c1dc03fb28022289
+platform = both
+checked = T28 2026-11-09
+
+[pyrekordbox-licence]
+version = 2dcb57f2ea907c51fa15850f5433ec09ff3223ff
+kind = file
+url = https://raw.githubusercontent.com/dylanljones/pyrekordbox/2dcb57f2ea907c51fa15850f5433ec09ff3223ff/LICENSE
+sha256 = 25f5ab35823b250a45c8f4e76499adb4326aac92c824a37da950119fd9bd1f29
+platform = both
+checked = helper T3 2026-11-12
+
+# rekordbox's library key, read from the two files as literals (no pyrekordbox code is run or
+# included; the key's own sha256 is helper/build.sh's LIBKEY_SHA256), compiled in masked
+[pyrekordbox-database.key]
+from = pyrekordbox-database, pyrekordbox-utils
+use = ships
+spdx = MIT
+licence-from = pyrekordbox-licence
+licence-file = LICENSE
+licence-sha256 = 25f5ab35823b250a45c8f4e76499adb4326aac92c824a37da950119fd9bd1f29
+notice = NOTICE: pyrekordbox (where the library key comes from)
+checked = helper T3 2026-11-12
+
+[libtomcrypt]
+version = 1.18.2
+kind = archive
+url = https://github.com/libtom/libtomcrypt/releases/download/v1.18.2/crypt-1.18.2.tar.xz
+sha256 = 96ad4c3b8336050993c5bc2cf6c057484f2b0f9f763448151567fbab5e767b84
+platform = windows
+checked = T28 2026-11-09
+
+# public domain OR WTFPL: we use the public-domain option
+[libtomcrypt.lib]
+from = libtomcrypt
+use = links
+spdx = LicenseRef-LibTomCrypt-PublicDomain
+licence-file = libtomcrypt-1.18.2/LICENSE
+licence-sha256 = 8f196cb13afd271f5e267fd29543fc454596382ad580e7592709492843996ac8
+notice = win/NOTICE.txt: LibTomCrypt (compiled into the prepare helper)
+checked = T28 2026-11-09
+
+# Apple's ALAC decoder (Apache-2.0, the header of every file below), commit c38887c5 of
+# macosforge/alac: ALACBitUtilities.c and dp_dec.c compiled as they are, with their headers and
+# aglib.h; ALACDecoder.cpp (C++) and ag_dec.c's dyn_decomp are ported to C in helper/alac.c (that
+# file says so), so neither is fetched. codec/APPLE_LICENSE.txt in the same repository is an APSL
+# text none of these files refers to: not fetched, not used.
+
+[alac-license]
+version = c38887c5
+kind = file
+group = alac
+url = https://raw.githubusercontent.com/macosforge/alac/c38887c5c5e64a4b31108733bd79ca9b2496d987/LICENSE
+sha256 = a337314dd82d26791112c1e5a85725b2eb92f5b7e6f9102fa4eaa2903f77518f
+platform = windows
+checked = helper T9 2026-11-12
+
+[alac-alacbitutilities-c]
+version = c38887c5
+kind = file
+group = alac
+url = https://raw.githubusercontent.com/macosforge/alac/c38887c5c5e64a4b31108733bd79ca9b2496d987/codec/ALACBitUtilities.c
+sha256 = 276ac7d7f2d240a4b0437d7e222afcba4c78bd8fd8104d0e9c6b0d45f67abcfe
+platform = windows
+checked = helper T9 2026-11-12
+
+[alac-alacbitutilities-h]
+version = c38887c5
+kind = file
+group = alac
+url = https://raw.githubusercontent.com/macosforge/alac/c38887c5c5e64a4b31108733bd79ca9b2496d987/codec/ALACBitUtilities.h
+sha256 = 18d1c8f957a403cc5b9b7d99e9d3987001adeac6ceadb4a4b1b5dc1ea4bff8ca
+platform = windows
+checked = helper T9 2026-11-12
+
+[alac-aglib-h]
+version = c38887c5
+kind = file
+group = alac
+url = https://raw.githubusercontent.com/macosforge/alac/c38887c5c5e64a4b31108733bd79ca9b2496d987/codec/aglib.h
+sha256 = ef715d64666e4a4faaa0fafcd5050bd5b7f8c45e9760382735f37cf183c55778
+platform = windows
+checked = helper T9 2026-11-12
+
+[alac-dp-dec-c]
+version = c38887c5
+kind = file
+group = alac
+url = https://raw.githubusercontent.com/macosforge/alac/c38887c5c5e64a4b31108733bd79ca9b2496d987/codec/dp_dec.c
+sha256 = 1f8e8b25e61c5b667ad729a9c33e3916df7eb4883125dcac7266d719cbf23516
+platform = windows
+checked = helper T9 2026-11-12
+
+[alac-dplib-h]
+version = c38887c5
+kind = file
+group = alac
+url = https://raw.githubusercontent.com/macosforge/alac/c38887c5c5e64a4b31108733bd79ca9b2496d987/codec/dplib.h
+sha256 = fd2b9806f8cf2386dcbdc919ddf56c18608ce1b0812a74b6b9d0b0eb9df67d78
+platform = windows
+checked = helper T9 2026-11-12
+
+[alac.decoder]
+from = alac-alacbitutilities-c, alac-alacbitutilities-h, alac-aglib-h, alac-dp-dec-c, alac-dplib-h
+use = links
+spdx = Apache-2.0
+licence-from = alac-license
+licence-file = LICENSE
+licence-sha256 = a337314dd82d26791112c1e5a85725b2eb92f5b7e6f9102fa4eaa2903f77518f
+notice = win/NOTICE.txt: Apple Lossless (ALAC) decoder (compiled into the prepare helper)
+checked = helper T9 2026-11-12

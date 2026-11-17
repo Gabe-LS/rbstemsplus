@@ -11,11 +11,14 @@ So publishing a release is what ships it. **Releases are built and signed on the
 Mac.** GitHub builds nothing that gets signed (there is no release workflow): it only holds the
 draft `scripts/release.sh` uploads, and the release once the developer publishes it by hand.
 
-**In short:** commit and push in the development repository → test build of that commit on the
-VM (`build.sh --test`) → `scripts/release.sh vX.Y.Z --dry-run` (what would be published) →
+**In short:** commit and push in the development repository → `scripts/release.sh vX.Y.Z --plan`
+(which Mac files this release carries forward unchanged) → test build of that commit in the
+plan's shape on the VM (`build.sh --test URL --plan build/gates/<commit>/plan`) → the gates on
+that TEST build (the G3 tart run, the performance session) →
+`scripts/release.sh vX.Y.Z --dry-run` (what would be published) →
 `scripts/release.sh vX.Y.Z` (publishes the commit's files as one commit in the public
 repository, builds the release there, signs it, tags, uploads a draft) → check the notes and
-publish the draft by hand → the real one-liner on a clean VM clone.
+publish the draft by hand → the post-publish check (the real update and one-liner, in tart).
 
 ## Two repositories
 
@@ -64,7 +67,7 @@ public clone, at the public commit:
 
 | Asset | What |
 |---|---|
-| `rbstemsplus-app.zip` | the app, universal, macOS 12+, ad-hoc signed with the hardened runtime (the bootstrap signs it again on the Mac, the same way) |
+| `rbstemsplus-app.zip` | the app, universal, macOS 12+ (tested on macOS 26 on Apple silicon only; older versions and Intel Macs should work, untested), ad-hoc signed with the hardened runtime (the bootstrap signs it again on the Mac, the same way) |
 | `libonnxruntime.1.18.0.dylib` | the Stems Cache bridge, universal, libFLAC linked statically |
 | `stemsplus-model.onnx` | the model, 308,572,524 bytes, SHA-256 `0cc50d87…` (never in git) |
 | `bootstrap.sh` | the pasted installer (`scripts/bootstrap.sh`, with the public keys and its version written in) |
@@ -103,8 +106,9 @@ every macOS from 12) can make and check it, and so can CryptoKit.
   by `scripts/build-app.sh` (into `build/app/Keys.swift`).
 - **Test builds** (`build.sh --test URL`) trust only a test key, made once in
   `build/test-keys/` (never in git), and their `payload.json` is signed with it. A release build
-  stops if `keys/` is missing, if both keys are the same, or if the test key would be in the app
-  or the bootstrap.
+  stops if `keys/` is missing or if both keys are the same. When run in this checkout, `build.sh`
+  also stops if the test key would be in the app or the bootstrap; a release is covered by
+  `release.sh`'s own check.
 - **The limit:** the first install trusts the pasted command and GitHub's HTTPS. The bootstrap
   itself is downloaded and run as it is; the signature protects everything it downloads after,
   and every later download by the app.
@@ -159,6 +163,188 @@ but with `scripts/release.sh vX.Y.Z --backup-key` (paste the backup key from the
 manager when asked; it isn't shown or saved). Apps that update to that release trust the new
 everyday key from then on. If the old everyday key may have been **stolen** rather than lost, say
 so in the release notes: apps that haven't updated still trust it until they do.
+
+## One version for both platforms (from 1.4.0)
+
+A release's `VERSION`, tag and `payload_version` are one number, `x.y.z`. `app.version` is the
+version of the last release that changed the Mac app's files, so it can be lower than
+`payload_version`. This is the contract between `scripts/release.sh` (which writes
+`payload.json`) and every Mac app since 1.0.0 (`Update.swift`, `Payload.swift`):
+
+- **`payload_version` = `VERSION`**, `x.y.z` digits only.
+- **`app.version` ≤ `payload_version`**, `x.y.z`, and equal to the `CFBundleShortVersionString`
+  inside the zip that `app.zip` names: every app since 1.0.0 refuses to swap in a zip whose
+  version isn't `app.version`.
+- **One `app.version`, one zip.** A release that leaves the Mac app's files unchanged carries the
+  previous release's zip forward byte for byte, with its `app.version` and `app.sha256`. Then no
+  app at that version offers an update (the notice needs `app.version` newer than the running
+  app), and older apps update once, to that zip. A zip with other bytes always gets a new
+  `app.version` (= `VERSION`): the app shows a release's version on the strength of "same
+  version, same bytes".
+- **The bridge likewise:** a carried bridge keeps its file and `bridge.sha256`. A new hash asks
+  every Stems Cache user to update it (with their password).
+- **Every release keeps `app` and `bridge`.** Every Mac app since 1.0.0 refuses a `payload.json`
+  without them.
+- **No beta channel or pre-releases** (owner decided 2026-11-12): every release goes to all users
+  through `releases/latest`. A suffixed version (`1.5.0-beta.1`) must never be published:
+  `build.sh`, `build-app.sh` and `release.sh` refuse a `VERSION` or tag that isn't `x.y.z`. The
+  app and `bootstrap.sh` read only `releases/latest`, which never names a pre-release. Why it
+  matters: apps before 1.4.0 accept a `-` in a version and rank `1.5.0-beta.1` above `1.5.0`, so
+  such a `payload.json` would raise their floor above the real 1.5.0 (checked against 1.0.0's and
+  1.3.0's own code). From 1.4.0 the app also refuses a `payload_version` or `app.version` that
+  isn't `x.y.z`, before its floor moves; `bootstrap.sh` already refuses anything but digits and
+  dots.
+- **New keys only.** Keys may be added (`app.commit`, `bridge.commit`, a block for another
+  platform): every app ignores keys it doesn't read. A key never changes meaning, is never given
+  twice in one object, and is plain ASCII; nesting stays under 32 levels.
+
+`release.sh --plan` decides, per Mac file, whether this release carries it forward (`--mac=auto`,
+the default: the same files, or no Mac input changed since the commit that built it; `keep`;
+`new`); the release and its TEST build follow that plan.
+
+**When the Mac app counts as unchanged (`--mac=auto`).** The Mac app isn't byte-reproducible
+(two clean builds of one commit differ in `Assets.car`'s actool-written fields, and so in the
+executable's signature hashes and `CodeResources`' seal). So `release.sh` builds the app again
+from the public copy, stamped with the previous `app.version`, and compares it with the previous
+release's zip (`scripts/bundle-compare.sh`):
+- **the same files**, or **the same code** (only those rebuild fields differ, and the asset
+  catalog's inputs, `app/icon/`, are unchanged): the previous zip is carried, byte for byte;
+- different, but **no Mac input changed** since the commit that built it (`app.commit`, else the
+  previous payload's top-level commit): a toolchain's drift only, carried too, and the plan says
+  why;
+- **a Mac input changed**: a new app, `app.version` = `VERSION`. Every Mac user gets the update
+  notice, and App Management asks again on every Mac.
+
+The bridge is reproducible by design: it is carried when it builds the same bytes. `--mac=keep`
+carries both even though the build differs (a Windows release where shared code moved but
+nothing changed for Mac users); `--mac=new` always makes a new app. After a release from a
+branch, `auto` is refused on main until the owner chooses `keep` or `new`. Windows lanes keep the
+Mac bytes still: `make mac-unchanged` is the merge check for every Windows-lane commit that
+touches `core/`, `common/`, `helper/` or `bridge/`.
+
+**A new Mac app with the previous release's bridge (the G2 fallback).** When the new bridge may
+not ship (its performance gate failed, say) but the app is new, restore the bridge's sources to
+the release whose bridge is current, so they build its bytes again; the bridge build is
+reproducible (v1.3.0's rebuilds as `cf1ebef1…`, its archived TEST build's), and the plan then
+carries it:
+```sh
+git checkout vA.B.C -- bridge/            # also common/ once the bridge builds from it
+git commit -m "bridge: back to vA.B.C's sources, so its bytes are carried"
+scripts/release.sh vX.Y.Z --plan --mac=new # must say: mac.bridge carry <its commit> <its sha>
+```
+If the plan says `mac.bridge new`, the rebuild isn't byte-identical (a toolchain change): stop
+there, that release would ask every Stems Cache user for an update and their password. The
+helper reads `bridge/build.sh`'s libFLAC pin and the bridge's headers too, so the new app's
+helper is built from the restored ones.
+
+What the app shows: About, the report and the logs show the release's version, the
+`payload_version` of the last verified `payload.json` whose `app.version` is this very app
+("RB Stems Plus 1.4.1 (Mac app 1.4.0, …)" in the report and logs). It is recorded in
+`~/Library/Application Support/rbstemsplus/shown-version` with the app's own version, kept when a
+newer app is announced but not installed yet, and dropped when the app is replaced. Finder's Get
+Info shows the app's own version. Apps before 1.4.0 show their own version.
+
+## The gates (from 1.4.0)
+
+Every gate runs on the TEST build of the release commit in the plan's shape (step 3: `release.sh
+--plan`, then `build.sh --test URL --plan`), so it tests what the release will carry. The records
+live in `build/gates/<commit>/`, next to `plan`.
+
+- **Static gates, every build** (`scripts/build-app.sh`, so the release build too): `minos` ≤ 12.0
+  on every slice of every Mach-O (`tests/mac/minos.sh`), the unpacked bundle's file list equals
+  `tests/mac/bundle-files.txt` (`tests/mac/bundle-files.sh`; changing the fixture is a reviewed
+  commit, together with a passing tart run), no quarantine in the unpacked zip and no sanitizer
+  symbol or runtime (`tests/mac/static-gates.sh`). A failure stops the build.
+- **G2, once, before 1.4.0** (mac-core.md §9): the core-based app's switch-over gate. Every
+  harness scenario in tart gives 1.3.0's frames; the suites, ASan, UBSan, TSan and the fuzz runs
+  pass; P1-P16 within their thresholds; 1.0.0 and 1.3.0 update in-app to 1.4.0 on macOS 26; the
+  one-version tests; no quarantine; the maintenance branch green and `release.sh --branch`
+  rehearsed once in tart; the full review and the owner's round. It isn't repeated per release.
+- **GP, when the bridge or the Prepare helper changes:** before such a change merges, one short
+  interleaved performance session against B0 (`bridge/tests/perf.sh gate`, `helper/tests/perf.sh
+  gate`, about 20-30 minutes each). A regression blocks the merge.
+- **G3, every release, checked by `release.sh`:** `tests/mac/g3.sh run` in tart, one fresh clone
+  of the macOS 26 template per scenario, one VM at a time (about 45-60 minutes):
+  - from the archived TEST builds of v1.0.0, v1.3.0 and every shipped 1.3.x, the in-app update to
+    this release, its version, no quarantine, the watcher registered again, Reinstall and Install,
+    the complete uninstall and its trace audit;
+  - when the Mac app is carried: the previous release reads the new `payload.json` with no update
+    notice, 1.0.0 updates once to the carried app, and About and the report show the release's
+    version;
+  - always: the new `bootstrap.sh` installs on a clean clone.
+
+  App Management's Allow and the password are emulated. The old apps' buttons are pressed by the G3
+  Driver (Accessibility, once the owner has allowed it in the template; `tests/mac/g3.sh smoke`
+  says whether a clone has it), else by the owner in the VM's window when asked (at most 10
+  minutes per click). A pass writes `build/gates/<commit>/g3-mac.ok`. `release.sh` runs
+  `tests/mac/g3.sh check <commit>` before it builds, on main and with `--branch`. It refuses a
+  record of another commit, TEST payload or plan, or one with a scenario missing. The
+  maintenance branch's own `release.sh` (`maint/1.3`) gets the check once the first real G3
+  round has passed (owner decision, 2026-11-12). After publishing, `tests/mac/g3.sh post-publish
+  X.Y.Z` checks the real published 1.3.0 updating from `releases/latest` and the real one-liner
+  (step 6).
+- **Performance, every release** (release.md §6.2): only what a user could notice is gated. A
+  slowdown counts only when it is over both 10% and 20 ms (20 MB for memory), on each row's median;
+  a row within 25% of its allowance is printed BORDERLINE for a human to judge. Every comparison is
+  against a fixed baseline in `gates-archive/` (mac-A for the app, B0 for the bridge and the
+  helper), never against the previous release, so small losses add up. The baselines are never
+  rebuilt: a missing or mismatched one (`gates-archive/SHA256SUMS`) stops the gate. Which session
+  runs depends on the plan:
+
+  | The plan says | Session | Host time |
+  |---|---|---|
+  | Mac app new | `tests/perf/g0.sh run B.zip` (P1-P16) and the helper's gate (P-H1-P-H5) | about 1-1.5 h |
+  | Mac bridge new | `bridge/tests/perf.sh gate` (P-B1-P-B8) | about 20-30 min plus the idle wait |
+  | Mac app new, bridge carried | the bridge's P-B1 and P-B5 | about 0.5 h |
+  | Mac app carried | `tests/perf/g0.sh run B.zip --scenarios "perf-activation perf-playlist-5000"` (P1, P2, P3, P6, P7.done.full) | about 15 min plus the idle wait |
+
+  A session needs the host to itself, other agents paused, on AC power. The owner starts it.
+  `release.sh` doesn't read a performance record yet (release.md §6.2 plans
+  `build/gates/<commit>/perf-mac.tsv`). Until it does, a regression blocks the release just the
+  same: run `release.sh` only once the session passed, or once the owner has accepted that one
+  number in writing (the reason goes into the release notes).
+
+## Checking a release file against a rebuild
+
+Anyone can check a published file against the public source. The trust root stays the signed
+`payload.json`: it names every file by SHA-256 (`shasum -a 256 -c SHA256SUMS` checks the
+downloaded set), and the rebuild shows that those files come from that source.
+
+1. Clone Gabe-LS/rbstemsplus and check out the tag of the release being checked,
+   `v<payload_version>` (its `payload.json`'s `payload_version`; the tag names the public commit
+   that `payload.json`'s `commit` names).
+2. **A carried file** was built by an earlier commit: check out the one `payload.json` names for
+   it instead (`app.commit`, `bridge.commit`; a missing key means its top-level `commit`).
+3. **The Mac bridge** (`libonnxruntime.1.18.0.dylib`) is reproducible: `bridge/build.sh` builds the
+   same bytes, so its SHA-256 equals `bridge.sha256`.
+4. **The Mac app** isn't byte-reproducible (actool writes new fields into `Assets.car` on every
+   run, and the signature hashes follow). Build it stamped with the release's `app.version`, as
+   `release.sh` does (`RBSTEMSPLUS_APP_VERSION=<app.version> scripts/build-app.sh OUT`, with
+   Xcode 26; the first build downloads its pinned sources and checks their SHA-256), then compare
+   the two zips with `scripts/bundle-compare.sh --verify OUT/rbstemsplus-app.zip <published zip>`:
+   its last line must say "IDENTICAL", or "SAME CODE" (every file identical apart from those
+   fields).
+5. **Windows files (from 1.5.0)** are all reproducible: rebuild the tag stamped with
+   `windows.app.version`, and each file's SHA-256 must equal the published one. A Windows file is
+   carried only when its bytes equal this release's build, so this holds for carried files too.
+
+## Windows (from 1.5.0)
+
+Mac and Windows ship in one release with one version (above). The Windows parts start with the
+first release that has a `windows` block in `payload.json` (1.5.0). Before that, a release has no
+Windows asset, and `release.sh` refuses to run when the latest release's `payload.json` has a
+`windows` block (it would drop it, and Windows with it). From 1.5.0 (release.md §6, §7):
+
+- **Assets:** `rbstemsplus-windows.zip`, `rbstemsplus-bridge-win-x64.dll`, `bootstrap.ps1` and
+  `NOTICE-windows.txt` join the Mac files. A release that changes only the Mac carries the
+  Windows files (no Windows user gets an update or a Stems Cache prompt), and the reverse.
+- **Unsigned:** Windows files have no Authenticode signature (owner decision). Changed Windows
+  files go to Microsoft's free submission (microsoft.com/wdsi/filesubmission) before each
+  release (the owner, about 5 minutes).
+- **One more gate record:** `vm-win.ok`, the Windows VM suite, for every release whose Windows app,
+  bridge or worker isn't carried, and whenever the `windows` block changes in more than versions
+  and commits. The Windows performance sessions follow release.md §6.2's matrix.
+- **After publishing:** the real Windows one-liner in a reverted Parallels snapshot.
 
 ## The model
 
@@ -268,9 +454,16 @@ clone** of the template.
    server instead of the GitHub release (fixed when it is compiled; its window title says TEST
    BUILD) and trusts only the test key, which signs `dist-test/payload.json`. The release build
    can't be tested this way before publishing.
+   The plan comes first: `scripts/release.sh vX.Y.Z --plan` (with the `--mac` and `--branch`
+   the release will use) decides which Mac files are carried forward from the latest release
+   and writes them to `build/gates/<commit>/plan`; the test build takes that shape (a carried
+   app or bridge is the previous release's archived TEST build in
+   `gates-archive/tag-vA.B.C/`, signed with the test key archived with it), and the release
+   stops if its own decisions differ. Its log is kept for the gate archive (step 6).
    ```sh
    git status                                             # nothing to commit
-   scripts/build.sh --test http://192.168.64.1:8765/      # into dist-test/
+   scripts/release.sh vX.Y.Z --plan                       # build/gates/<commit>/plan
+   scripts/build.sh --test http://192.168.64.1:8765/ --plan build/gates/$(git rev-parse HEAD)/plan 2>&1 | tee build/test-build.log   # into dist-test/
    grep '"commit"' dist-test/payload.json                 # HEAD, no -dirty
    cd dist-test && python3 -m http.server 8765
    ```
@@ -346,6 +539,9 @@ clone** of the template.
    root must exit 5), and a full disk (the app must say "Low disk space" first).
 7. **When the root scripts changed:** `tests/root/vm-root-tests.sh` in a throwaway clone (its
    header says how; about 30 minutes).
+8. **The gates** on this TEST build ([The gates](#the-gates-from-140)): the G3 tart run
+   (`tests/mac/g3.sh run`, its record `build/gates/<commit>/g3-mac.ok`) and the plan's
+   performance session. `release.sh` stops without a passing G3 record.
 
 ### 4. Preview what would be published
 
@@ -353,10 +549,11 @@ clone** of the template.
 scripts/release.sh vX.Y.Z --dry-run
 ```
 
-It needs no key, gh or Terminal, and changes nothing (it only fetches the public clone's origin).
+It needs no key or Terminal, and changes nothing (it fetches the public clone's origin, gh reads
+the latest release, and the Mac files are built in a scratch folder).
 It makes the checks on `VERSION`, the public clone and the public copy described below, then
 shows the commit it would make in the public clone and the public files it would change (every
-file, for the first release). Read the list: nothing private may be in it. With uncommitted
+file, for the first release), and the carry decisions. Read the list: nothing private may be in it. With uncommitted
 files it only notes them, since it copies HEAD as committed.
 
 ### 5. Build, sign and upload the draft
@@ -383,10 +580,19 @@ It stops at the first problem, before anything is pushed or uploaded:
 - it commits the copy in the public clone as "RB Stems Plus X.Y.Z", author and committer Gabe-LS
   with the noreply address, on top of the public `origin/main`, and moves the clone's main to it
   (nothing is pushed yet);
+- the carry decisions are the plan's, and G3's tart run passed for this commit
+  (`tests/mac/g3.sh check`: `build/gates/<commit>/g3-mac.ok`, made by `tests/mac/g3.sh run` on
+  `dist-test/` in this plan's shape, every required scenario passed; release.md §6.1), with
+  `--branch` too (this script, from main). The maintenance branch's own release.sh
+  (`maint/1.3`) doesn't check it yet: it gets the check (branch `w6/g3-maint`) once the first
+  real G3 round has passed (owner decision, 2026-11-12);
 - `scripts/build.sh` builds every asset in the public clone, into its `dist/`, with its own
-  checks (the clean tree, the commit in `payload.json`, both public keys and no test key in the
-  app and the bootstrap, the hardened runtime, libFLAC's checksum, the model's). The model and
-  libFLAC's tarball come from the development repository when the public clone has none;
+  checks (the clean tree, the commit in `payload.json`, both public keys, the hardened runtime,
+  libFLAC's checksum, the model's). The model and libFLAC's tarball come from the development
+  repository when the public clone has none;
+- no test key ships: this checkout's `build/test-keys` key and every gate-archive tag's are none
+  of the public commit's `keys/*.pub.pem` (as points) and aren't in `bootstrap.sh`,
+  `bootstrap.ps1` or the app's executable (any point form);
 - `payload.json` names the public commit and X.Y.Z, and `SHA256SUMS` matches;
 - openssl asks for the everyday key's passphrase and signs `payload.json` into
   `dist/payload.json.sig`; the signature must verify with the public commit's `keys/*.pub.pem`.
@@ -405,15 +611,45 @@ commit: it uses that unpushed commit again.
 
 - With the backup key: `scripts/release.sh vX.Y.Z --backup-key` (paste it when asked). Another
   key file: `--key PATH`. Another public clone: `--public PATH`.
+- A maintenance release from a branch: `--branch maint/1.3` (HEAD must be on `origin/maint/1.3`).
+  Never merge `maint/*` into main; cherry-pick each fix onto main instead.
 
 ### 6. Publish
 
 - [ ] Check the draft's notes on GitHub (without `docs/release-notes/X.Y.Z.md` they are only a
       placeholder: write them there).
 - [ ] Publish the draft (not as a prerelease, so it becomes `latest`).
-- [ ] On a clean VM clone, paste the real one-liner (no override) and run Install once. This is
-      the first run of the release build's own downloads, and of its signature with the release
-      keys (the VM tests used a test build and the test key).
+- [ ] `tests/mac/g3.sh post-publish X.Y.Z` (an agent, while the owner is there: the guest
+      downloads from GitHub and Little Snitch may ask): in fresh clones, the real published 1.3.0
+      updates in-app from `releases/latest`, and the real one-liner (no override) installs on a
+      clean clone; the record is `build/gates/post-X.Y.Z.txt`. This is the first run of the
+      release build's own downloads, and of its signature with the release keys (the VM tests
+      used a test build and the test key).
+- [ ] Archive the release's TEST build in the gate archive, as `gates-archive/tag-vX.Y.Z/`: a
+      later release that carries a Mac or Windows file builds its TEST build from it (`build.sh --test URL
+      --plan`), signed with the key pair archived next to it. The key pair is the one that signed
+      `dist-test/payload.json`: `build/test-keys/`, or, when this TEST build itself carried a
+      file, the previous `tag-vA.B.C/test-keys/` it was signed with (`make clean` deletes
+      `build/test-keys/`, so archive it before). Then reseal the archive's `SHA256SUMS`:
+      ```sh
+      A=gates-archive; . tests/perf/archive.sh && verify     # the archive as it was, first
+      a="$A/tag-vX.Y.Z"; mkdir -p "$a/test-keys"
+      cp dist-test/rbstemsplus-app.zip dist-test/libonnxruntime.1.18.0.dylib dist-test/payload.json \
+         dist-test/payload.json.sig dist-test/bootstrap.sh "$a/"
+      for f in rbstemsplus-windows.zip rbstemsplus-bridge-win-x64.dll bootstrap.ps1 NOTICE-windows.txt; do [ ! -f "dist-test/$f" ] || cp "dist-test/$f" "$a/"; done
+      cp build/test-build.log "$a/build.log"
+      cp build/test-keys/test-key.pem build/test-keys/test.pub.pem "$a/test-keys/"   # or the previous tag's, see above
+      /usr/bin/openssl dgst -sha256 -verify "$a/test-keys/test.pub.pem" -signature "$a/payload.json.sig" "$a/payload.json"   # Verified OK
+      { echo "tag=vX.Y.Z commit=$(plutil -extract commit raw -o - "$a/payload.json")"
+        echo "built=$(stat -f %Sm -t %Y-%m-%dT%H:%M:%S "$a/payload.json")"
+        echo "test_url=http://192.168.64.1:8765/"
+        echo "swiftc=$(xcrun swiftc --version 2>&1 | head -1)"
+        echo "xcode=$(xcodebuild -version | tr '\n' ' ')"
+        echo "macos=$(sw_vers -productVersion)"; } > "$a/toolchain.txt"
+      seal                                                    # gates-archive/SHA256SUMS anew
+      ```
+      v1.3.0's is there already (`gates-archive/tag-v1.3.0/`). Copy the archive to the second
+      disk afterwards (`tests/perf/b0.sh copy DEST`).
 
 ## The prototype on the developer's Mac
 

@@ -1,4 +1,4 @@
-// Where Stems Cache saves stems (Config.swift, Location.swift, LocationActions.swift), tried in
+// Where Stems Cache saves stems (Config.swift, Location.swift; the dialogs are the core's), tried in
 // the temporary folder: config.ini's grammar (the bridge's fixtures too), the path rules, the
 // marker, the writer, the probe on a fake mount, the light's texts and the bridge's state,
 // the size rule, deletion through verified descriptors (a link swapped above our folder), the
@@ -208,12 +208,6 @@ func locationTests() {
     check(liveBridgeState(off, dir: gls) == off && liveBridgeState(off, dir: "/Volumes/X/" + locationFolderName) == nil
           && liveBridgeState(off, dir: gls, startOf: { _ in off.start + 1 }) == nil && liveBridgeState(off, dir: gls, startOf: { _ in nil }) == nil,
           "bridge-state: trusted only for the rekordbox that wrote it (pid and start) and the location in config.ini")
-    check(cacheLight(installed: true, plusOn: true, chosen: true, rekordboxModel: true, bridgeModels: [], model: nil, engine: "0002", pausedFloor: 50_000_000_000,
-                     location: "X", drive: "GLS") == (.limited, "X")
-          && cacheLight(installed: true, plusOn: true, chosen: true, rekordboxModel: true, bridgeModels: [], model: nil, engine: "0002",
-                        pausedFloor: 50_000_000_000, drive: "GLS").tip == "Stems Cache stopped saving stems: \"GLS\" has less than 50 GB free."
-          && cacheLight(installed: false, plusOn: true, chosen: true, rekordboxModel: true, bridgeModels: [], model: nil, engine: "0002", pausedFloor: nil, location: "X").look == .off,
-          "light: the location's text, the floor naming the drive")
 
     // MARK: the size rule
 
@@ -282,19 +276,16 @@ func locationTests() {
     let macGate = Deletable(inside: [mac], roots: [], files: [], apps: [])
     check(removeThisMacStems(mac, macGate) && fileType(mac + "/\(model)") == nil && fileType(mac + "/model-12.sha256") != nil && fileType(mac + "/other/x") != nil,
           "switch: this Mac's model folders deleted, the memos kept")
-
-    // MARK: the retry of this Mac's deletion
-
-    let avail = LocationStatus.chosen(dir: gls, id: id, probe: .available)
-    check(mayRetryThisMacDeletion(flag: true, status: avail, bridgeLocation: true, rekordboxRunning: false), "retry: flag, available, location=1, rekordbox closed")
-    check(!mayRetryThisMacDeletion(flag: false, status: avail, bridgeLocation: true, rekordboxRunning: false)
-          && !mayRetryThisMacDeletion(flag: true, status: .bridgeTooOld(dir: gls, id: id), bridgeLocation: false, rekordboxRunning: false)
-          && !mayRetryThisMacDeletion(flag: true, status: avail, bridgeLocation: false, rekordboxRunning: false)
-          && !mayRetryThisMacDeletion(flag: true, status: avail, bridgeLocation: true, rekordboxRunning: true)
-          && !mayRetryThisMacDeletion(flag: true, status: .chosen(dir: gls, id: id, probe: .notConnected), bridgeLocation: true, rekordboxRunning: false)
-          && !mayRetryThisMacDeletion(flag: true, status: .configMalformedLocation, bridgeLocation: true, rekordboxRunning: false)
-          && !mayRetryThisMacDeletion(flag: true, status: .configUnreadable, bridgeLocation: true, rekordboxRunning: false),
-          "retry: never otherwise (an older bridge may be saving on this Mac)")
+    put(mac + "/\(model)/ab/\(key).flac", "x"); chmod(mac, 0o300)          // can't be listed (EACCES)
+    let unlisted = removeThisMacStems(mac, macGate)
+    chmod(mac, 0o755)
+    check(!unlisted && fileType(mac + "/\(model)/ab/\(key).flac") != nil, "switch: this Mac's folder can't be listed: not reported deleted (tried again)")
+    check(removeThisMacStems(base + "/no-mac-cache", macGate), "switch: no folder on this Mac: nothing to delete")
+    // a file or a dangling link where the folder goes holds no stems: done, the flag cleared (review SR6)
+    put(base + "/mac-cache-file", "x"); symlink(base + "/nowhere", base + "/mac-cache-dangling")
+    check(removeThisMacStems(base + "/mac-cache-file", macGate) && fileType(base + "/mac-cache-file") == S_IFREG
+          && removeThisMacStems(base + "/mac-cache-dangling", macGate),
+          "switch: a file or a dangling link at this Mac's folder: nothing to delete, not tried again")
 
     // MARK: finding the stems already on a drive
 
@@ -338,43 +329,20 @@ func locationTests() {
     check(locationRefusalFor(folder: vol, real: vol, facts: nil) == .unreadable, "where: unreadable volume")
     check(!externalDeviceAllowed(isInternal: true, deviceProtocol: "Thunderbolt") && externalDeviceAllowed(isInternal: false, deviceProtocol: "USB"),
           "where: Q6 by DeviceInternal (Q10 open)")
-    check(locationRefusal(.internalDisk, drive: "GLS") == "Choose a folder on an external drive. To save stems on this Mac, use This Mac."
-          && locationRefusal(.network, drive: "GLS") == "Choose a drive connected to this Mac, not a network drive."
-          && locationRefusal(.readOnly, drive: "GLS") == "\"GLS\" is read-only." && locationRefusal(.timeMachine, drive: "GLS") == "\"GLS\" is a Time Machine backup drive."
-          && locationRefusal(.insideOurFolder, drive: "GLS") == "Choose the folder that contains \"RB Stems Plus Cache\", not a folder inside it.",
-          "where: the refusal texts")
 
     // MARK: the dialogs' texts
 
     let gb182 = Int64(18.2 * 1_073_741_824), gb124 = Int64(12.4 * 1_073_741_824)
-    check(switchMessage(drive: "GLS", found: nil, thisMac: gb182, oldDrive: nil)
-          == "Stems Cache will save stems on \"GLS\". The 18.2 GB saved on this Mac will be deleted: rekordbox separates those tracks again the next time you load them.",
-          "switch: from this Mac to a new folder")
-    check(switchMessage(drive: "GLS", found: gb124, thisMac: gb182, oldDrive: nil)
-          == "Stems Cache will use the 12.4 GB already saved on \"GLS\". The 18.2 GB saved on this Mac will be deleted: rekordbox separates those tracks again the next time you load them.",
-          "switch: stems already on the drive")
-    check(switchMessage(drive: "GLS", found: nil, thisMac: 0, oldDrive: nil) == "Stems Cache will save stems on \"GLS\"."
-          && switchMessage(drive: "Stick", found: nil, thisMac: 0, oldDrive: "GLS") == "Stems Cache will save stems on \"Stick\". The stems saved on \"GLS\" stay there.",
-          "switch: nothing on this Mac to delete; from another drive, its stems stay")
-    check(useThisMacMessage(oldDrive: "GLS") == "Stems Cache will save stems on this Mac. The stems saved on \"GLS\" stay there.",
-          "Use This Mac: the drive's stems stay")
-    for m in [switchMessage(drive: "GLS", found: gb124, thisMac: gb182, oldDrive: "Old"), useThisMacMessage(oldDrive: "GLS")] {
-        check(!m.contains("Settings") && !m.contains("Finder") && !m.contains("eject") && !m.contains("another Mac"),
-              "the switch dialogs say only what the switch does: \(m.prefix(40))…")
-    }
-    check(clearLocationMessage(drive: "GLS") == "Deletes all stems saved in this folder on \"GLS\", including any saved there by other Macs or accounts.", "Clear: the shared folder's wording")
-    check(uninstallEverythingMessage(othersCache: false, noSavedModel: false, stems: " (about 18.0 GB)", drive: "GLS", driveConnected: true)
-            .hasSuffix("RB Stems Plus will be deleted, including all stems saved in its folder on \"GLS\" (about 18.0 GB), also any saved there by other Macs or accounts.")
-          && uninstallEverythingMessage(othersCache: false, noSavedModel: false, stems: "", drive: "GLS", driveConnected: false)
-            .hasSuffix("Its stems on \"GLS\", which isn't connected, stay: connect it first to delete them too.")
-          && uninstallEverythingMessage(othersCache: false, noSavedModel: false, stems: " (1.2 GB)").hasSuffix("including the stems it saved (1.2 GB)."),
-          "uninstall: the confirmation names the drive, connected or not")
-    check(ownFilesRemovedText("A.", app: .deleted, othersCache: false, cacheLink: false, left: ["B."]) == "A. B.", "uninstall: the final alert says what stayed")
-    check(locationRemovalNote(drive: nil, connected: true, size: "") == "" && locationRemovalNote(drive: "GLS", connected: false, size: "").contains("isn't connected"),
-          "Remove anyway: names the drive's stems")
-    check(locationLabel(cs(.chosen(dir: "/Volumes/GLS/DJ/Sets/" + locationFolderName, id: id)), mounts: m) == "Stems Cache location: GLS › DJ › Sets"
-          && locationLabel(cs(.chosen(dir: gls, id: id)), mounts: m) == "Stems Cache location: GLS" && locationLabel(cs(.thisMac)) == "Stems Cache location: This Mac",
-          "Settings: the location row's label")
+
+    // MARK: the location row's label parts (labelPath; the core joins them: "GLS › DJ › Sets")
+
+    let glsMount = [Mount(path: "/Volumes/GLS", local: true, readOnly: false)]
+    let nested = labelPath(dir: "/Volumes/GLS/DJ/Sets/" + locationFolderName, mounts: glsMount)
+    check(nested.drive == "GLS" && nested.below == ["DJ", "Sets"], "label: our folder's parent below the drive (\(nested))")
+    let atRoot = labelPath(dir: gls, mounts: glsMount)
+    check(atRoot.drive == "GLS" && atRoot.below.isEmpty, "label: our folder at the drive's top: the drive alone (\(atRoot))")
+    let away = labelPath(dir: "/Volumes/GLS/DJ/" + locationFolderName, mounts: [])
+    check(away.drive == "GLS" && away.below == ["DJ"], "label: the drive not connected: its name and folders from the path (\(away))")
 
     // MARK: the report's link and title name no drive and no path
 
@@ -466,21 +434,12 @@ func locationFixTests() {
 
     // the uninstall deletes only the folder its confirmation named, found again just before
     let g = LocationGate(dir: gls, id: id)
-    check(!driveDeletionAllowed(confirmed: nil, fresh: g), "uninstall: a drive the confirmation didn't name (connected since, or no confirmation) stays")
-    check(!driveDeletionAllowed(confirmed: g, fresh: nil), "uninstall: the named drive gone since: nothing to delete")
-    check(driveDeletionAllowed(confirmed: g, fresh: LocationGate(dir: gls, id: id.lowercased())), "uninstall: the named folder, found again: deleted")
-    check(!driveDeletionAllowed(confirmed: g, fresh: LocationGate(dir: gls, id: id2))
-          && !driveDeletionAllowed(confirmed: g, fresh: LocationGate(dir: "/Volumes/GLS 2/" + locationFolderName, id: id)),
-          "uninstall: another folder or marker than the one named: kept")
     var snap = LocationSnapshot(); snap.status = .chosen(dir: gls, id: id, probe: .available); snap.probe = .available
     check(snap.deletableGate == g, "uninstall: the gate of an available chosen folder")
     snap.probe = .notConnected; snap.status = .chosen(dir: gls, id: id, probe: .notConnected)
     check(snap.deletableGate == nil, "uninstall: no gate for a folder not connected")
     snap.status = .bridgeTooOld(dir: gls, id: id); snap.probe = .available
     check(snap.deletableGate == g, "uninstall: an older bridge's chosen folder, connected: its gate")
-    check(uninstallEverythingMessage(othersCache: false, noSavedModel: false, stems: "", drive: "GLS", driveConnected: true).contains("on \"GLS\"")
-          && uninstallEverythingMessage(othersCache: false, noSavedModel: false, stems: "", drive: "GLS", driveConnected: true).contains("other Macs or accounts"),
-          "uninstall: the confirmation of a resolved, available drive names it and other Macs or accounts")
 
     // the complete uninstall's deletion: the marker goes last, only if everything else went
     let dv = base + "/DV", ours = dv + "/DJ/" + locationFolderName, mounts = [Mount(path: dv, local: true, readOnly: false)]
@@ -492,6 +451,83 @@ func locationFixTests() {
     check(!r.ok && readMarker(ours).id == id && fileType(ours + "/._" + markerName) != nil && fileType(ours + "/\(model)/ab/\(key).flac") != nil,
           "uninstall: an entry that can't be deleted leaves the folder with its marker (found again later)")
     check(removeInLocation(LocationGate(dir: ours, id: id), wholeFolder: true, mounts: mounts).ok && fileType(ours) == nil, "uninstall: then the whole folder, marker last")
+    // ... also when the marker and its companion were renamed to another case (case-insensitive drives)
+    if pathconf(base, _PC_CASE_SENSITIVE) == 0 {
+        let upper = markerName.uppercased()
+        put(ours + "/" + upper, markerText(id)); put(ours + "/._" + upper, "c")
+        put(ours + "/\(model)/ab/\(key).flac", "x")
+        chmod(ours + "/\(model)/ab", 0o500)
+        let ru = removeInLocation(LocationGate(dir: ours, id: id), wholeFolder: true, mounts: mounts)
+        chmod(ours + "/\(model)/ab", 0o755)
+        check(!ru.ok && readMarker(ours).id == id && fileType(ours + "/._" + upper) != nil,
+              "uninstall: an uppercase marker isn't deleted before an entry that can't be deleted")
+        check(removeInLocation(LocationGate(dir: ours, id: id), wholeFolder: true, mounts: mounts).ok && fileType(ours) == nil,
+              "uninstall: then the whole folder, the uppercase marker last")
+        // ... and under a Unicode case-fold alias APFS resolves but strcasecmp doesn't (review MQ1)
+        for (alias, what) in [(markerName.replacingOccurrences(of: "s", with: "\u{17F}"), "long s")] {
+            put(ours + "/" + markerName, markerText(id)); put(ours + "/._" + markerName, "c")
+            check(alias != markerName && Darwin.rename(ours + "/" + markerName, ours + "/" + alias) == 0, "uninstall: the marker renamed with a \(what)")
+            put(ours + "/\(model)/ab/\(key).flac", "x")
+            chmod(ours + "/\(model)/ab", 0o500)
+            let rs = removeInLocation(LocationGate(dir: ours, id: id), wholeFolder: true, mounts: mounts)
+            chmod(ours + "/\(model)/ab", 0o755)
+            check(!rs.ok && readMarker(ours).id == id, "uninstall: a marker renamed with a \(what) isn't deleted before an entry that can't be deleted")
+            let clr = removeInLocation(LocationGate(dir: ours, id: id), wholeFolder: false, mounts: mounts)
+            check(clr.ok && readMarker(ours).id == id, "Clear: a marker renamed with a \(what) stays")
+            check(removeInLocation(LocationGate(dir: ours, id: id), wholeFolder: true, mounts: mounts).ok && fileType(ours) == nil,
+                  "uninstall: then the whole folder, the \(what) marker last")
+        }
+    } else {
+        print("skip uninstall: an uppercase marker (the test folder's volume is case-sensitive)")
+    }
+    // ... on a case-sensitive drive (an image the test makes and attaches, review MP7), a file
+    // named like the marker in other capitals, or a hard link of it under such a name or another,
+    // is another entry: deleted with the rest, the real marker last, and the folder goes
+    let csDir = base + "/cs-image", csMount = csDir + "/mnt"
+    try? FileManager.default.createDirectory(atPath: csMount, withIntermediateDirectories: true)
+    let made = runTool("/usr/bin/hdiutil", ["create", "-quiet", "-size", "16m", "-fs", "Case-sensitive APFS", "-volname", "RBSPCS", csDir + "/cs.dmg"]).0 == 0
+    if made && runTool("/usr/bin/hdiutil", ["attach", "-quiet", "-nobrowse", "-mountpoint", csMount, csDir + "/cs.dmg"]).0 == 0 {
+        defer {
+            if runTool("/usr/bin/hdiutil", ["detach", "-quiet", csMount]).0 != 0 { runTool("/usr/bin/hdiutil", ["detach", "-quiet", "-force", csMount]) }
+            try? FileManager.default.removeItem(atPath: csDir)
+        }
+        check(pathconf(csMount, _PC_CASE_SENSITIVE) == 1, "uninstall (case-sensitive drive): the test's image is case-sensitive")
+        let csOurs = csMount + "/DJ/" + locationFolderName, csMounts = [Mount(path: csMount, local: true, readOnly: false)]
+        let upper = markerName.uppercased()
+        for (kase, add) in [("a second marker name in other capitals", { put(csOurs + "/" + upper, "not the marker"); put(csOurs + "/._" + upper, "c") }),
+                            ("an uppercase hard link of the marker", { _ = Darwin.link(csOurs + "/" + markerName, csOurs + "/" + upper) }),
+                            ("a hard link of the marker under another name", { _ = Darwin.link(csOurs + "/" + markerName, csOurs + "/alias") })] {
+            put(csOurs + "/" + markerName, markerText(id)); put(csOurs + "/._" + markerName, "c")
+            put(csOurs + "/\(model)/ab/\(key).flac", "x")
+            add()
+            let rv = removeInLocation(LocationGate(dir: csOurs, id: id), wholeFolder: true, mounts: csMounts)
+            check(rv.ok && fileType(csOurs) == nil, "uninstall (case-sensitive drive): \(kase) is deleted with the rest, the folder goes (\(rv.why ?? "ok"))")
+        }
+    } else {
+        print("skip uninstall: the case-sensitive drive cases (hdiutil couldn't make or attach the test's image)")
+        try? FileManager.default.removeItem(atPath: csDir)
+    }
+    // a folder that opens but can't be listed (the seam): Clear and the uninstall fail before
+    // touching anything, the marker least of all (review SR3)
+    put(ours + "/" + markerName, markerText(id)); put(ours + "/\(model)/ab/\(key).flac", "x")
+    listingFault = { _ in true }
+    let clearR = removeInLocation(LocationGate(dir: ours, id: id), wholeFolder: false, mounts: mounts)
+    let wholeR = removeInLocation(LocationGate(dir: ours, id: id), wholeFolder: true, mounts: mounts)
+    listingFault = { _ in false }
+    check(!clearR.ok && !wholeR.ok && wholeR.why == "some files couldn't be deleted" && readMarker(ours).id == id
+          && fileType(ours + "/\(model)/ab/\(key).flac") != nil,
+          "Clear and uninstall: a folder that can't be listed fails, nothing touched, the marker kept (\(clearR.why ?? "ok") / \(wholeR.why ?? "ok"))")
+    check(removeInLocation(LocationGate(dir: ours, id: id), wholeFolder: true, mounts: mounts).ok && fileType(ours) == nil,
+          "uninstall: listed again, the whole folder goes")
+    // a hard link of the marker, or of its companion, under another name: deleted as any entry, the
+    // marker last, and the whole folder goes (review MP4)
+    for (target, aliasName) in [(markerName, "alias"), ("._" + markerName, "alias2")] {
+        put(ours + "/" + markerName, markerText(id)); put(ours + "/._" + markerName, "c")
+        put(ours + "/\(model)/ab/\(key).flac", "x")
+        let linked = Darwin.link(ours + "/" + target, ours + "/" + aliasName) == 0
+        let ra = removeInLocation(LocationGate(dir: ours, id: id), wholeFolder: true, mounts: mounts)
+        check(linked && ra.ok && fileType(ours) == nil, "uninstall: a hard link \(aliasName) of \(target): the whole folder goes (\(ra.why ?? "ok"))")
+    }
 
     // the background measurement: the cheap state first, the size after its walk; a walk of a
     // folder no longer in use is dropped
@@ -517,14 +553,6 @@ func locationFixTests() {
     check(mon.snapshot().size == .measuring, "monitor: a size invalidated (after Clear) says measuring")
 
     // This Mac's leftovers from an older bridge (the owner's decision: deleted at launch, guarded)
-    let avail = LocationStatus.chosen(dir: gls, id: id, probe: .available)
-    check(thisMacNeedsCleanup(status: avail, bridgeLocation: true, modelFolders: true), "leftovers: a drive in use, location=1, model folders on this Mac: cleaned up")
-    check(!thisMacNeedsCleanup(status: avail, bridgeLocation: false, modelFolders: true)
-          && !thisMacNeedsCleanup(status: .bridgeTooOld(dir: gls, id: id), bridgeLocation: false, modelFolders: true)
-          && !thisMacNeedsCleanup(status: .chosen(dir: gls, id: id, probe: .notConnected), bridgeLocation: true, modelFolders: true)
-          && !thisMacNeedsCleanup(status: .thisMac, bridgeLocation: true, modelFolders: true)
-          && !thisMacNeedsCleanup(status: avail, bridgeLocation: true, modelFolders: false),
-          "leftovers: never with an older bridge, on this Mac, a drive not in use, or nothing there")
     let mac = base + "/mac"
     put(mac + "/model-1.sha256", "memo")
     check(!thisMacHasModelFolders(mac), "leftovers: memos aren't stems")

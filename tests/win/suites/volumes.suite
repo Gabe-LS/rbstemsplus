@@ -1,0 +1,34 @@
+# T3c case 3 (bridge.md section 1, by-hand.md's Platform list; moved here): a chosen location on
+# another volume, a VHDX as NTFS then exFAT, with any=0, through location-win-test's one-location
+# modes (--make, --check, --gone: common/tests/location_args.h), for each architecture this VM
+# runs (x64 under Prism on ARM64 too). From "clean Windows":
+#   tests/win/vm-run.sh stage --build
+#   tests/win/vm-run.sh run "clean Windows" volumes
+# Per file system: attached with a letter ("ok" by its drive path, its GUID path and that in upper
+# case; --gone on its mounted GUID root: "folder"; on NTFS a junction on the VHDX, <Letter>:\jx to
+# C:\rbtest\vol\jt, on the way: "folder"; exFAT holds no reparse points, so an INFO line says the
+# junction case is skipped there); its letter moved to a mount folder ("folder"
+# through it, "ok" by its GUID path); attached again read-only ("read-only"); detached
+# ("not-connected" from location_check and location_gone; the empty mount folder said only).
+# The disk steps run as SYSTEM (diskpart), the checks as the user (unelevated). An empty card
+# reader and a disk set offline stay by hand. Not a release.list row.
+include lib/vmlib.ps1
+include volumes/vlib.ps1
+need vm
+# MODE       SECS NAME                   SCRIPT
+sys          300  ntfs-attach            volumes/attach.ps1
+user         300  ntfs-cases             volumes/cases.ps1
+sys          120  ntfs-mount-folder      volumes/mount-folder.ps1
+user         300  ntfs-no-letter         volumes/no-letter.ps1
+sys          120  ntfs-read-only         volumes/read-only.ps1
+user         300  ntfs-read-only-check   volumes/read-only-check.ps1
+sys          120  ntfs-detach            volumes/detach.ps1
+user         300  ntfs-gone              volumes/gone.ps1
+sys          300  exfat-attach           volumes/attach.ps1
+user         300  exfat-cases            volumes/cases.ps1
+sys          120  exfat-mount-folder     volumes/mount-folder.ps1
+user         300  exfat-no-letter        volumes/no-letter.ps1
+sys          120  exfat-read-only        volumes/read-only.ps1
+user         300  exfat-read-only-check  volumes/read-only-check.ps1
+sys          120  exfat-detach           volumes/detach.ps1
+user         300  exfat-gone             volumes/gone.ps1

@@ -1,0 +1,86 @@
+c.text	NSTextView	excluded: clock times
+c.status	NSTextField	oracle
+c.spinner	NSProgressIndicator	oracle
+c.plusIcon	NSImageView	oracle
+c.cacheIcon	NSImageView	oracle
+c.plusLabel	NSTextField	oracle
+c.cacheLabel	NSTextField	oracle
+c.installPlusBtn	NSButton	oracle
+c.installCacheBtn	NSButton	oracle
+c.reinstallBtn	NSButton	oracle
+c.uninstallPlusBtn	NSButton	oracle
+c.uninstallCacheBtn	NSButton	oracle
+c.uninstallAllBtn	NSButton	oracle
+c.reinstallPlusBtn	NSButton	oracle
+c.reinstallCacheBtn	NSButton	oracle
+c.settingsBtn	NSButton	oracle
+status.plusTip	NSTextField	oracle
+status.cacheTip	NSTextField	oracle
+status.table	NSTableView	oracle
+status.againBtn	NSButton	oracle
+status.stopBtn	NSButton	oracle
+status.runLine	NSTextField	oracle
+prepare.outline	NSOutlineView	oracle
+prepare.nameLabel	NSTextField	oracle
+prepare.info	NSTextField	oracle
+prepare.until	NSDatePicker	oracle
+prepare.prepareBtn	NSButton	oracle
+prepare.checkBtn	NSButton	oracle
+prepare.pauseBtn	NSButton	oracle
+prepare.stopBtn	NSButton	oracle
+prepare.bar	NSProgressIndicator	oracle
+prepare.runGap	NSView	oracle
+prepare.tracksTable	NSTableView	oracle
+c.view0	NSTextField	oracle
+c.view1	NSTextField	oracle
+status.view0	NSTextField	oracle
+status.view1	NSTextField	oracle
+c.updateItem	NSMenuItem	oracle
+menu.App	NSMenuItem	oracle
+menu.App.About RB Stems Plus	NSMenuItem	oracle
+menu.App.Settings…	NSMenuItem	oracle
+menu.App.Uninstall RB Stems Plus…	NSMenuItem	oracle
+menu.App.Hide RB Stems Plus	NSMenuItem	oracle
+menu.App.Quit RB Stems Plus	NSMenuItem	oracle
+menu.Edit	NSMenuItem	oracle
+menu.Edit.Cut	NSMenuItem	oracle
+menu.Edit.Copy	NSMenuItem	oracle
+menu.Edit.Paste	NSMenuItem	oracle
+menu.Edit.Select All	NSMenuItem	oracle
+menu.Edit.AutoFill	NSMenuItem	oracle
+menu.Edit.AutoFill.Contact…	NSMenuItem	oracle
+menu.Edit.AutoFill.Passwords…	NSMenuItem	oracle
+menu.Edit.AutoFill.Credit Card…	NSMenuItem	oracle
+menu.Edit.Start Dictation…	NSMenuItem	oracle
+menu.Edit.Start Dictation…#2	NSMenuItem	oracle
+menu.Edit.Emoji & Symbols	NSMenuItem	oracle
+menu.Edit.Emoji & Symbols#2	NSMenuItem	oracle
+menu.Edit.Emoji & Symbols#3	NSMenuItem	oracle
+menu.View	NSMenuItem	oracle
+menu.View.Status	NSMenuItem	oracle
+menu.View.Prepare	NSMenuItem	oracle
+menu.View.Manage	NSMenuItem	oracle
+menu.Prepare	NSMenuItem	oracle
+menu.Prepare.Prepare Playlist…	NSMenuItem	oracle
+menu.Prepare.Check Again	NSMenuItem	oracle
+menu.Prepare.Pause	NSMenuItem	oracle
+menu.Prepare.Stop	NSMenuItem	oracle
+menu.Manage	NSMenuItem	oracle
+menu.Manage.Demucs v4	NSMenuItem	oracle
+menu.Manage.Demucs v4.Install	NSMenuItem	oracle
+menu.Manage.Demucs v4.Reinstall	NSMenuItem	oracle
+menu.Manage.Demucs v4.Uninstall…	NSMenuItem	oracle
+menu.Manage.Stems Cache	NSMenuItem	oracle
+menu.Manage.Stems Cache.Install	NSMenuItem	oracle
+menu.Manage.Stems Cache.Reinstall	NSMenuItem	oracle
+menu.Manage.Stems Cache.Uninstall…	NSMenuItem	oracle
+menu.Manage.Show Log	NSMenuItem	oracle
+menu.Window	NSMenuItem	oracle
+menu.Window.Close	NSMenuItem	oracle
+menu.Window.Close All	NSMenuItem	oracle
+menu.Window.Minimize	NSMenuItem	oracle
+menu.Help	NSMenuItem	oracle
+menu.Help.RB Stems Plus Help	NSMenuItem	oracle
+menu.Help.RB Stems Plus Troubleshooting	NSMenuItem	oracle
+menu.Help.Report an Issue	NSMenuItem	oracle
+menu.Help.Create Report	NSMenuItem	oracle

@@ -7,19 +7,19 @@
 #ifndef RBSP_READABLE_H
 #define RBSP_READABLE_H
 #include <stddef.h>
-#include <sys/stat.h>
+#include "plat_helper.h"
 
 typedef enum { READ_OK, READ_ABSENT, READ_ASKING, READ_DENIED, READ_FAILED } read_state;
 
-/* whether PATH can be read, waiting at most SECS seconds; *st its stat when READ_OK, else why (a
- * sentence) and *folder the protected folder concerned ("Documents", "Desktop", "Downloads"; ""
- * elsewhere) */
-read_state readable(const char *path, double secs, struct stat *st, char *why, size_t n, const char **folder);
+/* whether PATH can be read, waiting at most SECS seconds; *st its kind, size and time when READ_OK,
+ * else why (a sentence) and *folder the protected folder concerned ("Documents", "Desktop",
+ * "Downloads"; "" elsewhere) */
+read_state readable(const char *path, double secs, plat_finfo *st, char *why, size_t n, const char **folder);
 
 /* the protected folder PATH is in ("" when none), from its path alone: nothing is read */
 const char *protected_folder(const char *path);
 
-/* this account's home folder, from the user database, never $HOME ("" if there is none) */
+/* this account's home folder, from the user database, never $HOME ("" if there is none): plat_home */
 const char *home_folder(void);
 
 #endif

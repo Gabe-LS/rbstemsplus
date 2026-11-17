@@ -1,0 +1,84 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The Windows shell (app.md §3-4): WPF on .NET Framework 4.8.1, one AnyCPU exe that runs
+       natively on x64 and ARM64 and loads x64\ or arm64\rbsp-core.dll. Built on the Mac by
+       win/shell/build.sh with the pinned .NET SDK and the net481 reference assemblies (MIT, build
+       only: nothing from NuGet ships). build.sh passes ShellIds (the folder of the CoreIds.cs that
+       core/build.sh ids generated from the .def tables) and Version (the repository's VERSION). -->
+  <PropertyGroup Condition="'$(ShellTest)' == '1'">
+    <DefineConstants>$(DefineConstants);SHELL_TEST</DefineConstants>
+  </PropertyGroup>
+  <!-- the Prepare release (build.sh prepare): the Status and Prepare tabs shown; the first release
+       is built without it and holds no code that can create them (I10, I86) -->
+  <PropertyGroup Condition="'$(ShellPrepare)' == '1'">
+    <DefineConstants>$(DefineConstants);PREPARE_TABS</DefineConstants>
+  </PropertyGroup>
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net481</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <!-- Without it an AnyCPU net481 exe runs as x64 under emulation on ARM64 Windows (W0): it adds
+         supportedArchitectures "amd64 arm64" to the manifest's asmv3:windowsSettings -->
+    <PreferNativeArm64>true</PreferNativeArm64>
+    <AssemblyName>RB Stems Plus</AssemblyName>
+    <RootNamespace>RbStemsPlus.Shell</RootNamespace>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- our own Main (Program.cs): SetDefaultDllDirectories and the core preload come before WPF;
+         App.xaml stays XAML, compiled as a Page -->
+    <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
+    <StartupObject>RbStemsPlus.Shell.Program</StartupObject>
+    <OutputPath>bin/</OutputPath>
+    <IntermediateOutputPath>obj/</IntermediateOutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Product>RB Stems Plus</Product>
+    <!-- reproducible, no commit in the bytes (release.md §3.6, R4.I92) -->
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <PathMap>$(MSBuildProjectDirectory)=.</PathMap>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <EnableSourceLink>false</EnableSourceLink>
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <!-- locked restore (release.md §3.6, §9.1 rule 6) -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(ShellUnlock)' != '1'">true</RestoreLockedMode>
+    <!-- no vulnerability lookup at restore: the build works offline from build/nuget once fetched -->
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- the Mac tests are their own project -->
+    <Compile Remove="tests/**" />
+    <None Remove="tests/**" />
+    <Compile Include="$(ShellIds)/CoreIds.cs" Link="CoreIds.cs" />
+    <!-- the VM smoke's triggers: TEST builds only (build.sh with test-app) -->
+    <Compile Remove="TestHooks.cs" Condition="'$(ShellTest)' != '1'" />
+    <Compile Remove="Probe.cs;ProbeCore.cs" Condition="'$(ShellTest)' != '1'" />
+    <!-- the Status and Prepare tabs' views: the Prepare release and TEST builds only (I10, I86) -->
+    <Compile Remove="PrepareView.cs;StatusView.cs" Condition="'$(ShellTest)' != '1' And '$(ShellPrepare)' != '1'" />
+  </ItemGroup>
+  <!-- a TEST build's download server (build.sh's test-base URL; release.md T12): read by
+       TestHooks.SetUpdateBase; never in a release build (ShellTest=0 on its command line) -->
+  <ItemGroup Condition="'$(ShellTest)' == '1' and '$(ShellTestUpdateBase)' != ''">
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>RbspTestUpdateBase</_Parameter1>
+      <_Parameter2>$(ShellTestUpdateBase)</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
+  <!-- ShellX64=1 (build.sh's x64 option): the x64-forced exe for the Prism pass on the ARM64 VM (app.md
+       §7): PlatformTarget x64, no native ARM64 preference, so it runs under emulation and loads
+       x64\rbsp-core.dll. Never shipped. -->
+  <PropertyGroup Condition="'$(ShellX64)' == '1'">
+    <PlatformTarget>x64</PlatformTarget>
+    <PreferNativeArm64>false</PreferNativeArm64>
+  </PropertyGroup>
+</Project>

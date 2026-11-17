@@ -132,9 +132,11 @@ func appendLog(_ path: String, _ s: String) {
 let afterExitWait = "while /bin/kill -0 \"$1\" 2>/dev/null; do /bin/sleep \"$2\"; done; shift 2\n"
 
 /// Runs a constant shell body once this process has exited (e.g. opening or deleting the app),
-/// with `args` as $1…. Detached: it outlives this process.
-func afterExit(poll: String, _ then: String, _ args: [String]) {
+/// with `args` as $1…. Detached: it outlives this process. False: the shell couldn't be started
+/// (nothing will run after this process).
+@discardableResult
+func afterExit(poll: String, _ then: String, _ args: [String]) -> Bool {
     let p = child("/bin/sh", ["-c", afterExitWait + then, "rbsp", String(ProcessInfo.processInfo.processIdentifier), poll] + args)
     p.standardInput = FileHandle.nullDevice
-    try? p.run()
+    do { try p.run(); return true } catch { return false }
 }

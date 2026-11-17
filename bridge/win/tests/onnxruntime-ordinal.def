@@ -1,0 +1,8 @@
+; The import library harness.exe links through (bridge/win/build.sh --test, T6): NONAME, so the exe
+; imports onnxruntime.dll by ordinal only, as rekordbox.exe does (bridge.md §4; phase0-probes.md).
+LIBRARY onnxruntime.dll
+EXPORTS
+    OrtGetApiBase @1 NONAME
+    OrtSessionOptionsAppendExecutionProviderEx_DML @2 NONAME
+    OrtSessionOptionsAppendExecutionProvider_CPU @3 NONAME
+    OrtSessionOptionsAppendExecutionProvider_DML @4 NONAME

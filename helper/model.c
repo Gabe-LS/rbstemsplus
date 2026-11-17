@@ -18,6 +18,21 @@
 static const OrtApi *R;
 static OrtEnv *env;
 
+/* the timing lines (rbsp.h): ORT_RUN is R->Run, timed alone in a timing build (t_ort) */
+#ifdef RBSP_TEST_TIMING
+uint64_t t_ort;
+static OrtStatus *timed_run(OrtSession *s, const OrtRunOptions *ro, const char *const *in_names, const OrtValue *const *in,
+                            size_t n_in, const char *const *out_names, size_t n_out, OrtValue **out) {
+    uint64_t t0 = t_now();
+    OrtStatus *st = R->Run(s, ro, in_names, in, n_in, out_names, n_out, out);
+    t_ort = t_now() - t0;
+    return st;
+}
+#define ORT_RUN timed_run
+#else
+#define ORT_RUN R->Run
+#endif
+
 struct model {
     OrtSession *s;
     OrtMemoryInfo *mem;
@@ -118,7 +133,7 @@ int model_run(model *m, const float *mix, size_t L, int ours, float **x_out, flo
                                                     ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in[0]), why, whyn)
              || fail(R->CreateTensorWithDataAsOrtValue(m->mem, mag, sizeof(float) * 4 * BINS * F, magdims, 4,
                                                        ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in[1]), why, whyn)
-             || fail(R->Run(m->s, NULL, in_names, (const OrtValue *const *)in, 2, out_names, 2, out), why, whyn);
+             || fail(ORT_RUN(m->s, NULL, in_names, (const OrtValue *const *)in, 2, out_names, 2, out), why, whyn);
     float *xd = NULL, *xtd = NULL;
     OrtTensorTypeAndShapeInfo *ti = NULL;
     size_t nx = 0, nxt = 0;

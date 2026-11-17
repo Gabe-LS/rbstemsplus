@@ -1,0 +1,4 @@
+# tests/win/first-run.sh's step 5: a step past its 10 s timeout is a TIMEOUT, and vm-run.sh ends
+# its processes in the VM (N-kill.log: "vm-run-kill: 0 left") before the run goes on
+# MODE  SECS NAME     SCRIPT
+sys     10   sleeper  timeout/sleeper.ps1

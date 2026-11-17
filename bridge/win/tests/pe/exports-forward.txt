@@ -1,0 +1,13 @@
+    Hint/Ord  Name
+           0  __acrt_iob_func
+           0  __stdio_common_vfprintf
+
+Export Table:
+ DLL name: onnxruntime.dll
+ Ordinal base: 1
+ Ordinal      RVA  Name
+       1   0x13a0  OrtGetApiBase
+       2   0x13b0  OrtSessionOptionsAppendExecutionProviderEx_DML
+       3   0x13c0  OrtSessionOptionsAppendExecutionProvider_CPU
+       4   0x13d0  OrtSessionOptionsAppendExecutionProvider_DML
+       5           GetTickCount (forwarded to KERNEL32.GetTickCount)

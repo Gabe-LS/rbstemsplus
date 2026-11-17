@@ -1,0 +1,98 @@
+<Window x:Class="RbStemsPlus.Shell.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="1040" Height="680" MinWidth="960" MinHeight="540"
+        ResizeMode="CanResize" WindowStartupLocation="CenterScreen" UseLayoutRounding="True">
+  <!-- The main window (app.md §4.6): the menu bar drawn from menus.def (Shell.cs), then the tabs.
+       Resizable down to 960×540 DIP outer (a 1920×1080 screen at 175 %, the taskbar's work area):
+       the log takes the space left and scrolls, the left column scrolls only when it must.
+       The first Windows release creates only the Manage tab (I86): each feature's actions in the
+       left third, the log in the right two thirds, as Controller.swift lays them out. Every text
+       is the core's (texts.def, set in MainWindow.xaml.cs) or the snapshot's (bound to
+       ManageModel); colours are the system's, so high contrast applies. -->
+  <Window.Resources>
+    <BooleanToVisibilityConverter x:Key="Visible" />
+    <Style x:Key="Action" TargetType="Button">
+      <Setter Property="Margin" Value="0,0,0,8" />
+      <Setter Property="Padding" Value="10,4" />
+      <Setter Property="HorizontalAlignment" Value="Stretch" />
+      <Setter Property="HorizontalContentAlignment" Value="Center" />
+    </Style>
+    <Style x:Key="Light" TargetType="TextBlock">
+      <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+      <Setter Property="FontSize" Value="15" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Margin" Value="0,0,6,0" />
+    </Style>
+    <Style x:Key="Feature" TargetType="TextBlock">
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+  </Window.Resources>
+  <DockPanel>
+    <Menu DockPanel.Dock="Top" x:Name="MenuBar" />
+    <TabControl x:Name="Tabs" Margin="4,4,4,4">
+      <TabItem x:Name="ManageTab">
+        <Grid Margin="16,12,16,12">
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" MinWidth="250" />
+            <ColumnDefinition Width="16" />
+            <ColumnDefinition Width="2*" />
+          </Grid.ColumnDefinitions>
+          <!-- The left column scrolls when its content is taller than the window (a long status
+               line at the minimum size, large text): nothing is cut off where it can't be reached.
+               The column itself is a tab stop (named with the Manage tab's title, MainWindow.xaml.cs),
+               so it can be reached and scrolled by keyboard even while every button is disabled
+               during an action. The tab order is the visual order: the column, its actions top to
+               bottom, then the log. -->
+          <ScrollViewer x:Name="LeftColumn" Grid.Column="0" VerticalScrollBarVisibility="Auto"
+                        HorizontalScrollBarVisibility="Disabled" Focusable="True" IsTabStop="True">
+            <!-- at least the viewport's height, so the status lines sit at the bottom when it fits -->
+            <Grid MinHeight="{Binding ViewportHeight, RelativeSource={RelativeSource AncestorType=ScrollViewer}}">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+              </Grid.RowDefinitions>
+              <StackPanel Grid.Row="0">
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                  <TextBlock x:Name="PlusLight" Style="{StaticResource Light}"
+                             Visibility="{Binding PlusLightShown, Converter={StaticResource Visible}}" />
+                  <TextBlock x:Name="PlusLabel" Style="{StaticResource Feature}" ToolTip="{Binding PlusTip}"
+                             ToolTipService.IsEnabled="{Binding PlusLightShown}" />
+                </StackPanel>
+                <Button x:Name="InstallPlus" Style="{StaticResource Action}" IsEnabled="{Binding InstallPlusEnabled}" />
+                <Button x:Name="ReinstallPlus" Style="{StaticResource Action}" IsEnabled="{Binding ReinstallPlusEnabled}" />
+                <Button x:Name="UninstallPlus" Style="{StaticResource Action}" IsEnabled="{Binding UninstallPlusEnabled}" />
+                <StackPanel Orientation="Horizontal" Margin="0,10,0,8">
+                  <TextBlock x:Name="CacheLight" Style="{StaticResource Light}"
+                             Visibility="{Binding CacheLightShown, Converter={StaticResource Visible}}" />
+                  <TextBlock x:Name="CacheLabel" Style="{StaticResource Feature}" ToolTip="{Binding CacheTip}"
+                             ToolTipService.IsEnabled="{Binding CacheLightShown}" />
+                </StackPanel>
+                <Button x:Name="InstallCache" Style="{StaticResource Action}" IsEnabled="{Binding InstallCacheEnabled}" />
+                <Button x:Name="ReinstallCache" Style="{StaticResource Action}" IsEnabled="{Binding ReinstallCacheEnabled}" />
+                <Button x:Name="SettingsButton" Style="{StaticResource Action}" IsEnabled="{Binding SettingsEnabled}" />
+                <Button x:Name="UninstallCache" Style="{StaticResource Action}" IsEnabled="{Binding UninstallCacheEnabled}" />
+              </StackPanel>
+              <StackPanel Grid.Row="2" Margin="0,8,0,0">
+                <TextBlock x:Name="NoticeLine" Text="{Binding Notice}" TextWrapping="Wrap" Margin="0,0,0,4"
+                           Foreground="{DynamicResource {x:Static SystemColors.GrayTextBrushKey}}" />
+                <DockPanel>
+                  <ProgressBar x:Name="Spinner" DockPanel.Dock="Left" Width="16" Height="16" Margin="0,1,8,0"
+                               VerticalAlignment="Top" IsIndeterminate="{Binding Spinner}"
+                               AutomationProperties.Name="{Binding StatusLine}"
+                               Visibility="{Binding Spinner, Converter={StaticResource Visible}}" />
+                  <TextBlock x:Name="StatusLine" Text="{Binding StatusLine}" TextWrapping="Wrap" />
+                </DockPanel>
+              </StackPanel>
+            </Grid>
+          </ScrollViewer>
+          <TextBox x:Name="LogView" Grid.Column="2" IsReadOnly="True" IsReadOnlyCaretVisible="True"
+                   FontFamily="Consolas" FontSize="12" TextWrapping="NoWrap"
+                   VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+        </Grid>
+      </TabItem>
+    </TabControl>
+  </DockPanel>
+</Window>

@@ -133,7 +133,7 @@ func reportTests() {
     check(installedLine(plus: true, cache: false, chosenModel: true, chosenCache: true, modelSha: sha, modelSize: 308_572_524)
           == "installed: Demucs v4 yes, Stems Cache no; chosen: Demucs v4 yes, Stems Cache yes; model in rekordbox: 0cc50d877629 (308572524 bytes)",
           "the installed line, with the model's checksum prefix")
-    let reportLines = [appLine(version: "1.0.0", build: "7", plus: plusLight(installed: true), cache: (.off, "Stems Cache is off.")),
+    let reportLines = [appLine(version: "1.0.0", build: "7", plus: (.on, "Demucs v4 is on."), cache: (.off, "Stems Cache is off.")),
                        installedLine(plus: true, cache: true, chosenModel: true, chosenCache: true, modelSha: sha, modelSize: nil)]
     check(reportLines.allSatisfy { $0.range(of: "(?<!RB )Stems Plus", options: .regularExpression) == nil && $0.contains("Demucs v4") },
           "the report names the model feature Demucs v4: \(reportLines)")

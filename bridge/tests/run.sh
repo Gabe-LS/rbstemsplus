@@ -598,11 +598,37 @@ rebuilt() {
     "the bridge says what it can cache (location=1 kept=1 before pioneer=), for the app"
 }
 
+# The harness's bench group (bridge/tests/perf.sh runs it on a timing build), and the model
+# checksum's memo: a second session on the same model doesn't hash the model again (P-B8's test:
+# a hash rewrites the memo, a temporary file renamed over it, so its inode would change)
+bench() {
+  if [ -z "$have_model" ]; then skip "bench (needs Pioneer's library and python3)"; return; fi
+  local m="$scratch/model/hdemucs.onnx" out inos
+  point "$real"; fresh bench
+  out="$(harness bench run "$m" a wait 'a*3' 'm*2' 2>&1 | tr '\n' ' ')"
+  expect '[ "$out" = "stored 1 ran 6: 3 model, 3 cache, 0 wrong " ]' "bench run: a*3 repeats, m*2 is new audio, one line at the end: got \"$out\""
+
+  fresh bench-memo
+  out="$(harness bench sessions "$m" 3 2>&1)"
+  inos="$(grep -o 'memo_ino=[0-9]*' <<< "$out" | cut -d= -f2 | sort -u)"
+  expect '[ "$(grep -c "^session " <<< "$out")" = 3 ] && [ "$(wc -l <<< "$inos" | tr -d " ")" = 1 ] && [ "$inos" != 0 ]' \
+    "a second and third session on the same model don't hash it again (the memo is used): $(tr '\n' ' ' <<< "$out")"
+  expect '[ "$(count "Demucs session opened")" = 3 ] && ! has ERROR' "three sessions opened, no error"
+
+  fresh bench-nomemo                                       # the check itself: without the memo, each session hashes
+  out="$(harness bench sessions "$m" 3 nomemo 2>&1)"
+  inos="$(grep -o 'memo_ino=[0-9]*' <<< "$out" | cut -d= -f2 | grep -v '^0$' | sort -u)"
+  expect '[ "$(wc -l <<< "$inos" | tr -d " ")" = 3 ]' "with the memo deleted before each session, each one hashes the model again: $(tr '\n' ' ' <<< "$out")"
+
+  out="$(harness bench start 2>&1)"
+  expect '[[ "$out" == "start outer_ns="*" hooked=1" ]]' "bench start: OrtGetApiBase and GetApi timed, the hooks in place: got \"$out\""
+}
+
 . "$here/location.sh"
 
 # ONLY="location losses" runs just those (one case at a time while debugging); SANITIZE=1 runs
 # the storage tests, arm64 only, with the bridge and the harness built with ASan and UBSan
-tests="loading configs fixtures logs homes cache nearoff kept foreign space memory rebuilt location entries losses faults companions images midway"
+tests="loading configs fixtures logs homes cache nearoff kept foreign space memory rebuilt bench location entries losses faults companions images midway"
 if [ "${SANITIZE:-}" = 1 ]; then tests="configs fixtures cache nearoff kept foreign location entries losses faults companions images midway"; archs=(arm64); fi
 tests="${ONLY:-$tests}"
 case " $tests " in *" images "*|*" midway "*) attach_images ;; esac

@@ -1,0 +1,137 @@
+/* facts.def: the facts the host reports (mac-core §3.5), once.
+ *
+ *   FACT(id, kind, os, doc)     kind: str | flag | i64
+ *
+ * Cheap facts: written by host->facts on every refresh (today's reads, never memoised), in three
+ * parts (core.h core_facts_parts, the M7 review's M71): CORE_FACTS_REFRESH, every cheap row but the
+ * PREPARE and KEPT groups; a row appended after KEPT (Windows only) is a REFRESH row, as its comment
+ * says; CORE_FACTS_PREPARE, prepareFacts' own reads; CORE_FACTS_KEPT, the kept sets.
+ * Each read asks for the parts its decision reads: refresh, the location's change, the start, the
+ * flows' facts and their revalidation REFRESH; prepareFacts (prep_facts_now) REFRESH | PREPARE; the
+ * Status tab's sets (sets_now) KEPT.
+ * Slow facts: written by host->slow_fact on a worker. Step results: by host->step.
+ * The library key is never a fact (it stays masked inside the helper, §3.10).
+ *
+ * STARTER ROWS: M4/M5 complete the list; W-core adds the win rows (a Windows facts set).
+ */
+#ifndef FACT
+#define FACT(id, kind, os, doc)
+#endif
+
+/* cheap (host->facts) */
+FACT(FACT_STEMS_PLUS_PRESENT,  flag, all, "stemsPlusPresent()")
+FACT(FACT_STEMS_CACHE_PRESENT, flag, all, "stemsCachePresent()")
+FACT(FACT_CHOSEN_LOCATION,     str,  all, "chosen(): the chosen Stems Cache location, or empty")
+FACT(FACT_CONFIG_TEXT,         str,  all, "config.ini's bytes (the core parses them with common/'s grammar)")
+FACT(FACT_CACHE_TRACES,        flag, all, "cacheTraces()")
+FACT(FACT_REKORDBOX_INSTALLED, flag, all, "rekordboxInstalled()")
+FACT(FACT_OWN_BUNDLE,          flag, all, "ownBundle(): the app runs from its own place (Windows: the installed copy, the start stub's version folder)")
+FACT(FACT_CACHE_IS_LINK,       flag, all, "cacheIsLink()")
+FACT(FACT_USER_IS_ADMIN,       flag, all, "userIsAdmin")
+
+/* slow (host->slow_fact) */
+FACT(FACT_SHA256,              str,  all, "a file's sha256, hex (CORE_SLOW_MODEL_SHA, CORE_SLOW_BRIDGE_SHA)")
+FACT(FACT_DRIVE_STATE,         i64,  all, "the location's drive state (CORE_SLOW_DRIVE)")
+FACT(FACT_FREE_BYTES,          i64,  all, "free bytes at the location (CORE_SLOW_DRIVE)")
+FACT(FACT_SIZE_BYTES,          i64,  all, "the stems' size (CORE_SLOW_SIZE_WALK)")
+FACT(FACT_SIGNATURE_OK,        flag, all, "the AlphaTheta check passed (CORE_SLOW_ALPHATHETA)")
+
+/* step results (host->step) */
+FACT(FACT_STEP_PATH,           str,  all, "a path the step made (the report's zip, a download)")
+
+/* the flows' cheap facts and step results (M6; each step's are listed in core.h, "The flows' steps") */
+FACT(FACT_CHOSEN_MODEL,        flag, all, "chosen().model: this account chose Demucs v4")
+FACT(FACT_CHOSEN_CACHE,        flag, all, "chosen().cache: this account chose Stems Cache")
+FACT(FACT_REKORDBOX_VERSION,   str,  all, "rekordboxVersion() (cheap; also the root runs' version)")
+FACT(FACT_STEP_FLAG,           flag, all, "a step's yes/no result")
+FACT(FACT_STEP_FLAG2,          flag, all, "a step's second yes/no result")
+FACT(FACT_STEP_CODE,           i64,  all, "a step's number or outcome code")
+FACT(FACT_STEP_TEXT,           str,  all, "a step's text result (a path, an OS error, a line for the log)")
+FACT(FACT_STEP_TEXT2,          str,  all, "a step's second text result")
+FACT(FACT_STEP_URL,            str,  all, "a URL a step chose (only URLs)")
+FACT(FACT_REKORDBOX_OPEN,      flag, all, "rekordboxOpen(), in any account")
+FACT(FACT_PIONEER_UPDATING,    flag, all, "pioneerUpdating(): Pioneer's installer or rekordbox's updater runs")
+FACT(FACT_ENGINE,              str,  all, "engineVersion(), \"\" when rekordbox has no STEMS Engine")
+FACT(FACT_ENGINE_SUPPORTED,    flag, all, "engineSupported(engine)")
+FACT(FACT_REKORDBOX_SUPPORTED, flag, all, "rekordboxSupported(rekordboxVersion())")
+FACT(FACT_ROOT_ORT_EXISTS,     flag, all, "rootOrt exists")
+FACT(FACT_PROTOTYPE_EXISTS,    flag, all, "prototypeRootDir exists")
+FACT(FACT_LIB_EXISTS,          flag, all, "Pioneer's library exists (rootOrt once Stems Cache is in, else rbLib)")
+FACT(FACT_LIB_SIGNED,          flag, all, "signedByPioneer(that library)")
+FACT(FACT_ORT_VERSION,         str,  all, "dylibVersion(that library); not set when unreadable")
+FACT(FACT_ORT_PREFIX,          str,  all, "the version lists' ortVersionPrefix")
+FACT(FACT_PAYLOAD_FETCH,       i64,  all, "0 downloaded and verified, 1 not verified, 2 offline or not downloaded")
+FACT(FACT_PAYLOAD_FOUND,       flag, all, "a payload.json to use (the one downloaded, or the saved one)")
+FACT(FACT_PAYLOAD_AGE,         i64,  all, "manifestAge() in whole seconds; not set when unknown")
+FACT(FACT_PAYLOAD_VERSION,     str,  all, "its payload_version")
+FACT(FACT_PAYLOAD_SIGNED_BY,   str,  all, "the key that signed it")
+FACT(FACT_PAYLOAD_APP_VERSION, str,  all, "its app.version")
+FACT(FACT_PAYLOAD_BRIDGE_SHA,  str,  all, "its bridge's sha256")
+FACT(FACT_PAYLOAD_BRIDGE_HERE, flag, all, "its bridge is downloaded here and verifies")
+FACT(FACT_PAYLOAD_MODEL_SHA,   str,  all, "its model's sha256")
+FACT(FACT_ORIGINALS_SAVED,     flag, all, "a saved copy of Pioneer's model exists, or one can't be checked")
+FACT(FACT_ORIGINALS_VERIFIED,  flag, all, "a saved copy of Pioneer's model verifies, or can't be checked: kept")
+FACT(FACT_LOC_DIR,             str,  all, "the chosen stems folder, \"\" this Mac")
+FACT(FACT_LOC_DRIVE,           str,  all, "its drive's name")
+FACT(FACT_LOC_GATE_ID,         str,  all, "the marker id of the folder that may be deleted now, \"\" none")
+FACT(FACT_LOC_SIZE_KIND,       i64,  all, "the saved stems' size: StemsSize's kind (core.h, LOCATION_NOW), -1 none")
+FACT(FACT_LOC_SIZE,            i64,  all, "... and its bytes")
+FACT(FACT_SET_GB,              str,  all, "Settings: the size limit field's text")
+FACT(FACT_SET_DAYS,            str,  all, "Settings: the days field's text")
+FACT(FACT_SET_UNREADABLE,      flag, all, "Settings: config.ini can't be read")
+FACT(FACT_SET_CAN_CHOOSE,      flag, all, "Settings: a location can be chosen")
+FACT(FACT_SET_SIZE_KIND,       i64,  all, "Settings: the stems in use's size kind, -1 none")
+FACT(FACT_SET_SIZE,            i64,  all, "Settings: ... and its bytes")
+FACT(FACT_SET_CLEAR,           i64,  all, "Settings: what Clear clears (core.h, CORE_STEP_SETTINGS)")
+FACT(FACT_SET_LOCATION,        i64,  all, "Settings: the location (0 This Mac, 1 chosen, 2 config.ini unreadable, 3 set wrongly)")
+FACT(FACT_SET_LABEL_PATH,      str,  all, "Settings: the folders between a chosen location's volume mount point and the chosen folder's parent, '/'-separated ('' none)")
+FACT(FACT_THIS_MAC_MODEL_FOLDERS, i64, all, "thisMacHasModelFolders()")
+
+/* Windows only (W-core, app.md §5.2, §5.5): the Windows facts */
+FACT(FACT_REKORDBOX_CLOSING,   flag, win, "CORE_STEP_REKORDBOX: rekordbox's process runs with no window left (it lingers about 75 s after its window closes, PLAN R1); FACT_REKORDBOX_OPEN is set too")
+FACT(FACT_R1_STATE,            i64,  win, "CORE_SLOW_R1: 0 nothing to put back, 1 the live onnxruntime.dll is missing, 2 it is neither Pioneer's nor ours, 3 the ort folder's copy is missing")
+/* the view model's cheap facts (M4): written by host->facts on every refresh, beside the cheap facts
+ * above, as Controller.refresh and prepareFacts read them today. The cheap sheet also carries,
+ * from M6's rows, FACT_CHOSEN_MODEL, FACT_CHOSEN_CACHE, FACT_REKORDBOX_VERSION, FACT_ENGINE,
+ * FACT_ENGINE_SUPPORTED, FACT_REKORDBOX_SUPPORTED, FACT_ROOT_ORT_EXISTS, FACT_PROTOTYPE_EXISTS,
+ * FACT_LIB_EXISTS, FACT_LIB_SIGNED, FACT_ORT_VERSION and FACT_ORT_PREFIX (stemsPlusBlocked's and
+ * stemsCacheBlocked's facts: FACT_LIB_SIGNED and FACT_ORT_VERSION only when stemsCacheBlocked
+ * reaches them, so codesign runs only when Swift's would; Windows: FACT_ORT_LISTED, from the
+ * DLL's BLOCKED "cache" rule, in place of FACT_ORT_PREFIX), and FACT_LOC_DRIVE (the location
+ * snapshot's drive, not set on this Mac). The location's facts are LocationMonitor's background
+ * snapshot as it is now (until its memo moves into the core). */
+FACT(FACT_CONFIG_ENABLED,      flag, all, "readConfigState().config.enabled")
+FACT(FACT_CONFIG_RB_MODEL,     flag, all, "readConfigState().config.rekordboxModel")
+FACT(FACT_CONFIG_MAX_GB,       str,  all, "configNumber(readConfigState().config.maxGB)")
+FACT(FACT_CONFIG_UNREADABLE,   str,  all, "readConfigState().unreadable; not set when config.ini is readable")
+FACT(FACT_CONFIG_LOCATION,     i64,  all, "readConfigState().location: 0 this Mac, 1 a chosen folder (FACT_CONFIG_DIR), 2 malformed")
+FACT(FACT_CONFIG_DIR,          str,  all, "the chosen folder of FACT_CONFIG_LOCATION 1")
+FACT(FACT_LOC_MEASURED,        flag, all, "the location snapshot has a status (status != nil)")
+FACT(FACT_LOC_KIND,            i64,  all, "the snapshot's LocationStatus: pure.h LOC_*")
+FACT(FACT_LOC_PROBE,           i64,  all, "its probe for LOC_CHOSEN: pure.h PROBE_*")
+FACT(FACT_LOC_STATUS_DRIVE,    str,  all, "driveName(dir) for LOC_CHOSEN and LOC_BRIDGE_TOO_OLD")
+FACT(FACT_LOC_BRIDGE_STATE,    str,  all, "the bridge's live state (pending | available | unavailable); not set when none is live")
+FACT(FACT_LOC_BRIDGE_REASON,   str,  all, "its reason")
+FACT(FACT_LOC_BRIDGE_DRIVE,    str,  all, "driveName of its location; not set when its location is this Mac")
+FACT(FACT_REKORDBOX_RUNNING,   flag, all, "the snapshot's rekordboxRunning")
+FACT(FACT_LOC_PAUSED_FLOOR,    i64,  all, "the snapshot's pausedFloor in bytes, -1 none")
+FACT(FACT_LOC_IN_USE,          str,  all, "folderInUse(status); not set when nil")
+FACT(FACT_BRIDGE_MODELS,       str,  all, "bridgeCacheModels(), one sha256 a line; not set when nil")
+FACT(FACT_MODEL_SIZE,          i64,  all, "the size of rekordbox's model file (the \"model\" path); not set when it has none")
+FACT(FACT_MODEL_MTIME,         i64,  all, "its modification time, in nanoseconds since 1970")
+FACT(FACT_APPLE_SILICON,       flag, all, "appleSilicon")
+FACT(FACT_HELPER_THERE,        flag, all, "the prepare helper is an executable file")
+FACT(FACT_CONFIG_MAX_DAYS,     str,  all, "configNumber(readConfig().maxDays): written back beside a raised max_gb (writeConfig)")
+FACT(FACT_ORT_LISTED,          flag, win, "CORE_STEP_BLOCKED \"cache\" (and the cheap sheet), Windows: Pioneer's onnxruntime.dll's sha256 is in the verified payload's windows.compatible.ort_sha256; Windows matches the ORT by sha256, not by FACT_ORT_PREFIX")
+
+/* CORE_FACTS_PREPARE (M71): prepareFacts' own reads besides refresh's (with CORE_FACTS_REFRESH;
+ * prep_facts_now only) */
+FACT(FACT_BRIDGE_KEEPS,        flag, all, "bridgeSaysKept()")
+FACT(FACT_STEMS_QUALITY,       i64,  all, "stemsQuality(), -1 unknown")
+FACT(FACT_OUR_MODELS,          str,  all, "ourModel, then savedManifest()'s model sha256 when there is one, one a line")
+/* CORE_FACTS_KEPT (M71): the Status tab's kept sets (sets_now only) */
+FACT(FACT_KEPT_SETS,           str,  all, "keptSets(), one set a line: its name, a tab, its until date as the Status tab shows it (dateOnly; \"\" unknown), a tab, its manifest's file count")
+/* appended (HF7), Windows only, written with CORE_FACTS_REFRESH (not a KEPT row: the parts above are the Mac's) */
+FACT(FACT_LIB_UNCHECKED,       flag, win, "Windows' cheap sheet: BLOCKED \"cache\"'s rules had no answer for a supported rekordbox (the live onnxruntime.dll or ort\\'s copy couldn't be looked at, or the pin had none): Pioneer's ORT not checked, the lib rows unset")
+
+#undef FACT

@@ -1,0 +1,14 @@
+RB Stems Plus.app/Contents/Helpers/RB Stems Plus Watcher.app/Contents/Info.plist
+RB Stems Plus.app/Contents/Helpers/RB Stems Plus Watcher.app/Contents/MacOS/RB Stems Plus Watcher
+RB Stems Plus.app/Contents/Helpers/RB Stems Plus Watcher.app/Contents/PkgInfo
+RB Stems Plus.app/Contents/Helpers/RB Stems Plus Watcher.app/Contents/Resources/RBStemsPlus.icns
+RB Stems Plus.app/Contents/Helpers/RB Stems Plus Watcher.app/Contents/_CodeSignature/CodeResources
+RB Stems Plus.app/Contents/Helpers/rbsp-prepare
+RB Stems Plus.app/Contents/Info.plist
+RB Stems Plus.app/Contents/MacOS/RB Stems Plus
+RB Stems Plus.app/Contents/PkgInfo
+RB Stems Plus.app/Contents/Resources/Assets.car
+RB Stems Plus.app/Contents/Resources/LICENSE
+RB Stems Plus.app/Contents/Resources/NOTICE
+RB Stems Plus.app/Contents/Resources/RBStemsPlus.icns
+RB Stems Plus.app/Contents/_CodeSignature/CodeResources

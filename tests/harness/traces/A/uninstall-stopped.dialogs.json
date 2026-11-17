@@ -1,0 +1,30 @@
+[
+ {
+  "n": 1,
+  "dialog": "Uninstall RB Stems Plus? / rekordbox goes back to exactly how it was. Your music and rekordbox library aren't touched.\n\nRB Stems Plus will be deleted, including the stems it saved. {Uninstall*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.installPlusBtn.en",
+   "c.reinstallCacheBtn.en",
+   "c.settingsBtn.en",
+   "c.spinner.anim",
+   "c.status.str",
+   "c.uninstallCacheBtn.en"
+  ]
+ },
+ {
+  "n": 2,
+  "dialog": "Uninstall stopped / Stems Cache couldn't be removed, so nothing else was deleted. RB Stems Plus has no complete copy of rekordbox's original files. Reinstall rekordbox from rekordbox.com, then try again. {OK*}",
+  "origin": "main-queue-block",
+  "work_queue": "blocked (asked from the work queue, or busy)",
+  "window_changed_under_it": [
+   "c.installPlusBtn.en",
+   "c.reinstallCacheBtn.en",
+   "c.settingsBtn.en",
+   "c.spinner.anim",
+   "c.status.str",
+   "c.uninstallCacheBtn.en"
+  ]
+ }
+]

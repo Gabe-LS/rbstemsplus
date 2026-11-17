@@ -5,8 +5,12 @@
 # rekordbox's libmpg123, which library validation would refuse (requirement 13).
 #
 #   helper/build.sh [OUT]       into OUT (default build/helper)
+#   helper/build.sh --test-timing OUT   with the performance timing lines on stderr
+#                               (helper/tests/perf.sh; never a release: build-app.sh never asks)
 #
 # libFLAC is built once per tarball into build/helper/flac-<version>/ (delete it to rebuild).
+# Next to the helper, OUT/rbsp-prepare.inputs: the repository files that reach its bytes (from the
+# compiles' depfiles, this script and bridge/build.sh), for the Mac carry-forward (release.sh).
 #
 # Reading rekordbox's playlists: SQLCipher, built from its release tarball (downloaded once into
 # build/sqlcipher/, checked against its sha256: the same in Homebrew's formula for that version)
@@ -20,6 +24,12 @@
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/.." && pwd)"
+timing=
+if [ "${1:-}" = "--test-timing" ]; then
+  [ $# -eq 2 ] || { echo "usage: $0 --test-timing OUT" >&2; exit 2; }
+  timing=-DRBSP_TEST_TIMING
+  shift
+fi
 out="${1:-$root/build/helper}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
@@ -117,8 +127,11 @@ if [ ! -f "$sqlc/sqlite3.c" ]; then
   cp "$scratch2/sqlcipher-$SQLCIPHER_VERSION/sqlite3.c" "$scratch2/sqlcipher-$SQLCIPHER_VERSION/sqlite3.h" "$sqlc/"
   rm -rf "${scratch2:?}"
 fi
-cflags="-O2 -arch arm64 -mmacosx-version-min=12.0 -Wall -Wextra"
-cc() { clang $cflags -I"$obj" -I"$sqlc" -I"$here" -I"$root/bridge" -I"$flac/include" "$@"; }
+cflags="-O2 -arch arm64 -mmacosx-version-min=12.0 -Wall -Wextra${timing:+ $timing}"
+# RBSP_RESEARCH=1: a research build (--keys: each chunk's key, no model run, nothing written), never
+# released: scripts/build.sh refuses to run with it set, build-app.sh clears it
+if [ "${RBSP_RESEARCH:-}" = 1 ]; then cflags="$cflags -DRBSP_RESEARCH"; echo "RESEARCH BUILD (--keys)"; fi
+cc() { clang $cflags -I"$obj" -I"$sqlc" -I"$here" -I"$root/common" -I"$root/bridge" -I"$flac/include" "$@"; }
 # the key, masked: byte i stored as key[i] + 0x5a + 13i (library.c undoes it)
 tr -d '\r\n' < "$keyfile" | od -An -tu1 -v | awk '
   BEGIN { n = 0 }    # numeric from the start: an unset n indexes b[""], not b[0]
@@ -146,12 +159,24 @@ if [ "$("$obj/keycheck")" != "$LIBKEY_SHA256" ]; then
 fi
 rm -f "$obj/keycheck" "$obj/keycheck.c" "$obj/libkey.raw"
 # SQLCipher: its own warnings aren't ours
-clang -O2 -arch arm64 -mmacosx-version-min=12.0 -w $(echo $SQLC_DEFS) -c "$sqlc/sqlite3.c" -o "$obj/sqlite3.o"
+clang -O2 -arch arm64 -mmacosx-version-min=12.0 -w $(echo $SQLC_DEFS) -MD -MF "$obj/sqlite3.d" -c "$sqlc/sqlite3.c" -o "$obj/sqlite3.o"
 # the resampler: rekordbox's fused multiply-adds only where it has them
-cc -ffp-contract=off -c "$here/resample.c" -o "$obj/resample.o"
-for f in prepare decode aac mp3 mp4 model entry library kept manifest big readable; do cc -c "$here/$f.c" -o "$obj/$f.o"; done
+cc -ffp-contract=off -MD -MF "$obj/resample.d" -c "$here/resample.c" -o "$obj/resample.o"
+for f in prepare decode aac mp3 mp4 model entry library kept manifest big readable; do cc -MD -MF "$obj/$f.d" -c "$here/$f.c" -o "$obj/$f.o"; done
+# common/ (bridge.md §0a, helper.md T5): the file layer, sha256, the cache's layout and size rule,
+# and the path rules, each compiled on its own (external linkage)
+for f in plat_mac plat_helper entries path_rules; do cc -MD -MF "$obj/c_$f.d" -c "$root/common/$f.c" -o "$obj/c_$f.o"; done
 clang -arch arm64 -mmacosx-version-min=12.0 "$obj"/*.o "$flac/lib/libFLAC.a" \
   -framework AudioToolbox -framework CoreFoundation -framework Accelerate -framework Security -o "$out/rbsp-prepare"
+# the helper's input list (the Mac carry-forward, scripts/mac-inputs.py): every repository file
+# its compiles read (the depfiles: so every bridge/ header through -I bridge/), this script, and
+# bridge/build.sh, which pins libFLAC (FLAC_VERSION, FLAC_SHA256)
+# (the parser's own status checked, and an empty list refused: the list from before stays then)
+deps="$(python3 -I "$root/scripts/mac-inputs.py" deps "$root" "$obj"/*.d)" \
+  || { echo "helper/build.sh: the depfiles of rbsp-prepare couldn't be read" >&2; exit 1; }
+[ -n "$deps" ] || { echo "helper/build.sh: no input list for rbsp-prepare" >&2; exit 1; }
+printf '%s\nhelper/build.sh\nbridge/build.sh\n' "$deps" | LC_ALL=C sort -u > "$out/rbsp-prepare.inputs.tmp"
+mv "$out/rbsp-prepare.inputs.tmp" "$out/rbsp-prepare.inputs"
 rm -rf "$obj"
 codesign -f -s - -i io.github.rbstemsplus.prepare "$out/rbsp-prepare"
-echo "built $out/rbsp-prepare"
+echo "built $out/rbsp-prepare${timing:+ (TEST: timing lines)}"

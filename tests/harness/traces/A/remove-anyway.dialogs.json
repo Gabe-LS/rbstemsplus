@@ -1,0 +1,30 @@
+[
+ {
+  "n": 1,
+  "dialog": "Uninstall RB Stems Plus? / rekordbox goes back to exactly how it was. Your music and rekordbox library aren't touched.\n\nRB Stems Plus will be deleted, including the stems it saved. {Uninstall*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.installCacheBtn.en",
+   "c.reinstallPlusBtn.en",
+   "c.settingsBtn.en",
+   "c.spinner.anim",
+   "c.status.str",
+   "c.uninstallPlusBtn.en"
+  ]
+ },
+ {
+  "n": 2,
+  "dialog": "Uninstall stopped / rekordbox's stems model isn't one RB Stems Plus knows, so it was left as it is. Nothing was deleted.\n\nRemove RB Stems Plus Anyway deletes only its own files and keeps its saved copy of rekordbox's own stems model. To get rekordbox's own stems model back, click Open Help. {Cancel*, Remove RB Stems Plus Anyway, Open Help}",
+  "origin": "main-queue-block",
+  "work_queue": "blocked (asked from the work queue, or busy)",
+  "window_changed_under_it": []
+ },
+ {
+  "n": 3,
+  "dialog": "RB Stems Plus is removed / rekordbox's stems model isn't one RB Stems Plus knows. The saved copy of rekordbox's own stems model stays in ~/Library/Application Support/rbstemsplus/originals. To put it back, click Open Help. {Done*, Open Help}",
+  "origin": "main-queue-block",
+  "work_queue": "blocked (asked from the work queue, or busy)",
+  "window_changed_under_it": []
+ }
+]

@@ -195,82 +195,9 @@ func watcherTests() {
     check(writeAtomically(Data(), to: againFile + ".link") && fileType(againFile + ".link") == S_IFREG && fileType(base + "/outside-victim") == nil,
           "lock: the again-mark replaces a planted link, never writes through it")
 
-    // MARK: waiting until nothing changes rekordbox
-    /// watcherSettle over `states`, what each look finds ("u": updating, "b": busy, "o": rekordbox
-    /// open, "h": an uninstall half-done), the last one lasting: its answer, the seconds paused, the log.
-    func settle(_ states: [String]) -> (ok: Bool, paused: Int, sessions: Int, log: [String]) {
-        var now = 0, paused = 0, sessions = 0, log: [String] = []
-        let s = { states[min(now, states.count - 1)] }
-        let ok = watcherSettle(updating: { s().contains("u") }, appBusy: { s().contains("b") }, rekordboxOpen: { s().contains("o") },
-                               pause: { paused += $0; now += 1 }, halfUninstalled: { s().contains("h") ? "uninstall-all" : nil },
-                               inSession: { sessions += 1 }, log: { log.append($0) })
-        return (ok, paused, sessions, log)
-    }
-    var w = settle([""])
-    check(w.ok && w.paused == 0 && w.sessions == 0 && w.log.isEmpty, "nothing going on: on at once")
-    w = settle(["o", "o", "u", "u", "u", ""])
-    check(w.ok && w.log.last?.hasPrefix("waited 10 s") == true, "rekordbox's updater, running as rekordbox quits: waited for after it quits: \(w)")
-    w = settle(["u", "u", "o", "o", ""])
-    check(w.ok && w.sessions >= 1 && w.log.contains("rekordbox is open: waiting until it quits"), "rekordbox reopened after the update: waited for too: \(w)")
-    w = settle(["o", "o", "u", "o", "o", "u", "u", ""])
-    check(w.ok && w.paused == 10 + 10 + 3 + 10 + 10 + 3 + 5, "update and rekordbox in turns: on only once neither is there: \(w)")
-    w = settle(["o", "o", "o", ""])
-    check(w.sessions == 4, "rekordbox open: its session looked at as it is found, then at each look: \(w)")
-    w = settle(["uo", "uo", "uo", "u", ""])
-    check(w.ok && w.sessions == 3, "a rekordbox session during an update's wait: looked at, or its pid is gone by the end: \(w)")
-    check(w.log.first == "an update is running: waiting until it ends" && w.log.filter { $0.hasPrefix("an update") }.count == 1, "the log says so as the wait starts, once: \(w)")
-    w = settle(["o", "h"])
-    check(!w.ok && w.log.last?.hasPrefix("an uninstall didn't finish") == true, "an uninstall left half-done when rekordbox quits: not asking: \(w)")
-    w = settle(["o", "b"])
-    check(!w.ok && w.log.last == "RB Stems Plus is still busy: not asking", "the app busy when rekordbox quits: 10 minutes, then not asking: \(w)")
-    w = settle(Array(repeating: "u", count: 500) + [""])
-    check(w.ok && w.paused == 2500, "an installer's window open for long: waited for as long as it is there: \(w.paused)")
-    w = settle(["b"])
-    check(!w.ok && w.paused == 600 && w.log.last == "RB Stems Plus is still busy: not asking", "the app busy: 10 minutes, then not asking: \(w)")
-    w = settle(["h", ""])
-    check(!w.ok && w.log.last?.hasPrefix("an uninstall didn't finish") == true && w.sessions == 0, "an uninstall left half-done: not asking, rekordbox's session unchecked: \(w)")
-
-    // MARK: the checks of one start: again while starts came in, never a change lost
-
-    /// watcherRounds with `checks` (each: what the check returns, and whether a start comes in
-    /// during it); `retakeOK`: whether the lock can be taken again. Returns the checks run, the
-    /// releases and the log.
-    func rounds(_ checks: [(goOn: Bool, startDuring: Bool)], max: Int = watcherMaxRounds, retakeOK: Bool = true) -> (n: Int, released: Int, log: [String]) {
-        var mark = false, i = 0, released = 0, log: [String] = []
-        let n = watcherRounds(max: max,
-                              check: { mark = false; let c = checks[Swift.min(i, checks.count - 1)]; i += 1; if c.startDuring { mark = true }; return c.goOn },
-                              release: { released += 1 }, again: { mark }, retake: { retakeOK }, log: { log.append($0) })
-        return (n, released, log)
-    }
-    var r = rounds([(true, false)])
-    check(r.n == 1 && r.released == 1 && r.log.isEmpty, "rounds: nothing came in: one check, the lock released")
-    r = rounds([(true, true), (true, false)])
-    check(r.n == 2 && r.released == 2 && r.log == ["something changed during the check: looking again"], "rounds: a start came in during the check: one more check")
-    r = rounds([(true, true)])
-    check(r.n == watcherMaxRounds && r.released == watcherMaxRounds && r.log.last?.contains("changes kept coming") == true,
-          "rounds: starts keep coming: at most \(watcherMaxRounds) checks, then the next start looks again")
-    r = rounds([(false, true)])
-    check(r.n == 1 && r.released == 1, "rounds: a check that stops (busy, the app opened to reinstall): no more checks")
-    r = rounds([(true, true)], retakeOK: false)
-    check(r.n == 1 && r.released == 1 && r.log.first?.contains("another start is checking it") == true, "rounds: another start took the lock meanwhile: it checks")
-    // the race, with the real lock and mark: a start while the check finishes is seen
-    try? fm.removeItem(atPath: againFile); try? fm.removeItem(atPath: lockDir); lines = []
-    check(takeWatcherLock(lockDir, again: againFile, gate: gate, log: logLine), "race: the first start takes the lock")
-    var startedDuring = 0, checksRun = 0
-    let n = watcherRounds(max: watcherMaxRounds,
-                          check: {
-                              checksRun += 1
-                              try? fm.removeItem(atPath: againFile)                       // what the check sees starts here
-                              if checksRun == 1 { startedDuring += takeWatcherLock(lockDir, again: againFile, gate: gate, log: logLine) ? 0 : 1 }
-                              return true
-                          },
-                          release: { safeRemove(lockDir, whole: false, gate) },
-                          again: { fileType(againFile) != nil },
-                          retake: { mkdir(lockDir, 0o700) == 0 },
-                          log: logLine)
-    check(startedDuring == 1 && n == 2 && fileType(lockDir) == nil && fileType(againFile) == nil,
-          "race: a start during the check is refused, logged, and checked by the running watcher; the lock is free after")
-    check(lines.first == "another check is running: it will look again", "race: the refused start wrote its line")
+    // (watcherSettle and watcherRounds are the core's since the watcher runs over it: core/tests/vectors.c
+    // compares them with 1.3.0's on its scripted traces, flows_test's t_watcher runs them in the
+    // watcher's flow, and shell-test runs the start-during-a-check race with the real lock)
 
     // MARK: the install command quits the app, never the watcher (by its bundle ID or 1.0's --watch)
 

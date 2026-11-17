@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The shell's Mac tests (win/shell/build.sh): the WPF-free sources of the shell compiled for
+       .NET 10 on macOS (the pinned SDK's own runtime and reference pack: no NuGet package), run
+       against the core built as a dylib (CORE_WIN_POLICY, the test hooks). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>ShellTests</AssemblyName>
+    <RootNamespace>RbStemsPlus.Shell</RootNamespace>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <UseAppHost>false</UseAppHost>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <NuGetAudit>false</NuGetAudit>
+    <DefineConstants>$(DefineConstants);PROBE_TESTS</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="ShellTests.cs" />
+    <Compile Include="../Native.cs;../Snap.cs;../Host.cs;../ManageModel.cs;../DialogForm.cs;../LogBuffer.cs;../Presenter.cs;../Activation.cs;../MenuKeys.cs;../WindowPlace.cs;../Startup.cs;../CloseGate.cs;../OneCopy.cs;../LaunchArgs.cs;../ProbeCore.cs;../PrepareModel.cs;../StatusModel.cs" />
+    <Compile Include="$(ShellIds)/CoreIds.cs" Link="CoreIds.cs" />
+    <None Include="../../../tests/harness/fields.tsv" Link="fields.tsv" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../tests/harness/scenarios-win.tsv" Link="scenarios-win.tsv" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../tests/harness/scenarios/*.sh" Link="scenarios/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

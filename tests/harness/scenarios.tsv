@@ -1,0 +1,127 @@
+# The characterisation harness's scenario list (the private Windows plan's mac-core §2.3, §2.4; the Windows plan §3 Phase 0).
+# One row per commit: every app commit since 38a4cbd (git log 38a4cbd~1..HEAD -- app), and every earlier UI-rule
+# commit (git log 38a4cbd^ -- app/Sources, the ones that change what the window shows or when), plus the flows
+# and the dialog scenarios §2.3 names. Columns, tab-separated:
+#   commit    the commit (or "flow:" / "dialog:" / "perf:" for the rows §2.3 adds)
+#   kind      tab-fix (since 38a4cbd) | ui-rule (before) | flow | dialog | perf | not-ui (no window behaviour: why in notes)
+#   tag       first | Prepare (the private Windows plan §3: Manage, activation, installs, menus, shared flows = first (the first Windows release); Prepare and Status tabs = Prepare)
+#   scenario  tests/harness/scenarios/<name>.sh, or "manual: <item>" for the owner's round, or "-" for not-ui
+#   status    scripted (written, not yet recorded) | recorded (A's trace in tests/harness/traces/A, two runs alike) | smoke-tested (perf: one tiny run) | to-script (planned, not written) | manual | n/a
+#   notes
+commit	kind	tag	scenario	status	notes
+178c9ed	tab-fix	Prepare	prepare-come-back-quiet	recorded	refused playlist no Checking… flash on coming back; Status checks stop when the app changes something
+178c9ed	tab-fix	Prepare	manual: coming back during a short wait	manual	coming back during a short wait (inBackground) checks quietly at its end: mac-A's probe can't hold a short wait open from outside (the only one reachable, the complete uninstall's location check, takes milliseconds; Settings' Change… needs a folder picked in the open panel): the owner's round; the quiet check on coming back itself is prepare-come-back-quiet
+5764bd4	tab-fix	Prepare	prepare-held-click	recorded	only coming back checks quietly; a quiet check never lets Prepare act on the old estimate; a held click fires only in front; rows never stay on Checking…
+5764bd4	tab-fix	Prepare	prepare-run	recorded	the note tells refused and silent tracks apart (run lines with refused/silent)
+64325ad	tab-fix	Prepare	prepare-run	recorded	a prepared track's note: separated now or already saved
+61a5393	tab-fix	Prepare	prepare-come-back-quiet	recorded	coming back to Prepare or Status checks again without clearing what's shown; Prepare clicked meanwhile waits (prepare-held-click)
+b15cc8e	tab-fix	Prepare	prepare-choose-estimate	recorded	an estimate not started leaves no old summary (folder, intelligent, then a playlist); the watcher half is not-ui
+b606a39	tab-fix	Prepare	status-sets	recorded	folders open however the list was read; a playlist's folders open from Status (prepare-folders); Status shows library counts and the run's progress (prepare-run); a report's end checks (to-script: report-end-checks)
+b606a39	tab-fix	first	report-end-checks	recorded	Create Report from the Status tab: Manage in front, the work queue's Report saved (the zip on the Desktop, its clock time masked), Done; the Status tab checks again
+236a1c0	tab-fix	Prepare	prepare-choose-estimate	recorded	a selected playlist always lists its tracks; results fill the rows as they come; rows stay during a run (prepare-run); coming back reads playlists again (prepare-come-back-quiet)
+d8d5e64	tab-fix	Prepare	prepare-folders	recorded	closed folders recorded as the user closes them; a run ending out of sight drops the old estimate and restoring checks again (prepare-minimize-restore)
+a310fc2	tab-fix	Prepare	prepare-folders	recorded	a list reload keeps closed folders closed; a run's end doesn't check over rekordbox; Status reads the library only with prepared playlists (status-sets)
+99ad35d	tab-fix	Prepare	prepare-check-cant-run	recorded	the tabs check again when the light's text changes (here: config.ini); the replugged-drive case needs the USB stick (drive-replug, to-script)
+99ad35d	tab-fix	Prepare	drive-replug	recorded	the chosen drive (vm-usb.swift's stick) pulled and plugged in again: the light and the Prepare tab say to connect it, then the tab checks again
+c674d1f	tab-fix	first	drive-replug	recorded	rekordbox running, its bridge-state still available when the stick is pulled: no restart asked; not-connected, then "in a few seconds", then available
+cfe858c	tab-fix	Prepare	prepare-check-cant-run	recorded	the track list empties when a check can't run
+0a63096	tab-fix	first	install-offline-fails	recorded	long work brings the Manage tab to the front (spinner, status line)
+5db560f	tab-fix	Prepare	prepare-run	recorded	a run's progress line names the track only; the bar shows how far
+23585dd	tab-fix	Prepare	prepare-choose-estimate	recorded	the track list says Checking… while it checks
+6c7380f	tab-fix	Prepare	status-sets	recorded	the run's progress percentage (prepare-run); the Status tab says Checking… while it checks
+1ab82da	tab-fix	Prepare	prepare-minimize-restore	recorded	no check from a tab not in front; a run's list isn't overwritten by a check; no check during an action (no-check-during-action, to-script)
+1ab82da	tab-fix	Prepare	no-check-during-action	recorded	Install Demucs v4 from the local server with the Prepare tab brought back to the front while it runs: today the tab checks as it appears (recorded, a note in the run's result), the action's own end checks it again
+e6d8c06	tab-fix	Prepare	settings-sheet	recorded	the tabs check again on new settings (Save), on coming back (prepare-come-back-quiet), on the first measurement (start traces); Prepare never runs on an old estimate
+dc50c5f	tab-fix	Prepare	status-sets	recorded	"No tracks in the playlist" by the check's counts
+664bfcd	tab-fix	Prepare	settings-clear	recorded	Clear Saved Stems checks the Status tab in front again, a hidden Status tab checks nothing; the disk's floor change checks Prepare (cache-paused)
+c5cb4bc	tab-fix	Prepare	status-sets	recorded	an emptied playlist reported as empty (estimate with 0 tracks)
+d76b06f	tab-fix	Prepare	status-sets	recorded	Status checks the playlist as it is now (--playlist in the fake's argv log)
+6c231bd	tab-fix	Prepare	settings-clear	recorded	clearing saved stems checks the Prepare tab in front again
+9e52915	tab-fix	Prepare	prepare-first-n	recorded	Prepare the First N passes the whole playlist with --first N (argv)
+61b7375	tab-fix	Prepare	no-check-during-action	recorded	a short wait (the complete uninstall's location check, Cancel) doesn't check the Prepare tab again; the install's end does
+2a53f9a	tab-fix	Prepare	prepare-first-n	recorded	Prepare the First N ends "isn't fully prepared" (the notification's title: runEndTitle, unit-tested; the window's lines here)
+9e34800	tab-fix	Prepare	prepare-stop	recorded	the last run counts finished tracks and says when the set wasn't saved; the notification wording is manual (Notification Center)
+692e695	tab-fix	Prepare	prepare-first-n	recorded	Prepare the First N keeps the skipped ones in its list
+78ae5d9	tab-fix	Prepare	no-check-during-action	recorded	an install ending under the Prepare tab checks it again
+39b025d	tab-fix	Prepare	manual: Prepare tab column widths	manual	layout (Track 240, Result 90, Note fills): frame records hold texts, not widths; checked by eye in the owner's round
+4e8711a	tab-fix	first	uninstall-everything	recorded	the complete uninstall resets the app's privacy permissions (tccutil): the app's rows in DJ's TCC.db gone once it has deleted itself (destructive: run.sh installs the app again)
+d12e9fd	not-ui	-	-	n/a	comments only
+e47d1aa	tab-fix	Prepare	prepare-run	recorded	the last run under the next estimate in one line, rows never move
+d934b51	tab-fix	Prepare	prepare-run	recorded	tabs 984x560, rows never move, the bar, Pause and Stop in the buttons' row; no run during an install (no-check-during-action); an update stops preparing (update-flow)
+8816d63	not-ui	-	-	n/a	watcher only (its prepared-playlist check, a notification): WatcherTests and P11; no window
+0da5b7a	tab-fix	Prepare	prepare-run	recorded	the outline's cells keep their text on the left (manual for the alignment); log lines by ID with masked paths are not-ui (log, ReportTests)
+3e81fea	not-ui	-	manual: privacy prompts	manual	purpose strings (Info.plist) for Documents, Desktop, Downloads and other volumes: macOS's own prompts, the owner's round
+348f89c	not-ui	-	-	n/a	watcher only: the check as rekordbox opens, by notification
+a74f0dc	not-ui	-	-	n/a	watcher only
+94d6fe5	not-ui	-	-	n/a	watcher only
+7359809	not-ui	-	-	n/a	watcher only (waits for rekordbox's updater)
+38a4cbd	tab-fix	Prepare	prepare-choose-estimate	recorded	one window with Status, Prepare and Manage; menus (install-confirm-cancel); doesn't-fit sheet (prepare-first-n); Pause and Stop (prepare-run, prepare-stop); kept sets (status-sets)
+6402636	ui-rule	first	activation-refresh	recorded	refresh the window whenever the app becomes active (both verbs)
+12ec063	ui-rule	first	bridge-recovery-light	recorded	bridge-state rewritten while the app runs (rekordbox running: a fake process): still checking, not using this Mac (read-only), using it again
+a386d7f	ui-rule	first	light-states	recorded	a yellow Stems Cache light when installed but not saving
+5136844	ui-rule	first	light-states	recorded	the yellow light's tooltip points to the button
+23403a9	ui-rule	first	light-states	recorded	each feature installs and uninstalls on its own: the buttons per state
+e26f9a1	ui-rule	first	light-states	recorded	unsupported rekordbox: "checks again each time you open it"
+0b48e80	ui-rule	first	light-states	recorded	gates on payload.json's compatible versions (the compiled-in list when none is saved)
+d7778ea	ui-rule	first	cache-paused	recorded	the chosen USB stick filled to 50 MB free (under its floor, a tenth of the disk): the light, Reinstall's confirmation; freed: back
+f89a2a0	ui-rule	first	manual: standard account	manual	a standard account (dj2): the Stems Cache buttons off and why; needs a second GUI login (the owner's)
+308d53c	ui-rule	first	manual: standard account	manual	Stems Cache off for standard accounts (as above)
+22e8b33	ui-rule	first	watcher-off-line	recorded	Install Stems Cache (another account's, turned on here) installs the watcher; launchctl disable as DJ: the status line on coming back; enabled: gone
+a1e7428	ui-rule	first	status-line-notices	recorded	the saved stems folder made a link while the app runs
+0d1117a	ui-rule	first	permission-needed	recorded	Install Stems Cache from the local server, App Management refusing (DJ's TCC row at 0): Permission needed, Try Again shows the action's status, refused again, Cancel
+617d2d2	ui-rule	first	install-cache-flow	recorded	Install Stems Cache for real from the local server, App Management allowed (DJ's TCC row set to 2, as the user's Allow leaves it), then Uninstall Stems Cache
+00d930f	ui-rule	first	password-sheet	recorded	the password sheet asks until right or cancelled
+4ac419e	ui-rule	first	watcher-request	recorded	Reinstall Now waits for rekordbox to be closed
+8d74bc0	ui-rule	first	watcher-request	recorded	an hour-old request is dropped
+a2f43d7	ui-rule	first	watcher-request	recorded	Reinstall Now reinstalls only what went missing (the dialog's text; the reinstall itself in install flows)
+1c0ee4e	ui-rule	first	resume-interrupted	recorded	offer to finish an action the last run left half-done
+13fff35	ui-rule	first	second-copy	recorded	open -n: the second copy's own probe records "Already open" (its trace: second-copy.p2); the open window as it was
+b78c365	ui-rule	first	start-first-launch	recorded	the welcome sheet on the first launch
+4d2e00e	ui-rule	first	update-flow	recorded	the local server's payload.json names the build under test repacked with its patch number plus one (update-server.sh --app-version next; versions masked): the notice, Update RB Stems Plus…, the update, the new app's window (update-flow.p2)
+10e616d	ui-rule	first	cache-update-offer	recorded	no saved payload.json: the one downloaded at launch (another bridge's checksum) asks once it arrives
+272125a	ui-rule	first	cache-update-offer	recorded	the saved payload.json names another bridge: asked at launch, once a run, Not Now changes nothing
+745073f	ui-rule	first	settings-sheet	recorded	Settings… (Cmd+,) and its refusal of a bad value
+31bceee	ui-rule	first	settings-location	recorded	a folder on the USB stick chosen (config.ini as Change… leaves it): Settings' row, Use This Mac; Change…'s folder panel is drawn by another process on macOS 26 (the probe sees " {}", no buttons): picking a folder is the owner's round
+5f6fc9a	ui-rule	first	settings-location	recorded	Use This Mac's dialog says only what the switch does (the drive's stems stay)
+bd8bfd2	ui-rule	first	settings-sheet	recorded	Settings' location row reads "Stems Cache location:"
+8712a51	ui-rule	first	settings-sheet	recorded	Settings' field labels never cut short (texts here; the layout by eye)
+d043f9b	ui-rule	first	install-confirm-cancel	recorded	confirmations say what each command does
+0d74d89	ui-rule	first	install-confirm-cancel	recorded	short dialog titles
+2bdabab	ui-rule	first	install-confirm-cancel	recorded	title-case buttons, one term per concept
+91baa8a	ui-rule	first	install-unverified	recorded	the local server's payload.json changed after signing (update-server.sh --bad-sig): couldn't be verified
+f50314f	ui-rule	first	light-states	recorded	texts that match what happens (lights, status line)
+e2beb43	ui-rule	first	rekordbox-missing	recorded	rekordbox's folder moved out of /Applications: Uninstall Stems Cache offers to remove the root folder (Remove: the root script)
+cec793f	ui-rule	first	rekordbox-missing	recorded	the question says to put a moved rekordbox back first (Cancel keeps the root folder)
+817c5a7	ui-rule	first	uninstall-everything	recorded	Stems Cache from another account kept: the last alert says other accounts need the install command
+b763370	ui-rule	first	uninstall-stopped	recorded	the root script's own reason (no saved copy of Pioneer's files): Uninstall stopped, nothing else deleted
+935110a	ui-rule	first	remove-anyway	recorded	rekordbox has a model this app doesn't know, Pioneer's saved copy here: Remove RB Stems Plus Anyway keeps it (destructive)
+038304d	ui-rule	first	update-flow	recorded	the Update menu item ends with an ellipsis
+flow:start	flow	first	start-first-launch	recorded	first launch; a launch with a half-done action (resume-interrupted)
+flow:install	flow	first	install-offline-fails	recorded	Install Demucs v4 without a server; with the local server: install-plus-flow, install-cache-flow
+flow:install-plus	flow	first	install-plus-flow	recorded	Install Demucs v4 from the local server (dist-test served on 192.168.64.1:8765), then Uninstall Demucs v4
+flow:uninstall	flow	first	install-plus-flow	recorded	Uninstall Demucs v4 (no password), in install-plus-flow; Uninstall Stems Cache in install-cache-flow; the complete uninstall: uninstall-everything, uninstall-stopped, remove-anyway
+flow:update	flow	first	update-flow	recorded	the in-app update to a newer TEST build served locally (P14: perf-update)
+flow:quit-download	flow	first	quit-during-download	recorded	Quit during the model's download (a slow local server, serve.py --rate): at once; the next launch offers to finish it
+flow:quit-report	flow	first	quit-during-report	recorded	Quit during Create Report: at once, no zip, nothing offered next time
+flow:quit-sheet	flow	first	quit-with-sheet	recorded	Quit is off under a main-thread confirmation and under a work-queue alert; on once answered
+flow:logout-prepare	flow	Prepare	manual: logout during a Prepare run	manual	logging DJ out ends the GUI session the harness needs (the owner logs in): the owner's round
+dialog:password	dialog	first	password-sheet	recorded	updates under the password sheet (work-queue dialog); trace.py dialogs lists what changed under it
+dialog:permission	dialog	first	permission-needed	recorded	"Permission needed" (work-queue dialog), Try Again / Cancel; data under it: dialogs-under-estimate
+dialog:main-thread	dialog	first	install-confirm-cancel	recorded	a main-thread dialog (the confirmation) and the menus under it
+dialog:work-queue	dialog	first	install-offline-fails	recorded	a work-queue alert ("Download failed") and the window under it
+dialog:prepare-sheet	dialog	Prepare	prepare-first-n	recorded	a main-thread sheet over a Prepare tab (doesn't fit)
+dialog:wake-up	dialog	first	watcher-request	recorded	a dialog asked while the app is idle (the request checked on coming back) appears within one frame (B's check; A's trace shows the frames)
+dialog:under-run	dialog	Prepare	prepare-run-under-dialog	recorded	a run's lines while the Status tab's Stop Keeping confirmation is up (a main-thread dialog): trace.py dialogs records what changed under it
+dialog:per-kind	dialog	Prepare	dialogs-under-estimate	recorded	per dialog kind (main-thread, work-queue, password sheet, Permission needed), whether the Prepare tab's estimate rows update under it today (I2; trace.py dialogs): G2.1's one waived difference is checked against this record
+perf:P1-P2	perf	first	perf-start	smoke-tested	launch to window drawn, to final lights; P10 idle and P12.start over its 60 s, then the 5,000-row playlist once and a scroll: P10 after P7, the first events of P6-P8 (10 launches per side)
+perf:P1-P2-first	perf	first	perf-start-first	scripted	perf-start's start alone, no Prepare step (an app with only the Manage tab: the Windows app's WB plan): launch to window drawn, to final lights; P10 idle and P12.start over its 60 s
+perf:P3-P4	perf	first	perf-activation	smoke-tested	activation to refresh end, to the quiet re-check settled
+perf:P5	perf	first	perf-click	smoke-tested	click to first visible reaction
+perf:P6-P8	perf	Prepare	perf-playlist-5000	smoke-tested	5,000-row playlist, the estimate at full speed and 1 line/ms, each scroll step; 4 rounds a launch
+perf:P11	perf	first	perf-watcher	smoke-tested	the watcher per start
+perf:P12	perf	first	perf-idle	smoke-tested	idle CPU (top), 300 s, the full form only; one launch per side
+perf:P9	perf	first	perf-under-sheet	smoke-tested	an estimate's last line read under each dialog kind (none, main-thread, work-queue, password, Permission needed): tests/perf/stats.py P9, P9.<kind>
+perf:P14	perf	first	perf-update	smoke-tested	Update to the new window (the local server; the two processes joined by their kernel start times, pids.txt)
+perf:P16	perf	first	perf-report	smoke-tested	Create Report masking a 30-minute log (the menu's command to Report saved)
+perf:G1.7	perf	Prepare	perf-spike	scripted	the G1 API spike (B only: core-linked TEST builds, app/Spike): 5,000 rows, the estimate at full speed and 1 line/ms; P10 idle and after P7
+perf:G1.7-20k	perf	Prepare	perf-spike-20k	scripted	the G1 API spike at 20,000 rows (no A to compare: stats.py samples)

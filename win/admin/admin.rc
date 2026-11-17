@@ -1,0 +1,27 @@
+// The worker's resources: its manifest (RT_MANIFEST 1) and a constant version resource that
+// carries only the description (release.md §3.4). Nothing here changes per release (I83): the
+// worker's bytes change only when its code does.
+1 24 "admin.manifest"
+
+1 VERSIONINFO
+FILEVERSION 0,0,0,0
+PRODUCTVERSION 0,0,0,0
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS 0x40004L
+FILETYPE 0x1L
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "FileDescription", "RB Stems Plus administrator helper"
+            VALUE "ProductName", "RB Stems Plus"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

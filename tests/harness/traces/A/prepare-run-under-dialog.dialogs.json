@@ -1,0 +1,16 @@
+[
+ {
+  "n": 1,
+  "dialog": "Stop keeping “Warm-up”? / Its stems stay in Stems Cache like any others, and may be removed when Stems Cache needs room. {Stop Keeping*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en",
+   "prepare.bar.val",
+   "prepare.info.str",
+   "prepare.tracksTable.r1",
+   "prepare.tracksTable.r2",
+   "status.runLine.str"
+  ]
+ }
+]

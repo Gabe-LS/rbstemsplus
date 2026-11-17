@@ -9,13 +9,13 @@
  * order (by SHA-256 of its bytes, as the prototype): the model runs on the first, and its stems
  * are shared with the other, so the order must not depend on the environment. */
 #include <AudioToolbox/AudioToolbox.h>
-#include <CommonCrypto/CommonDigest.h>
 #include <alloca.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "rbsp.h"
 #include "big.h"
+#include "plat.h"
 
 #define SHIFTS 8                         /* 0, 16, ..., 112 bytes */
 
@@ -154,7 +154,7 @@ int aac_decode_all(const char *path, aac_outputs *o, char *why, size_t whyn) {
     if (open_source(path, &s, why, whyn)) { close_source(&s); return 1; }
     o->rate = (int)s.in.mSampleRate;
     o->ch = (int)s.in.mChannelsPerFrame;
-    unsigned char dg[MAX_TRACKS][CC_SHA256_DIGEST_LENGTH];
+    unsigned char dg[MAX_TRACKS][32];
     int rc = 0;
     /* one after another: each output of an hour of audio is about 300 MB, and only distinct ones
      * are kept */
@@ -162,8 +162,10 @@ int aac_decode_all(const char *path, aac_outputs *o, char *why, size_t whyn) {
         int16_t *pcm;
         size_t frames;
         if (decode_shifted(&s, (size_t)k * 16, &pcm, &frames)) { snprintf(why, whyn, "Apple's AAC decoder stopped with an error"); rc = 1; break; }
-        unsigned char d[CC_SHA256_DIGEST_LENGTH];
-        CC_SHA256(pcm, (CC_LONG)(frames * 2 * (size_t)o->ch), d);
+        unsigned char d[32];
+        /* the 32-bit byte count CC_SHA256 took (1.3.0's: an output past 4 GB is hashed in its
+         * first count mod 2^32 bytes): the outputs' order, and so which runs first, unchanged */
+        plat_sha256(pcm, (uint32_t)(frames * 2 * (size_t)o->ch), d);
         int seen = 0;
         for (int j = 0; j < o->count; j++)
             if (!memcmp(dg[j], d, sizeof d)) seen = 1;

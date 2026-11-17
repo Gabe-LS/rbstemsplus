@@ -1,7 +1,7 @@
 /* Fuzz targets for what the bridge reads from files anyone who can write a drive may control:
- * config.ini (parse_config), a chosen location's marker (marker_ok), a kept set (parse_kept), an
+ * config.ini (cfg_parse), a chosen location's marker (marker_ok), a kept set (parse_kept), an
  * entry's .desc (parse_desc, with and without a chosen location's caps) and an entry's FLAC
- * (decode_flac, from memory and through checked_open from a file).
+ * (decode_flac, from memory and through plat_file_open_at from a file).
  *
  * Built by bridge/build.sh --fuzz with AddressSanitizer and UndefinedBehaviorSanitizer, with the
  * bridge's own source included (its static functions are the targets). Apple's clang has no
@@ -26,14 +26,14 @@ static void die(const char *what) {
 
 static void t_config(const uint8_t *d, size_t n) {
     config c = {.enabled = 1, .max_bytes = 20LL << 30, .max_days = 60};
-    if (parse_config((const char *)d, n, &c) == 0) {
-        if (c.location == 1 && (!location_path_ok(c.dir) || !uuid_ok(c.id))) die("config: a chosen location that breaks the path rules");
+    if (cfg_parse((const char *)d, n, &c, logf_) == 0) {
+        if (c.location == 1 && (!paths_location_ok(c.dir) || !cfg_uuid_ok(c.id))) die("config: a chosen location that breaks the path rules");
         if (c.location < -1 || c.location > 1) die("config: location out of range");
         if (!(c.max_days >= 1 && c.max_days <= 36500) || c.max_bytes < (long long)(0.1 * (1LL << 30)) - 1) die("config: a limit out of range");
-    } else if (!memchr(d, 0, n) && utf8_ok(d, n)) die("config: valid text refused");
+    } else if (!memchr(d, 0, n) && cfg_utf8_ok(d, n)) die("config: valid text refused");
     /* an over-long location line at the top (our scope) always makes the location malformed */
-    if (n > CONFIG_LINE_MAX + 11 && !memcmp(d, "cache_dir=", 10) && !memchr(d, '\n', CONFIG_LINE_MAX + 1)
-        && !memchr(d, 0, n) && utf8_ok(d, n) && c.location != -1) die("config: an over-long cache_dir line didn't make the location malformed");
+    if (n > CFG_LINE_MAX + 11 && !memcmp(d, "cache_dir=", 10) && !memchr(d, '\n', CFG_LINE_MAX + 1)
+        && !memchr(d, 0, n) && cfg_utf8_ok(d, n) && c.location != -1) die("config: an over-long cache_dir line didn't make the location malformed");
 }
 
 static void t_marker(const uint8_t *d, size_t n) {
@@ -89,18 +89,19 @@ static void t_flac(const uint8_t *d, size_t n, int from_file) {
     if (!f) die("flac: can't write the scratch file");
     fwrite(d, 1, n, f);
     fclose(f);
-    int dir = open(fuzz_dir, O_RDONLY | O_DIRECTORY), err;
-    off_t size;
+    plat_dir dir;
+    plat_file fd;
+    int64_t size;
     char name[80];
+    if (plat_dir_open(fuzz_dir, &dir)) die("flac: can't open the scratch folder");
     snprintf(name, sizeof name, "%s.flac", FUZZ_KEY);
-    int fd = checked_open(dir, name, flac_max(FUZZ_FRAMES), &size, &err);
-    if (fd >= 0) {
+    if (!plat_file_open_at(dir, name, flac_max(FUZZ_FRAMES), &size, &fd)) {
         unsigned char *b = malloc((size_t)size + 1);
-        if (!read_all(fd, b, (size_t)size)) decode_flac(b, (size_t)size, FUZZ_KEY, fuzz_pcm, FUZZ_FRAMES);
+        if (!plat_read_all(fd, b, (size_t)size)) decode_flac(b, (size_t)size, FUZZ_KEY, fuzz_pcm, FUZZ_FRAMES);
         free(b);
-        close(fd);
+        plat_file_close(fd);
     }
-    close(dir);
+    plat_dir_close(dir);
 }
 
 int LLVMFuzzerTestOneInput(const uint8_t *d, size_t n) {
@@ -173,7 +174,7 @@ int main(int argc, char **argv) {
     };
     for (size_t i = 0; i < sizeof configs / sizeof *configs; i++)
         run("config", w_config, 0, (const uint8_t *)configs[i], strlen(configs[i]), iters);
-    /* lines at, under and over CONFIG_LINE_MAX, and an over-long section line */
+    /* lines at, under and over CFG_LINE_MAX, and an over-long section line */
     static char longs[4][4096];
     const int widths[] = {1023, 1024, 1025};
     for (int i = 0; i < 3; i++) {
@@ -213,9 +214,10 @@ int main(int argc, char **argv) {
     static int16_t pcm[FUZZ_FRAMES * 8];
     for (size_t i = 0; i < FUZZ_FRAMES * 8; i++) pcm[i] = (int16_t)(sin(i * 0.01) * 8000 + (i % 7) * 30);
     write_job job = {pcm, FUZZ_FRAMES};
-    int dir = open(fuzz_dir, O_RDONLY | O_DIRECTORY), err;
-    if (write_flac(dir, FUZZ_KEY, &job, &err)) die("can't encode the seed FLAC");
-    close(dir);
+    plat_dir dir;
+    int err;
+    if (plat_dir_open(fuzz_dir, &dir) || write_flac(dir, FUZZ_KEY, &job, &err)) die("can't encode the seed FLAC");
+    plat_dir_close(dir);
     char path[PATH_MAX + 100];
     snprintf(path, sizeof path, "%s/%s.flac", fuzz_dir, FUZZ_KEY);
     FILE *f = fopen(path, "rb");
@@ -227,7 +229,7 @@ int main(int argc, char **argv) {
     fclose(f);
     if (decode_flac(flac, fn, FUZZ_KEY, fuzz_pcm, FUZZ_FRAMES) || memcmp(fuzz_pcm, pcm, sizeof pcm)) die("the seed FLAC doesn't decode to its audio");
     run("flac", t_flac, 0, flac, fn, iters / 4);
-    run("flac (checked_open from a file)", t_flac, 1, flac, fn, iters / 20);
+    run("flac (plat_file_open_at from a file)", t_flac, 1, flac, fn, iters / 20);
     unlink(path);
     rmdir(fuzz_dir);
     printf("fuzz: no failures\n");

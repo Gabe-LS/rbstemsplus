@@ -1,6 +1,7 @@
 /* kept.c: kept sets (a prepared playlist's entries, kept until a date) and the cache's room.
  * The file format is the bridge's (bridge/rbstems_bridge.c, "kept sets"): the bridge reads the
- * files, this helper writes them and deletes those whose date has passed. */
+ * files, this helper writes them and deletes those whose date has passed. Folders, files and
+ * sizes go through common/'s file layer and the cache's layout and size rule (common/entries.h). */
 #ifndef RBSP_KEPT_H
 #define RBSP_KEPT_H
 #include <stddef.h>
@@ -12,7 +13,7 @@
 typedef struct kept kept;
 
 /* ~/Library/Application Support/rbstemsplus/kept (the account's home from the user database, as
- * the bridge's); "" when there is no home */
+ * the bridge's: plat_home; Windows: LocalAppData's rbstemsplus\kept); "" when there is no home */
 void kept_default_dir(char *buf, size_t n);
 
 /* set NAME ([A-Za-z0-9_-], 1 to 64) in folder DIR (made if missing), kept until UNTIL. Sets whose

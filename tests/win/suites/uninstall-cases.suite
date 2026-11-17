@@ -1,0 +1,33 @@
+# T17/T11: the complete uninstall's VM cases that need no click but the app's own dialogs (app.md
+# 5.9's VM cases, by-hand.md's W13a list; moved here from there), in three install-and-uninstall
+# rounds. From "clean Windows":
+#   tests/win/vm-run.sh stage
+#   tests/win/vm-run.sh run "clean Windows" uninstall-cases
+# Round 1: from the app's menu after a quiet start; a junction inside the apps folder; a planted
+#   %TEMP%\ping.cmd; EnableExtensions=0 in HKCU; a %TEMP% holding ! % ^.
+# Round 2: from Settings > Apps (--uninstall) after a quiet start; cmd.exe blocked (IFEO, as
+#   SYSTEM, removed right after): the RunOnce cleanup value; a UsageLogs entry that is a link.
+#   With --keep, a stop in round 2 (after block-cmd, before unblock-cmd) leaves cmd.exe blocked
+#   on the VM: block-cmd's log prints the reg delete that undoes it (without --keep, vm-run.sh
+#   reverts the VM).
+# Round 3: the stub and DLL copied elsewhere and started with --after-exit (refused); a junction at
+#   Microsoft\CLR_v4.0 (left).
+# Without Stems Cache (that one needs rekordbox and UAC). What stays by hand (the logon after the
+# RunOnce value, an app that never quits, DebugView, a UNC TMP) is in by-hand.md. Needs a TEST build
+# as uninstall.suite does; not a release.list row.
+include lib/vmlib.ps1
+include uninstall/cases/unlib.ps1
+need http
+need file repo/core/texts.def
+need file dist-test/bootstrap.ps1
+# MODE       SECS NAME                 SCRIPT
+user         600  install              bootstrap/install.ps1
+user         120  plant                uninstall/cases/plant.ps1
+user         600  menu-uninstall       uninstall/cases/menu.ps1
+user         600  install-2            bootstrap/install.ps1
+sys          120  block-cmd            uninstall/cases/block-cmd.ps1
+user         600  settings-uninstall   uninstall/cases/settings.ps1
+sys          60   unblock-cmd          uninstall/cases/unblock-cmd.ps1
+user         600  install-3            bootstrap/install.ps1
+user         180  copies-refused       uninstall/cases/copies.ps1
+user         600  clr-junction         uninstall/cases/clr-junction.ps1

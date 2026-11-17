@@ -136,6 +136,14 @@ func driveName(_ dir: String, mounts: [Mount] = currentMounts()) -> String {
     return ((dir as NSString).deletingLastPathComponent as NSString).lastPathComponent
 }
 
+/// The location row's label parts for our folder `dir` (1.3.0's locationLabel; the core joins
+/// them): the drive's name, and the folders between the drive and our folder.
+func labelPath(dir: String, mounts: [Mount]) -> (drive: String, below: [String]) {
+    let parent = (dir as NSString).deletingLastPathComponent, drive = driveName(dir, mounts: mounts)
+    let mountPath = mountHolding(dir, mounts)?.path ?? "/Volumes/" + drive
+    return (drive, Array((pathComponents(parent) ?? []).dropFirst(pathComponents(mountPath)?.count ?? 0)))
+}
+
 /// What decides whether a folder may hold our folder (3.1.6), worked out by volumeFacts.
 struct VolumeFacts: Equatable {
     var mountPoint: String
@@ -207,21 +215,6 @@ func apfsRoles(plist: Data, device: String) -> [String] {
         }
     }
     return []
-}
-
-/// The refusal texts of 3.1.6.
-func locationRefusal(_ why: LocationRefusal, drive: String) -> String {
-    switch why {
-    case .internalDisk: return "Choose a folder on an external drive. To save stems on this Mac, use This Mac."
-    case .network: return "Choose a drive connected to this Mac, not a network drive."
-    case .readOnly: return "\"\(drive)\" is read-only."
-    case .timeMachine: return "\"\(drive)\" is a Time Machine backup drive."
-    case .insideOurFolder: return "Choose the folder that contains \"RB Stems Plus Cache\", not a folder inside it."
-    case .link: return "A folder on the way to the one you chose is a link. Choose the folder itself."
-    case .fileSystem: return "\"\(drive)\" isn't formatted as APFS, Mac OS Extended, exFAT or FAT32."
-    case .path: return "That folder's path is too long, or has a character Stems Cache can't use (a double quote or a control character). Choose another folder."
-    case .unreadable: return "RB Stems Plus can't read that folder's drive. Choose another folder."
-    }
 }
 
 enum LocationRefusal: Equatable { case internalDisk, network, readOnly, timeMachine, insideOurFolder, link, fileSystem, path, unreadable }
@@ -638,10 +631,28 @@ func removeInLocation(_ gate: LocationGate, wholeFolder: Bool, mounts: [Mount] =
     let ours = fds.last!, parent = fds[fds.count - 2]
     guard readMarker(at: ours).id?.lowercased() == gate.id.lowercased() else { return (false, "the folder's marker isn't the one expected") }
     var count = 0, ok = true
-    for name in listing(ours) {
-        // the marker (and its companion) go last, and only once everything else went: a folder
-        // left half-deleted keeps its identity, so Clear, the uninstall and other Macs still find it
+    // the marker (and its companion) go last, and only once everything else went: a folder left
+    // half-deleted keeps its identity, so Clear, the uninstall and other Macs still find it. Any
+    // other entry is kept with them when it is the same file (device and inode), whatever its
+    // name: a case or Unicode case-fold alias the drive resolves (a renamed .RBSTEMSPLUS-CACHE on a
+    // case-insensitive drive) or a hard link; a file with another identity (the marker's name in
+    // other capitals on a case-sensitive drive) is deleted as any. Their identity is taken first: a
+    // marker that can't be looked up again refuses, before anything is touched
+    var keepIDs: [(dev_t, ino_t)] = []
+    for n in [markerName, "._" + markerName] {
+        if fstatat(ours, n, &st, AT_SYMLINK_NOFOLLOW) == 0 { keepIDs.append((st.st_dev, st.st_ino)) }
+        else if errno != ENOENT || n == markerName { return (false, "the folder's marker can't be read") }
+    }
+    // a folder that can't be listed: nothing is touched, the marker least of all
+    guard let names = listing(ours) else { return (false, "some files couldn't be deleted") }
+    var variants: [String] = []   // the marker's or companion's own other names, removed after the marker
+    for name in names {
         if name == markerName || name == "._" + markerName { continue }
+        // by identity, not by name: any other name of the marker's or companion's file (a case
+        // or Unicode case-fold alias the drive resolves, or a hard link) goes after the marker (MQ1)
+        var e = stat()
+        guard fstatat(ours, name, &e, AT_SYMLINK_NOFOLLOW) == 0 else { if errno != ENOENT { ok = false }; continue }
+        if e.st_mode & S_IFMT == S_IFREG && keepIDs.contains(where: { $0.0 == e.st_dev && $0.1 == e.st_ino }) { variants.append(name); continue }
         let keep = !wholeFolder && !(name.count == 64 && isLowerHex(name)) && !name.hasPrefix("._")
         if keep { continue }
         ok = removeEntry(ours, name, dev: dev, count: &count, progress: progress) && ok
@@ -649,25 +660,33 @@ func removeInLocation(_ gate: LocationGate, wholeFolder: Bool, mounts: [Mount] =
     guard wholeFolder else { return (ok, ok ? nil : "some files couldn't be deleted") }
     guard ok else { return (false, "some files couldn't be deleted") }
     if unlinkat(ours, "._" + markerName, 0) != 0 && errno != ENOENT { return (false, "some files couldn't be deleted") }
-    guard unlinkat(ours, markerName, 0) == 0, unlinkat(parent, locationFolderName, AT_REMOVEDIR) == 0 else { return (false, "some files couldn't be deleted") }
+    guard unlinkat(ours, markerName, 0) == 0 else { return (false, "some files couldn't be deleted") }
+    for v in variants { _ = unlinkat(ours, v, 0) }   // a case-sensitive drive's other link (ENOENT on a case-insensitive one)
+    guard unlinkat(parent, locationFolderName, AT_REMOVEDIR) == 0 else { return (false, "some files couldn't be deleted") }
     // the "._" companion exFAT and FAT32 wrote next to our folder, if the drive didn't remove it
     let companion = "._" + locationFolderName
     if fstatat(parent, companion, &st, AT_SYMLINK_NOFOLLOW) == 0 && st.st_mode & S_IFMT == S_IFREG { unlinkat(parent, companion, 0) }
     return (true, nil)
 }
 
-/// The names in an open folder (not "." or "..").
-func listing(_ fd: Int32) -> [String] {
+/// The names in an open folder (not "." or ".."), or nil if it can't be listed (a read error
+/// midway included: never taken for the end of the folder).
+func listing(_ fd: Int32) -> [String]? {
+    if listingFault(fd) { return nil }
     let d = dup(fd)
-    guard d >= 0, let dir = fdopendir(d) else { if d >= 0 { close(d) }; return [] }
+    guard d >= 0, let dir = fdopendir(d) else { if d >= 0 { close(d) }; return nil }
     defer { closedir(dir) }
     var names: [String] = []
-    while let e = readdir(dir) {
+    while true {
+        errno = 0
+        guard let e = readdir(dir) else { return errno == 0 ? names : nil }   // an error isn't the end of the folder
         let name = withUnsafePointer(to: &e.pointee.d_name) { String(cString: UnsafeRawPointer($0).assumingMemoryBound(to: CChar.self)) }
         if name != "." && name != ".." { names.append(name) }
     }
-    return names
 }
+
+/// Where the tests make a listing fail (a folder that opens but can't be read); never in the app.
+var listingFault: (Int32) -> Bool = { _ in false }
 
 /// Deletes `name` in the open folder `at`: a folder (on device `dev`, opened without following a
 /// link) with everything in it, anything else (a link included) itself.
@@ -681,7 +700,8 @@ private func removeEntry(_ at: Int32, _ name: String, dev: dev_t, count: inout I
         var inner = stat()
         guard fstat(fd, &inner) == 0, inner.st_dev == dev, inner.st_ino == st.st_ino else { return false }
         var ok = true
-        for n in listing(fd) { ok = removeEntry(fd, n, dev: dev, count: &count, progress: progress) && ok }
+        guard let ns = listing(fd) else { return false }
+        for n in ns { ok = removeEntry(fd, n, dev: dev, count: &count, progress: progress) && ok }
         return ok && unlinkat(at, name, AT_REMOVEDIR) == 0
     }
     guard unlinkat(at, name, 0) == 0 || errno == ENOENT else { return false }
@@ -691,33 +711,21 @@ private func removeEntry(_ at: Int32, _ name: String, dev: dev_t, count: inout I
 }
 
 /// This Mac's stems (the model folders in ~/Library/Caches/rbstemsplus), deleted through the
-/// static gate after a switch to a drive; the model-hash memos stay. Whether all went.
+/// static gate after a switch to a drive; the model-hash memos stay. Whether all went: a folder
+/// that can't be listed (but isn't there: ENOENT) is not "all went", so the retry flag stays.
 @discardableResult
 func removeThisMacStems(_ folder: String = defaultCacheDir, _ gate: Deletable = deletable) -> Bool {
+    guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder) else {
+        // nothing there (a dangling link included) or not a folder: no stems to delete; a folder
+        // that can't be listed: not done (the flag stays for the next start)
+        var st = stat()
+        return stat(folder, &st) != 0 ? errno == ENOENT : (st.st_mode & S_IFMT) != S_IFDIR
+    }
     var ok = true
-    for name in (try? FileManager.default.contentsOfDirectory(atPath: folder)) ?? [] where name.count == 64 && isLowerHex(name) {
+    for name in names where name.count == 64 && isLowerHex(name) {
         ok = safeRemove(folder + "/" + name, whole: false, gate) && ok
     }
     return ok
-}
-
-/// Whether the retry of This Mac's deletion may run at launch (3.3.3): the flag is there, the
-/// chosen location is available, the installed bridge says location=1 and rekordbox is closed.
-/// Never with an older bridge or a config.ini it can't use: then a 1.1 bridge may be saving on
-/// this Mac by design.
-func mayRetryThisMacDeletion(flag: Bool, status: LocationStatus, bridgeLocation: Bool, rekordboxRunning: Bool) -> Bool {
-    guard flag, bridgeLocation, !rekordboxRunning, case .chosen(_, _, .available) = status else { return false }
-    return true
-}
-
-/// Whether This Mac's model folders (`modelFolders`: there are some in ~/Library/Caches/rbstemsplus)
-/// are leftovers to delete at launch, though no switch left the flag: the location is a drive in
-/// use and the installed bridge says location=1, so nothing saves on this Mac any more. They come
-/// from a time an older bridge saved there (another account's 1.1 app reinstalled it: bridgeTooOld);
-/// the owner decided they go automatically, as at a switch, under the retry's conditions.
-func thisMacNeedsCleanup(status: LocationStatus, bridgeLocation: Bool, modelFolders: Bool) -> Bool {
-    guard bridgeLocation, modelFolders, case .chosen(_, _, .available) = status else { return false }
-    return true
 }
 
 /// Whether ~/Library/Caches/rbstemsplus holds model folders (64 lowercase hex digits).
@@ -729,16 +737,6 @@ func thisMacHasModelFolders(_ folder: String = defaultCacheDir) -> Bool {
 /// or the installed one says location=1. An older one (reinstalled meanwhile from another
 /// account) still saves there: then the pending flag leaves it to the guarded launch retry.
 func thisMacDeletionNow(cachePresent: Bool, bridgeLocation: Bool) -> Bool { !cachePresent || bridgeLocation }
-
-/// Whether the complete uninstall (or Remove anyway) may delete the chosen folder: only the one
-/// the user was told about in the confirmation (`confirmed`, nil when it said nothing would be
-/// deleted on a drive), and only if the probe just before deleting finds that same folder and
-/// marker id in use (`fresh`). A drive connected after the confirmation, or another folder now,
-/// is left, and the final alert says where.
-func driveDeletionAllowed(confirmed: LocationGate?, fresh: LocationGate?) -> Bool {
-    guard let c = confirmed, let f = fresh else { return false }
-    return c.dir == f.dir && c.id.lowercased() == f.id.lowercased()
-}
 
 /// What Clear Saved Stems clears: this Mac's folder, or the chosen folder (its gate).
 enum ClearTarget: Equatable { case thisMac, drive(LocationGate) }

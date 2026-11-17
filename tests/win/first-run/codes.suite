@@ -1,0 +1,10 @@
+# tests/win/first-run.sh's step 3: exit codes through prlctl and the step's wrapper. Each step's
+# verdict is expected, not a pass: "zero" PASS 0, "three" FAIL 3 (the code passed through, not
+# truncated), "big" FAIL 1 (256 mapped to 1, not the 0 it truncates to), "unreadable" FAIL 1 (a
+# child powershell.exe's -196608 for a -File it can't read, mapped to 1). The lines starting
+# "#fake:" drive tests/win/vm-run-test.sh's fake prlctl; PowerShell reads them as comments.
+# MODE  SECS NAME        SCRIPT
+sys     60   zero        codes/zero.ps1
+sys     60   three       codes/three.ps1
+sys     60   big         codes/big.ps1
+sys     60   unreadable  codes/unreadable.ps1

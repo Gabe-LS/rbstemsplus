@@ -1,0 +1,4 @@
+{"k":"start","t":0,"mode":"trace","pid":88365,"launch_ns":-10862625,"arch":"arm64"}
+{"k":"ev","t":10152622708,"e":"dialog","n":1,"v":"Already open / Use the RB Stems Plus window that is already open. {OK*}","origin":"event"}
+{"k":"ev","t":10167978666,"e":"didBecomeActive","v":""}
+{"k":"frame","t":10169143541,"n":1,"busy":0,"d":{"app.active":"1","app.modal":"Already open / Use the RB Stems Plus window that is already open. {OK*}"}}

@@ -1,0 +1,15 @@
+           0  _fstat64
+           0  _wchmod
+           0  _wrename
+           0  _wstat64
+           0  _wunlink
+
+Export Table:
+ DLL name: onnxruntime.dll
+ Ordinal base: 1
+ Ordinal      RVA  Name
+       1   0x13a0  OrtGetApiBase
+       2   0x14a0  OrtSessionOptionsAppendExecutionProviderEx_DML
+       3   0x1590  OrtSessionOptionsAppendExecutionProvider_CPU
+       4   0x1670  OrtSessionOptionsAppendExecutionProvider_DML
+       5  0x740e2  rbstems_marker

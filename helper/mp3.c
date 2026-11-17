@@ -3,6 +3,15 @@
  * frame fed alone to rekordbox's own libmpg123, set up as decoderOpen sets it up, one
  * decode_frame per feed, with its lag bookkeeping. Ported from the verified prototype
  * (mp3rule/rbmp3emu.py, rbmp3fast.py): every rule below, including the odd ones, is rekordbox's. */
+#if defined(_WIN32) || defined(RBSP_WIN_DECODE)    /* pcm.h defines RBSP_WIN_DECODE on Windows */
+/* Windows (and the Mac test that compares it, helper/tests/win-mp3.sh): the same reader on
+ * common/plat.h (binary reads, 64-bit sizes, the library loaded by its full path), and mp3_probe */
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "pcm.h"
+#else
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -11,6 +20,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#endif
 #include "rbsp.h"
 #include "big.h"
 
@@ -77,7 +87,13 @@ static int check_xing_vbri(const buf *d, size_t pos, int side, xstate *st) {
 }
 
 /* FrameAnalyzer::analyze: the frame map, and H (the samples of the Xing/Info/VBRI frame, never fed) */
+#if defined(RBSP_WIN_DECODE)
+/* mp3_probe's form: it also returns once `stop` frames are mapped (0: never; from the fourth
+ * frame on nothing restarts, so the first is settled), *at the position the scan ended at */
+static frame *analyze_to(const buf *d, size_t *count, size_t *H, size_t stop, size_t *at) {
+#else
 static frame *analyze(const buf *d, size_t *count, size_t *H) {
+#endif
     size_t cap = 1024, nf = 0, samples = 0, pos = 0;
     frame *F = malloc(sizeof(frame) * cap);
     if (!F) return NULL;
@@ -85,6 +101,9 @@ static frame *analyze(const buf *d, size_t *count, size_t *H) {
     xstate st = {0, 0};
     *H = 0;
     for (;;) {
+#if defined(RBSP_WIN_DECODE)
+        if (stop && nf >= stop) break;
+#endif
         const unsigned char *b = at4(d, pos);
         if (!b) break;
         if (!memcmp(b, "ID3", 3)) {
@@ -139,8 +158,14 @@ static frame *analyze(const buf *d, size_t *count, size_t *H) {
         pos++;
     }
     *count = nf;
+#if defined(RBSP_WIN_DECODE)
+    *at = pos;
+#endif
     return F;
 }
+#if defined(RBSP_WIN_DECODE)
+static frame *analyze(const buf *d, size_t *count, size_t *H) { size_t at; return analyze_to(d, count, H, 0, &at); }
+#endif
 
 /* the libmpg123 calls rekordbox makes */
 typedef struct mpg123_handle_struct mpg123_handle;
@@ -153,10 +178,37 @@ static struct {
     int (*format)(mpg123_handle *, long, int, int);
     int (*open_feed)(mpg123_handle *);
     int (*feed)(mpg123_handle *, const unsigned char *, size_t);
+#if defined(RBSP_WIN_DECODE)
+    int (*decode_frame)(mpg123_handle *, int64_t *, unsigned char **, size_t *);
+#else
     int (*decode_frame)(mpg123_handle *, off_t *, unsigned char **, size_t *);
+#endif
     int ready;
 } m;
 
+#if defined(RBSP_WIN_DECODE)
+/* Only one call takes libmpg123's off_t: mpg123_decode_frame's *num (never read). Its width in
+ * Pioneer's libmpg123.dll isn't known (helper.md Q2): a Windows build exports mpg123_decode_frame
+ * with a 32-bit long; a large-file build exports mpg123_decode_frame_64 (the Mac's dylib has both);
+ * 1.32+ also mpg123_decode_frame64 with an int64_t. A zeroed int64_t is wide enough for any of
+ * them (little-endian: a 32-bit write fills its low half). The VM's export list settles which (Q2). */
+static int load_mpg123(const char *lib) {
+    if (m.ready) return 0;
+    const char *err = NULL;
+    plat_lib *h = plat_lib_open(lib, &err);   /* the full path: LoadLibraryExW, DLL_LOAD_DIR | SYSTEM32 */
+    if (!h) return 1;
+    m.init = (int (*)(void))plat_lib_sym(h, "mpg123_init");
+    m.new_ = (mpg123_handle * (*)(const char *, int *)) plat_lib_sym(h, "mpg123_new");
+    m.delete_ = (void (*)(mpg123_handle *))plat_lib_sym(h, "mpg123_delete");
+    m.param = (int (*)(mpg123_handle *, int, long, double))plat_lib_sym(h, "mpg123_param");
+    m.format_none = (int (*)(mpg123_handle *))plat_lib_sym(h, "mpg123_format_none");
+    m.format = (int (*)(mpg123_handle *, long, int, int))plat_lib_sym(h, "mpg123_format");
+    m.open_feed = (int (*)(mpg123_handle *))plat_lib_sym(h, "mpg123_open_feed");
+    m.feed = (int (*)(mpg123_handle *, const unsigned char *, size_t))plat_lib_sym(h, "mpg123_feed");
+    static const char *const df[] = {"mpg123_decode_frame", "mpg123_decode_frame_64", "mpg123_decode_frame64"};
+    for (size_t i = 0; i < sizeof df / sizeof *df && !m.decode_frame; i++)
+        m.decode_frame = (int (*)(mpg123_handle *, int64_t *, unsigned char **, size_t *))plat_lib_sym(h, df[i]);
+#else
 static int load_mpg123(const char *lib) {
     if (m.ready) return 0;
     void *h = dlopen(lib, RTLD_NOW | RTLD_LOCAL);
@@ -170,6 +222,7 @@ static int load_mpg123(const char *lib) {
     m.open_feed = (int (*)(mpg123_handle *))dlsym(h, "mpg123_open_feed");
     m.feed = (int (*)(mpg123_handle *, const unsigned char *, size_t))dlsym(h, "mpg123_feed");
     m.decode_frame = (int (*)(mpg123_handle *, off_t *, unsigned char **, size_t *))dlsym(h, "mpg123_decode_frame");
+#endif
     if (!m.init || !m.new_ || !m.delete_ || !m.param || !m.format_none || !m.format || !m.open_feed || !m.feed || !m.decode_frame)
         return 1;
     m.init();
@@ -184,12 +237,31 @@ static int feed_decode(mpg123_handle *h, const buf *d, const frame *f, unsigned 
     if (f->off >= d->n) len = 0;
     else if (len > d->n - f->off) len = d->n - f->off;
     m.feed(h, d->d + f->off, len);
+#if defined(RBSP_WIN_DECODE)
+    int64_t num = 0;
+#else
     off_t num = 0;
+#endif
     *pcm = NULL;
     *nb = 0;
     return m.decode_frame(h, &num, pcm, nb);
 }
 
+#if defined(RBSP_WIN_DECODE)
+static int read_file(const char *path, buf *b) {   /* the whole file, at most 2 GB, as below */
+    plat_file f;
+    plat_stat st;
+    if (plat_file_open_path(path, &f)) return 1;
+    if (plat_file_stat(f, &st) || st.size <= 0 || st.size > (2LL << 30)) { plat_file_close(f); return 1; }
+    unsigned char *d = big_alloc((size_t)st.size);
+    int e = !d || plat_read_all(f, d, (size_t)st.size);
+    plat_file_close(f);
+    if (e) { big_free(d); return 1; }
+    b->d = d;
+    b->n = (size_t)st.size;
+    return 0;
+}
+#else
 static int read_file(const char *path, buf *b) {
     int fd = open(path, O_RDONLY | O_CLOEXEC);
     struct stat st;
@@ -207,6 +279,7 @@ static int read_file(const char *path, buf *b) {
     b->n = got;
     return 0;
 }
+#endif
 
 int rb_mp3(const char *path, const char *libmpg123, float **out, size_t *n_out, char *why, size_t whyn) {
     if (load_mpg123(libmpg123)) { snprintf(why, whyn, "rekordbox's MP3 decoder (libmpg123) can't be loaded"); return 1; }
@@ -273,3 +346,302 @@ int rb_mp3(const char *path, const char *libmpg123, float **out, size_t *n_out, 
     *n_out = n;
     return 0;
 }
+
+#if defined(RBSP_WIN_DECODE)
+/* mp3_probe (helper.md T8): the header only. The first frame is the one analyze maps first on the
+ * whole file, found by running analyze itself on windows of the file; the length is rb_mp3's,
+ * nf * spf (the Xing/Info/VBRI frame counts as one, its spf samples zeros), with nf counted or
+ * estimated as below. */
+#ifndef MP3_PROBE_WIN
+#define MP3_PROBE_WIN (64 << 10)        /* win-mp3.sh also runs the probe with 8 KB: more window ends */
+#endif
+enum {
+    P_WIN = MP3_PROBE_WIN,              /* the first window (at least 2 x P_MARGIN) */
+    P_WIN_MAX = 16 << 20,               /* the largest (one frame mapped, then no header that far) */
+    P_MARGIN = 4096,                    /* the most analyze reads past its position: 2 frames of 2,017 + 4 */
+    P_SAMPLES = 8,                      /* reads of frame headers spread over the file, the last at its end */
+    P_CHUNK = 8192,                     /* each of them: at least three frames */
+    P_WALK = 256 << 10,                 /* the walk's reads */
+};
+
+typedef struct {
+    int64_t f0;                         /* the first frame's offset */
+    unsigned char h[4];                 /* its header */
+    int br[4], nbr;                     /* the bitrate indices of the first frames (up to 4) */
+    int whole;                          /* nf is the whole file's count (the scan reached its end) */
+    size_t nf;
+    int64_t next;                       /* else: the scan's position after the fourth frame */
+} first_map;
+
+static uint32_t be32(const unsigned char *b) { return (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3]; }
+static uint32_t le32(const unsigned char *b) { return (uint32_t)b[3] << 24 | (uint32_t)b[2] << 16 | (uint32_t)b[1] << 8 | b[0]; }
+
+/* analyze on windows of the file. Each window starts where the whole-file scan is in its first
+ * state (nothing mapped: the file's start, past an ID3v2 tag it skipped, the first of the frames
+ * it mapped), so the window's scan is the file's until it needs a byte past the window; every
+ * such need ends the scan (at4, the ID3 header, check_continuous's end, check_xing_vbri), within
+ * P_MARGIN of the window's end, and from 4 frames on nothing restarts. The scan ending further
+ * from the window's end is the file's own end of the scan (a "TAG" before any frame).
+ * 0 found, 1 no frame map, 2 a read error, 3 out of memory, 4 past P_WIN_MAX. */
+static int find_first(plat_file f, int64_t size, first_map *r) {
+    size_t W = P_WIN, cap = 0;
+    int64_t base = 0;
+    unsigned char *w = NULL;
+    int rc;
+    for (;;) {
+        if (base >= size) { rc = 1; break; }   /* an ID3 size past the end */
+        size_t wn = size - base < (int64_t)W ? (size_t)(size - base) : W;
+        int eof = base + (int64_t)wn == size;
+        if (cap < wn) {
+            unsigned char *g = realloc(w, wn);
+            if (!g) { rc = 3; break; }
+            w = g;
+            cap = wn;
+        }
+        if (pcm_pread_all(f, w, wn, base)) { rc = 2; break; }
+        buf d = {w, wn};
+        size_t nf, H, at;
+        frame *F = analyze_to(&d, &nf, &H, eof ? 0 : 4, &at);   /* to the end when the window reaches it */
+        if (!F) { rc = 3; break; }
+        if (eof || nf >= 4 || at + P_MARGIN <= wn) {
+            if (!nf) { free(F); rc = 1; break; }
+            r->f0 = base + (int64_t)F[0].off;
+            memcpy(r->h, w + F[0].off, 4);
+            r->nbr = nf < 4 ? (int)nf : 4;
+            for (int k = 0; k < r->nbr; k++) r->br[k] = w[F[k].off + 2] >> 4;
+            r->whole = eof || nf < 4;
+            r->nf = nf;
+            r->next = base + (int64_t)at;
+            free(F);
+            rc = 0;
+            break;
+        }
+        /* the window's end stopped it: again from the scan's last first state */
+        size_t from = nf ? F[0].off : at;
+        free(F);
+        if (from < W / 2) {
+            if (W >= P_WIN_MAX) { rc = 4; break; }
+            W *= 2;
+        }
+        base += (int64_t)from;
+    }
+    free(w);
+    return rc;
+}
+
+/* the end of the stream: before an ID3v1 tag (and its "TAG+" extension), APEv2 and Lyrics3v2 tags
+ * at the end */
+static int64_t audio_end(plat_file f, int64_t size) {
+    unsigned char t[32];
+    int64_t end = size;
+    if (end >= 128 && !pcm_pread_all(f, t, 3, end - 128) && !memcmp(t, "TAG", 3)) {
+        end -= 128;
+        if (end >= 227 && !pcm_pread_all(f, t, 4, end - 227) && !memcmp(t, "TAG+", 4)) end -= 227;
+    }
+    for (int k = 0; k < 4; k++) {
+        if (end >= 32 && !pcm_pread_all(f, t, 32, end - 32) && !memcmp(t, "APETAGEX", 8)) {
+            int64_t n = (int64_t)le32(t + 12) + ((t[23] & 0x80) ? 32 : 0);   /* footer and items, + header */
+            if (le32(t + 12) >= 32 && n <= end) { end -= n; continue; }
+        }
+        if (end >= 15 && !pcm_pread_all(f, t, 15, end - 15) && !memcmp(t + 6, "LYRICS200", 9)) {
+            int64_t n = 0;
+            int k6 = 0;
+            for (; k6 < 6 && t[k6] >= '0' && t[k6] <= '9'; k6++) n = n * 10 + (t[k6] - '0');
+            if (k6 == 6 && n + 15 <= end) { end -= n + 15; continue; }
+        }
+        break;
+    }
+    return end;
+}
+
+/* nf from the first frame's Xing/Info frame count (flags bit 0) or VBRI's, read where
+ * check_xing_vbri looks: LAME's and ffmpeg's count leaves the tag's own frame out, which analyze
+ * maps (and rb_mp3 counts, its spf samples zeros), hence + 1 (measured: win-mp3.sh). 0 when there
+ * is none, or when its byte count (LAME's: exactly the stream from the tag's frame to the end
+ * tags) is off by more than 0.5% or two frames: a cut or joined file. */
+static size_t tag_frames(plat_file f, int64_t size, const first_map *r, int64_t end) {
+    unsigned char t[64] = {0};
+    size_t n = size - r->f0 < 64 ? (size_t)(size - r->f0) : 64;
+    if (pcm_pread_all(f, t, n, r->f0)) return 0;
+    int ver = (t[1] >> 3) & 1, chm = t[3] >> 6;
+    int side = ver ? (chm == 3 ? 17 : 32) : (chm == 3 ? 9 : 17);
+    const unsigned char *x = t + 4 + side;
+    uint64_t frames = 0, bytes = 0;
+    if ((!memcmp(x, "Xing", 4) || !memcmp(x, "Info", 4)) && (x[7] & 1)) {
+        frames = be32(x + 8);
+        if (x[7] & 2) bytes = be32(x + 12);
+    } else if (!memcmp(t + 36, "VBRI", 4)) {
+        bytes = be32(t + 46);
+        frames = be32(t + 50);
+    }
+    if (!frames) return 0;
+    int64_t have = end - r->f0;
+    if (bytes) {
+        int64_t d = (int64_t)bytes - have, two = 2 * have / (int64_t)(frames + 1), tol = have / 200 > two ? have / 200 : two;
+        if (d > tol || d < -tol) return 0;
+    }
+    /* each frame between the smallest and the largest frame size this header allows */
+    unsigned char lo[4], hi[4];
+    memcpy(lo, r->h, 4);
+    memcpy(hi, r->h, 4);
+    lo[2] = (unsigned char)((lo[2] & 0x0C) | 0x10);
+    hi[2] = (unsigned char)((hi[2] & 0x0C) | 0xE2);
+    if ((double)have < (double)(frames + 1) * (double)fsize(lo) * 0.98 || (double)have > (double)(frames + 1) * (double)fsize(hi) * 1.02)
+        return 0;
+    return (size_t)frames + 1;
+}
+
+/* the first three frames in a row in c, as the scanner accepts a first frame (hdr_ok, the masked
+ * header mh, check_continuous): their position, else (size_t)-1 */
+static size_t chain_at(const unsigned char *c, size_t n, uint32_t mh) {
+    buf d = {c, n};
+    for (size_t p = 0; p + 4 <= n; p++)
+        if (hdr_ok(c + p) && masked(c + p) == mh && check_continuous(&d, p, mh) == 0) return p;
+    return (size_t)-1;
+}
+
+/* CBR: every sampled frame (the first four, three in a row at 7 offsets, and every frame of the
+ * last chunk, which must run to the stream's end) at the first frame's bitrate. nf from the last
+ * frame's offset and the mean frame size (spf / 8 x bitrate / rate, padding included); 0 when the
+ * headers say otherwise or can't be read. */
+static size_t cbr_frames(plat_file f, const first_map *r, int64_t end) {
+    int64_t span = end - (int64_t)P_CHUNK - r->f0;
+    if (span < (int64_t)P_SAMPLES * P_CHUNK) return 0;
+    for (int k = 0; k < r->nbr; k++)
+        if (r->br[k] != r->br[0]) return 0;
+    unsigned char *c = malloc(P_CHUNK);
+    if (!c) return 0;
+    uint32_t mh = masked(r->h);
+    size_t nf = 0;
+    int ok = 1;
+    for (int k = 1; k <= P_SAMPLES && ok; k++) {
+        int64_t off = r->f0 + span * k / P_SAMPLES;          /* the last: end - P_CHUNK */
+        if (pcm_pread_all(f, c, P_CHUNK, off)) { ok = 0; break; }
+        size_t p = chain_at(c, P_CHUNK, mh);
+        if (p == (size_t)-1) { ok = 0; break; }
+        if (k < P_SAMPLES) {
+            for (int j = 0; j < 3; j++, p += fsize(c + p))
+                if (c[p + 2] >> 4 != r->br[0]) ok = 0;
+            continue;
+        }
+        size_t last = p;
+        for (; p + 4 <= P_CHUNK; p += fsize(c + p)) {        /* to the end: no junk after the frames */
+            if (!hdr_ok(c + p) || masked(c + p) != mh || c[p + 2] >> 4 != r->br[0]) { ok = 0; break; }
+            last = p;
+        }
+        if (!ok) break;
+        int ver = (r->h[1] >> 3) & 1, layer = (r->h[1] >> 1) & 3;
+        int br = ver ? M1_BR[layer ^ 3][r->br[0]] : M2_BR[r->br[0]];
+        int sr = (ver ? M1_SR : M2_SR)[(r->h[2] >> 2) & 3];
+        double mean = (double)((ver ? 1152 : 576) >> 3) * br * 1000.0 / sr;
+        nf = (size_t)((double)(off + (int64_t)last - r->f0) / mean + 0.5) + 1;
+    }
+    free(c);
+    return ok ? nf : 0;
+}
+
+/* analyze's loop after its fourth frame (nothing restarts from there), on the rest of the file
+ * read in pieces: the whole-file count. 0, or 1 on a read error or no memory. */
+static int walk(plat_file f, int64_t size, const first_map *r, size_t *count) {
+    unsigned char *w = malloc(P_WALK);
+    if (!w) return 1;
+    const unsigned char *h = r->h;
+    int ver = (h[1] >> 3) & 1, layer = (h[1] >> 1) & 3, sri = (h[2] >> 2) & 3, chm = h[3] >> 6;
+    int64_t pos = r->next, wb = 0, we = 0;                    /* w holds [wb, we) */
+    size_t nf = r->nf;
+    int mism = 0, rc = 0;
+    for (;;) {
+        if (pos + 4 > size) break;
+        if (pos < wb || (pos + 10 > we && we < size)) {
+            wb = pos;
+            we = size - pos < P_WALK ? size : pos + P_WALK;
+            if (pcm_pread_all(f, w, (size_t)(we - wb), wb)) { rc = 1; break; }
+        }
+        const unsigned char *b = w + (pos - wb);
+        if (!memcmp(b, "ID3", 3)) {
+            if (pos + 5 > size) break;
+            int vv = b[3] * 10 + b[4];
+            if (vv == 20 || vv == 21 || vv == 30 || vv == 31 || vv == 40) {
+                if (pos + 10 > size) break;
+                const unsigned char *s = b + 6;
+                pos += (int64_t)((size_t)(s[0] & 0x7F) << 21 | (size_t)(s[1] & 0x7F) << 14 | (size_t)(s[2] & 0x7F) << 7 | (s[3] & 0x7F)) + 10;
+            } else {
+                pos += 3;
+            }
+            continue;
+        }
+        if (!hdr_ok(b)) { pos++; continue; }
+        if (((b[1] >> 3) & 1) == ver && ((b[1] >> 1) & 3) == layer && ((b[2] >> 2) & 3) == sri && b[3] >> 6 == chm) {
+            nf++;
+            pos += (int64_t)fsize(b);
+            mism = 0;
+            continue;
+        }
+        if (mism > 3) break;
+        mism++;
+        pos++;
+    }
+    free(w);
+    *count = nf;
+    return rc;
+}
+
+/* The length, from the first of these that applies: the scan reached the file's end in its first
+ * window (exact); the Xing/Info/VBRI count; CBR from the sampled headers (approx); otherwise the
+ * walk (exact, but it reads the whole file: a headerless VBR file, rare). */
+int mp3_probe(plat_file f, int64_t size, pcm_info *p, char *why, size_t whyn) {
+    memset(p, 0, sizeof *p);
+    if (size <= 0 || size > (2LL << 30)) { snprintf(why, whyn, "the file can't be read"); return 1; }   /* rb_mp3's read_file */
+    first_map r;
+    switch (find_first(f, size, &r)) {
+    case 0: break;
+    case 1: snprintf(why, whyn, "MP3 the frame scanner rejects: rekordbox finds no frame map"); return 1;
+    case 2: snprintf(why, whyn, "the file can't be read"); return 1;
+    case 3: snprintf(why, whyn, "out of memory"); return 1;
+    default: {
+        /* no fourth frame within P_WIN_MAX of the first ones (a long stretch of no frames): the
+         * whole file through rekordbox's scan, as rb_mp3 runs it, so the probe never refuses a
+         * file the run would prepare; it reads the whole file, for such a file only */
+        buf d = {big_alloc((size_t)size), (size_t)size};
+        if (!d.d) { snprintf(why, whyn, "out of memory"); return 1; }
+        if (pcm_pread_all(f, (void *)d.d, d.n, 0)) { big_free((void *)d.d); snprintf(why, whyn, "the file can't be read"); return 1; }
+        size_t nf0, H;
+        frame *F = analyze(&d, &nf0, &H);
+        if (!F || !nf0) {
+            free(F);
+            big_free((void *)d.d);
+            if (!F) { snprintf(why, whyn, "out of memory"); return 1; }
+            snprintf(why, whyn, "MP3 the frame scanner rejects: rekordbox finds no frame map");
+            return 1;
+        }
+        r.f0 = (int64_t)F[0].off;
+        memcpy(r.h, d.d + F[0].off, 4);
+        r.whole = 1;
+        r.nf = nf0;
+        free(F);
+        big_free((void *)d.d);
+        break;
+    }
+    }
+    const unsigned char *b = r.h;
+    int ver = (b[1] >> 3) & 1;
+    size_t nf = r.nf;
+    if (!r.whole) {
+        int64_t end = audio_end(f, size);
+        if (end < r.next) end = size;
+        if ((nf = tag_frames(f, size, &r, end))) {
+        } else if ((nf = cbr_frames(f, &r, end))) {
+            p->approx = 1;
+        } else if (walk(f, size, &r, &nf)) {
+            snprintf(why, whyn, "the file can't be read");
+            return 1;
+        }
+    }
+    p->kind = PCM_MP3;
+    p->rate = (ver ? M1_SR : M2_SR)[(b[2] >> 2) & 3];   /* as rb_mp3 takes them */
+    p->ch = (b[3] >> 6) == 3 ? 1 : 2;
+    p->frames = (uint64_t)nf * (ver ? 1152 : 576);
+    p->seconds = (double)p->frames / p->rate;
+    return 0;
+}
+#endif

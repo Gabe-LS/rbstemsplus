@@ -15,6 +15,7 @@ bin="${1:-$root/build/helper/rbsp-prepare}"
 model="${RBSP_MODEL:-$root/dist-test/stemsplus-model.onnx}"
 ort="${RBSP_ORT:-/Library/Application Support/rbstemsplus/ort/libonnxruntime.1.18.0.dylib}"
 for f in "$bin" "$model" "$ort"; do [ -f "$f" ] || { echo "missing: $f"; exit 1; }; done
+bin="$(cd "$(dirname "$bin")" && pwd -P)/$(basename "$bin")"   # absolute: some cases run from another folder
 id="$(shasum -a 256 "$model" | cut -d' ' -f1)"
 s="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/rbsp-kept.XXXXXX")" && pwd -P)"
 trap '[ "${KEEP:-}" = 1 ] && echo "scratch: $s" || rm -rf "$s"' EXIT
@@ -69,6 +70,52 @@ expect '[ "$(field "$(fileline)" how)" = "unchanged since it was prepared" ]' "a
 out="$(run --no-keep "$s/a.wav")"
 expect '[ "$(ls "$kd" | wc -l | tr -d " ")" = 2 ] && [ -z "$(field "$(last)" kept)" ]' "--no-keep writes no set"
 
+echo "== the helper's tag (a platform prefix and a number: 1 the Mac's, w1 Windows')"
+start tag
+out="$(run --no-keep "$s/a.wav")"
+entries=()
+while IFS= read -r f; do entries+=("$f"); done < <(find "$c/$id" -name '*.flac' | sort)
+# retag FILE TAG: the entry's RBSTEMS_HELPER comment set to TAG (the FLAC's VORBIS_COMMENT rebuilt)
+retag() { python3 -I - "$1" "$2" << 'EOF'
+import struct, sys
+p, tag = sys.argv[1], sys.argv[2].encode().decode("unicode_escape").encode("latin-1")   # \x00: a NUL
+b = open(p, "rb").read()
+assert b[:4] == b"fLaC"
+out, i = bytearray(b[:4]), 4
+while True:
+    h, n = b[i], int.from_bytes(b[i + 1:i + 4], "big")
+    body = b[i + 4:i + 4 + n]
+    if h & 0x7F == 4:
+        vl = struct.unpack("<I", body[:4])[0]
+        q = 4 + vl
+        cnt = struct.unpack("<I", body[q:q + 4])[0]
+        q += 4
+        ents = []
+        for _ in range(cnt):
+            l = struct.unpack("<I", body[q:q + 4])[0]
+            e = body[q + 4:q + 4 + l]
+            q += 4 + l
+            ents.append(b"RBSTEMS_HELPER=" + tag if e.startswith(b"RBSTEMS_HELPER=") else e)
+        body = body[:4 + vl] + struct.pack("<I", cnt) + b"".join(struct.pack("<I", len(e)) + e for e in ents) + body[q:]
+    out += bytes([h]) + len(body).to_bytes(3, "big") + body
+    i += 4 + n
+    if h & 0x80:
+        break
+open(p, "wb").write(out + b[i:])
+EOF
+}
+tagof() { python3 -I -c 'import re, sys; m = re.search(rb"RBSTEMS_HELPER=([a-z0-9]*)", open(sys.argv[1], "rb").read(8192)); print(m.group(1).decode() if m else "")' "$1"; }
+if [ "${#entries[@]}" = 3 ]; then
+  retag "${entries[0]}" w1; retag "${entries[1]}" 2; retag "${entries[2]}" 0
+  out="$(run --no-keep "$s/a.wav")"
+  expect '[ "$(field "$(fileline)" written)" = 1 ] && [ "$(field "$(fileline)" already)" = 2 ] && [ "$(tagof "${entries[0]}")" = w1 ] && [ "$(tagof "${entries[1]}")" = 2 ] && [ "$(tagof "${entries[2]}")" = 1 ]' \
+    "Windows' w1 and a later Mac tag stay, an older Mac tag is rewritten: $(fileline); tags $(tagof "${entries[0]}") $(tagof "${entries[1]}") $(tagof "${entries[2]}")"
+  retag "${entries[0]}" "$(printf '1%.0s' $(seq 80))"; retag "${entries[1]}" '1\x00X'
+  out="$(run --no-keep "$s/a.wav")"
+  expect '[ "$(field "$(fileline)" written)" = 2 ] && [ "$(field "$(fileline)" already)" = 1 ] && [ "$(tagof "${entries[0]}")" = 1 ] && [ "$(tagof "${entries[1]}")" = 1 ]' \
+    "a tag too long to read and one holding a NUL are rewritten: $(fileline)"
+else expect false "3 entries to retag: ${#entries[@]}"; fi
+
 echo "== refusals"
 start refuse
 run --keep friday --until $((now - 1)) "$s/a.wav" > /dev/null; rc=$?
@@ -86,6 +133,19 @@ expect '[ $rc = 1 ] && [ -f "$kd/bad.kept" ]' "a file the bridge can't read stil
 rm "$kd/bad.kept"; set_ s5.kept $((now + 3600))
 out="$(run --keep s1 --until $((now + 3600)) "$s/a.wav")"
 expect '[ -f "$kd/s1.kept" ] && [ "$(lines s1)" -gt 0 ]' "5 sets, one of them prepared again: allowed"
+# an empty --cache or --kept-dir is none, never the working folder
+mkdir -p "$s/cwd"
+(cd "$s/cwd" && "$bin" --model "$model" --ort "$ort" --cache "" --kept-dir "$kd" --keep x "$s/a.wav" > /dev/null 2> "$s/err"); rc=$?
+expect '[ $rc = 1 ] && grep -q "no cache folder" "$s/err" && [ -z "$(ls -A "$s/cwd")" ]' "an empty --cache: no cache folder: $(cat "$s/err")"
+(cd "$s/cwd" && "$bin" --model "$model" --ort "$ort" --cache "$c" --kept-dir "" --keep x "$s/a.wav" > /dev/null 2> "$s/err"); rc=$?
+expect '[ $rc = 1 ] && grep -q "no home folder" "$s/err" && [ ! -e "$s/cwd/x.kept" ] && [ -z "$(ls -A "$s/cwd")" ]' "an empty --kept-dir with a set: no home folder: $(cat "$s/err")"
+out="$(cd "$s/cwd" && "$bin" --estimate --model "$model" --cache "$c" --kept-dir "" "$s/a.wav" 2> "$s/err")"; rc=$?
+expect '[ $rc = 0 ] && [ -n "$(field "$(last)" estimate)" ] && [ -z "$(ls -A "$s/cwd")" ]' "an empty --kept-dir without a set: estimated, nothing written there: $(last)"
+# a kept sets' folder that can be listed but not searched: refused with its own error, not EIO
+chmod 0644 "$kd"
+out="$("$bin" --estimate --model "$model" --cache "$c" --kept-dir "$kd" "$s/a.wav" 2> "$s/err")"; rc=$?
+chmod 0755 "$kd"
+expect '[ $rc = 0 ] && [ "$(field "$(last)" refused)" = "the kept sets can'"'"'t be read: Permission denied" ]' "a kept sets' folder without search permission: refused, Permission denied: $(last)"
 
 # 0.1 GB: 107.4 MB; the share 80.5 MB; 90% 96.6 MB; room down to 85.9 MB
 echo "== the share"
@@ -119,15 +179,23 @@ of() { grep -m1 "\"file\":\"$1\"" <<< "$out"; }
 out="$(est --keep e "$s/a.wav" "$s/none.wav" streaming:x)"
 expect '[ "$(field "$(of "$s/a.wav")" result)" = prepare ] && [ "$(field "$(of "$s/a.wav")" entries)" = 3 ] && [ "$(field "$(of "$s/a.wav")" seconds)" = 30.0 ]' \
   "a file to prepare: 30 s, 3 entries: $(of "$s/a.wav")"
-expect '[ "$(field "$(of "$s/none.wav")" result)" = skipped ] && [ "$(field "$(of streaming:x)" result)" = skipped ]' "a missing file and a streaming track are skipped"
-expect '[ "$(field "$(last)" prepare)" = 1 ] && [ "$(field "$(last)" skipped)" = 2 ] && [ "$(field "$(last)" runs)" = 3 ] && [ "$(field "$(last)" fits)" = True ] && [ ! -e "$kd/e.kept" ] && [ ! -e "$c/$id" ]' \
-  "the totals; nothing written: $(last)"
+expect '[ "$(field "$(of "$s/none.wav")" result)" = skipped ] && ! grep -q "streaming" <<< "$out"' "a missing file is skipped; an input that isn't a local file gets no line"
+expect '[ "$(field "$(last)" estimate)" = 2 ] && [ "$(field "$(last)" prepare)" = 1 ] && [ "$(field "$(last)" skipped)" = 1 ] && [ "$(field "$(last)" runs)" = 3 ] && [ "$(field "$(last)" fits)" = True ] && [ ! -e "$kd/e.kept" ] && [ ! -e "$c/$id" ]' \
+  "the totals count only local files; nothing written: $(last)"
+printf '%s\nstreaming:y\n%s\n' "$s/a.wav" "$s/none.wav" > "$s/list"
+out="$(est --list "$s/list")"
+expect '[ "$(field "$(last)" estimate)" = 2 ] && [ "$(field "$(last)" skipped)" = 1 ] && [ "$(grep -c "\"file\"" <<< "$out")" = 2 ] && ! grep -q "streaming" <<< "$out"' \
+  "--list: the same, the input that isn't a local file dropped: $(last)"
 out="$(run --keep e "$s/a.wav")"
 expect '[ "$(field "$(last)" runs)" = 3 ] && [ "$(sed -n 1p "$kd/e.manifest")" = "rbstemsplus-manifest 1" ] && [ "$(sed -n 3p "$kd/e.manifest")" = "model $id" ] && [ "$(grep -c "^file .* 1 3 $s/a.wav\$" "$kd/e.manifest")" = 1 ] && [ "$(tail -n +7 "$kd/e.manifest" | sort)" = "$(tail -n +3 "$kd/e.kept" | cut -d" " -f2 | sort)" ]' \
   "a set's manifest: its file, complete, and the set's 3 entries: $(sed -n 5,6p "$kd/e.manifest" | tr '\n' ' ')"
 out="$(est --keep e)"
 expect '[ "$(field "$(of "$s/a.wav")" result)" = ready ] && [ "$(field "$(last)" ready)" = 1 ] && [ "$(field "$(last)" runs)" = 0 ] && [ "$(field "$(last)" need_gb)" = 0.0 ]' \
   "the set checked (its own files): ready: $(tr '\n' ' ' <<< "$out")"
+out="$(est --keep e streaming:x)"
+expect '[ "$(field "$(last)" estimate)" = 0 ] && ! grep -q "\"file\"" <<< "$out"' "only inputs that aren't local files: none estimated, not the set's own files: $(tr '\n' ' ' <<< "$out")"
+printf 'streaming:y\n' > "$s/list2"; out="$(est --keep e --list "$s/list2")"
+expect '[ "$(field "$(last)" estimate)" = 0 ] && ! grep -q "\"file\"" <<< "$out"' "--list: the same: $(tr '\n' ' ' <<< "$out")"
 out="$(est --keep other "$s/a.wav")"
 expect '[ "$(field "$(of "$s/a.wav")" result)" = ready ]' "another set's manifest counts: ready"
 k1="$(sed -n 7p "$kd/e.manifest")"; rm "$c/$id/${k1:0:2}/$k1.flac"

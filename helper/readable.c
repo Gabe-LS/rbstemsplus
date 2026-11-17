@@ -1,27 +1,20 @@
 /* readable.c: opening a track without waiting forever (readable.h) */
 #include "readable.h"
+#include "path_rules.h"
 #include <errno.h>
-#include <fcntl.h>
 #include <limits.h>
 #include <pthread.h>
-#include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#include <unistd.h>
 
 static const char *const PROTECTED[] = {"Documents", "Desktop", "Downloads"};
 #define SETTINGS "System Settings › Privacy & Security › Files and Folders › RB Stems Plus"
 
 const char *home_folder(void) {
     static char h[PATH_MAX];
-    if (!h[0]) {
-        struct passwd pw, *res = NULL;
-        char b[16384];
-        if (getpwuid_r(getuid(), &pw, b, sizeof b, &res) == 0 && res && res->pw_dir[0] == '/')
-            snprintf(h, sizeof h, "%s", res->pw_dir);
-    }
+    if (!h[0]) plat_home(h, sizeof h);          /* "" when there is none */
     return h;
 }
 
@@ -41,9 +34,9 @@ const char *protected_folder(const char *path) {
 static void wait_key(const char *path, char *key, size_t n) {
     const char *pf = protected_folder(path);
     if (pf[0]) { snprintf(key, n, "%s/%s", home_folder(), pf); return; }
-    if (!strncmp(path, "/Volumes/", 9)) {
-        const char *e = strchr(path + 9, '/');
-        snprintf(key, n, "%.*s", e ? (int)(e - path) : (int)strlen(path), path);
+    size_t root = paths_other_drive(path);
+    if (root) {
+        snprintf(key, n, "%.*s", (int)root, path);
         return;
     }
     const char *s = strrchr(path, '/');
@@ -54,20 +47,16 @@ typedef struct {
     pthread_mutex_t mu;
     pthread_cond_t cv;
     int done, abandoned, err;
-    struct stat st;
+    plat_finfo st;
     char path[PATH_MAX];
 } job;
 
 static void *run(void *arg) {
     job *j = arg;
-    struct stat st = {0};
-    int err = 0;
-    if (stat(j->path, &st)) err = errno;
-    else if (S_ISREG(st.st_mode)) {
-        int fd = open(j->path, O_RDONLY | O_CLOEXEC);
-        if (fd < 0) err = errno;
-        else close(fd);
-    }
+    plat_finfo st = {0};
+    plat_file f;
+    int err = plat_finfo_path(j->path, &st);
+    if (!err && st.kind == PLAT_FILE && !(err = plat_file_open_path(j->path, &f))) plat_file_close(f);
     pthread_mutex_lock(&j->mu);
     j->done = 1;
     j->err = err;
@@ -82,7 +71,7 @@ static void *run(void *arg) {
 static char waited[32][PATH_MAX];       /* folders whose read was given up */
 static int nwaited;
 
-read_state readable(const char *path, double secs, struct stat *st, char *why, size_t n, const char **folder) {
+read_state readable(const char *path, double secs, plat_finfo *st, char *why, size_t n, const char **folder) {
     const char *pf = protected_folder(path);
     char key[PATH_MAX];
     *folder = pf;
@@ -129,7 +118,7 @@ read_state readable(const char *path, double secs, struct stat *st, char *why, s
     pthread_mutex_destroy(&j->mu);
     pthread_cond_destroy(&j->cv);
     free(j);
-    if (!err && !S_ISREG(st->st_mode)) { snprintf(why, n, "not a file"); return READ_FAILED; }
+    if (!err && st->kind != PLAT_FILE) { snprintf(why, n, "not a file"); return READ_FAILED; }
     if (!err) return READ_OK;
     if (err == ENOENT || err == ENOTDIR) {
         snprintf(why, n, "the file isn't there (moved, renamed, or its drive isn't connected)");

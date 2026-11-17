@@ -1,0 +1,11 @@
+[
+ {
+  "n": 1,
+  "dialog": "“Friday” doesn't fit / Prepared playlists may use 75% of Stems Cache's 20 GB limit (15.0 GB), the rest stays for the tracks rekordbox separates during a set. This playlist would take them to 24.0 GB. The disk doesn't have room for a higher limit. {Prepare the First 2 Tracks*, Cancel}",
+  "origin": "event",
+  "work_queue": "free",
+  "window_changed_under_it": [
+   "c.updateItem.en"
+  ]
+ }
+]

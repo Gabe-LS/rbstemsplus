@@ -1,0 +1,6 @@
+LIBRARY onnxruntime.dll
+EXPORTS
+    OrtGetApiBase @1
+    OrtSessionOptionsAppendExecutionProviderEx_DML @2
+    OrtSessionOptionsAppendExecutionProvider_CPU @3
+    OrtSessionOptionsAppendExecutionProvider_DML @4
