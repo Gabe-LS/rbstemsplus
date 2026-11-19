@@ -44,7 +44,11 @@ func publicReleaseTests() {
         [ -z "$(git -C "$root" status --porcelain)" ] || { echo "fake build: not clean" >&2; exit 1; }
         commit="$(git -C "$root" rev-parse HEAD)"; v="$(tr -d '[:space:]' < "$root/VERSION")"
         d="$root/dist"; mkdir -p "$d"
-        for f in rbstemsplus-app.zip libonnxruntime.1.18.0.dylib stemsplus-model.onnx bootstrap.sh; do echo "$f $commit" > "$d/$f"; done
+        for f in libonnxruntime.1.18.0.dylib stemsplus-model.onnx bootstrap.sh; do echo "$f $commit" > "$d/$f"; done
+        # the app zip holds an app, as scripts/build-app.sh zips it (release.sh reads its executable)
+        app="$root/build/fake/RB Stems Plus.app"; rm -rf "$root/build/fake"; mkdir -p "$app/Contents/MacOS"
+        echo "RB Stems Plus $commit" > "$app/Contents/MacOS/RB Stems Plus"
+        rm -f "$d/rbstemsplus-app.zip"; ditto -c -k --keepParent "$app" "$d/rbstemsplus-app.zip"
         cp "$root/NOTICE" "$root/LICENSE" "$d/"
         printf '{"payload_version": "%s", "commit": "%s", "app": {"version": "%s", "commit": "%s"}, "bridge": {"commit": "%s"}}\\n' \\
           "$v" "$commit" "$v" "$commit" "$commit" > "$d/payload.json"

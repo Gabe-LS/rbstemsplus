@@ -134,7 +134,7 @@ model_size=308572524
 previous_models=""
 # payload.json's "compatible" block: rekordbox versions Stems Cache may be installed on, the
 # ONNX Runtime the bridge expects, the STEMS Engine versions our Demucs v4 model fits.
-compat_rekordbox="7.2.17 7.2.18 7.2.19"
+compat_rekordbox="7.2.17 7.2.18 7.2.19 7.2.20"
 compat_ort_prefix="1.18."
 compat_stems_engine="0002"
 # The windows block's (release.md §1.2): the rekordbox versions Stems Cache may be installed on
