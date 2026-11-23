@@ -4,6 +4,7 @@
 #include "plat_helper.h"
 #include <errno.h>
 #include <limits.h>
+#include "win_path_max.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -100,7 +101,12 @@ static int lines_add(lines *l, const unsigned char *m, const unsigned char *k) {
 static int by_line(const void *a, const void *b) { return memcmp(a, b, sizeof(line)); }
 
 struct kept {
+#if KEPT_CACHE_AT
+    char dir[PATH_MAX], name[65];
+    kept_cache cache;
+#else
     char dir[PATH_MAX], name[65], cache[PATH_MAX];
+#endif
     time_t until;
     kset others, ours, fresh;           /* other sets' keys; this set's (earlier and this run's); this run's */
     kset held;                          /* this set's earlier keys a track of this run still holds */
@@ -165,34 +171,83 @@ static char *slurp(plat_dir dir, const char *name, size_t *len) {
     return b;
 }
 
+#if KEPT_CACHE_AT
+static int sub_open(plat_dir parent, const char *name, int create, plat_dir *out) {
+    int e = plat_dir_open_at(parent, name, out);
+    if (!create || e != ENOENT) return e;
+    e = plat_mkdir_at(parent, name);
+    if (e && e != EEXIST) return e;
+    return plat_dir_open_at(parent, name, out);
+}
+
+int kept_prefix_dir(kept_cache cache, const char *model, const char *key, int create, plat_dir *x) {
+    *x = plat_dir_cwd();
+    if (!plat_dir_ok(cache)) return ENOENT;
+    plat_dir d;
+    int e = sub_open(cache, model, create, &d);
+    if (e) return e;
+    char prefix[3] = {key[0], key[1], 0};
+    e = sub_open(d, prefix, create, x);
+    plat_dir_close(d);
+    return e;
+}
+
+static int prefix_open(kept_cache cache, const char *model, const char *key, plat_dir *x) {
+    return kept_prefix_dir(cache, model, key, 0, x);
+}
+#else
 /* the prefix folder <cache>/<model>/<key[0:2]> (no link at its last component) */
 static int prefix_open(const char *cache, const char *model, const char *key, plat_dir *x) {
     char p[PATH_MAX + 200];
     snprintf(p, sizeof p, "%s/%s/%.2s", cache, model, key);
     return plat_dir_open(p, x);
 }
+#endif
 
 /* the disk space of entry MODEL/KEY in CACHE: its .flac, .desc and their companions (the cache's
  * size rule, entries_size_at) */
-static long long entry_bytes(const char *cache, const char *model, const char *key) {
+static long long entry_bytes(kept_cache cache, const char *model, const char *key) {
     plat_dir x;
+#if !KEPT_CACHE_AT
     if (!cache[0]) return 0;                /* no cache to look at (--quick, another drive) */
+#endif
     if (prefix_open(cache, model, key, &x)) return 0;
     long long sum = entries_size_at(x, key);
     plat_dir_close(x);
     return sum;
 }
 
-long long kept_entry_bytes(const char *cache, const char *model, const char *key) {
+#if KEPT_CACHE_AT
+static long long found_entry(kept_cache cache, const char *model, const char *key, int touch) {
+#else
+long long kept_entry_bytes(kept_cache cache, const char *model, const char *key) {
+#endif
     plat_dir x;
     plat_stat st;
     char name[80];
     if (prefix_open(cache, model, key, &x)) return -1;
     entries_file(name, sizeof name, key, 0);                /* <key>.flac */
     long long sum = plat_stat_at(x, name, &st) || st.kind != PLAT_FILE ? -1 : entries_size_at(x, key);
+#if KEPT_CACHE_AT
+    if (sum >= 0 && touch) {
+        plat_file f;
+        if (plat_file_open_at(x, name, INT64_MAX, NULL, &f)) sum = -1;
+        else { plat_file_touch(f); plat_file_close(f); }
+    }
+#endif
     plat_dir_close(x);
     return sum;
 }
+
+#if KEPT_CACHE_AT
+long long kept_entry_bytes(kept_cache cache, const char *model, const char *key) {
+    return found_entry(cache, model, key, 0);
+}
+
+long long kept_touch_entry(kept_cache cache, const char *model, const char *key) {
+    return found_entry(cache, model, key, 1);
+}
+#endif
 
 /* PATH (absolute) and the folders above it, as mkdir -p: 0, or -1 with errno that of the first
  * that couldn't be made (one there already is fine) */
@@ -231,14 +286,34 @@ static int is_set(const char *name) {           /* <name>.kept, not a dot file (
     return name[0] != '.' && l > 5 && !strcmp(name + l - 5, ".kept");
 }
 
-kept *kept_open(const char *dir, const char *name, time_t until, const char *cache, char *why, size_t n) {
+kept *kept_open(const char *dir, const char *name, time_t until, kept_cache cache, char *why, size_t n) {
     if (name && !name_ok(name)) { snprintf(why, n, "a kept set's name is 1 to 64 letters, digits, - or _: %s", name); return NULL; }
+#if !defined(_WIN32) && !defined(RBSP_TEST_WIN_PREPARE)
     if (name && (!dir[0] || mkdirs(dir))) { snprintf(why, n, "the kept sets' folder can't be made: %s", dir[0] ? strerror(errno) : "no home folder"); return NULL; }
+#endif
     __block kept *k = calloc(1, sizeof *k);
     if (!k) { snprintf(why, n, "out of memory"); return NULL; }
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+    int r = snprintf(k->dir, sizeof k->dir, "%s", dir);
+    if (r < 0 || (size_t)r >= sizeof k->dir) {
+        snprintf(why, n, "the kept sets' folder path is too long");
+        free(k);
+        return NULL;
+    }
+    if (name && (!dir[0] || mkdirs(dir))) {
+        snprintf(why, n, "the kept sets' folder can't be made: %s", dir[0] ? strerror(errno) : "no home folder");
+        free(k);
+        return NULL;
+    }
+#else
     snprintf(k->dir, sizeof k->dir, "%s", dir);
+#endif
     snprintf(k->name, sizeof k->name, "%s", name ? name : "");
+#if KEPT_CACHE_AT
+    k->cache = cache;
+#else
     snprintf(k->cache, sizeof k->cache, "%s", cache);
+#endif
     k->until = until;
     plat_dir d = {0};
     int de = dir[0] ? plat_dir_open(dir, &d) : ENOENT;
@@ -261,8 +336,18 @@ kept *kept_open(const char *dir, const char *name, time_t until, const char *cac
         if (ok && u <= now) {                   /* its date has passed: it goes, with its manifest */
             char mf[300];
             snprintf(mf, sizeof mf, "%.*s.manifest", (int)(strlen(ename) - 5), ename);
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+            int e = plat_unlink_at(d, ename);
+            /* The bridge counts files before reading them, including expired sets. */
+            if (e && e != ENOENT) {
+                if (!mine) others++;
+            } else {
+                plat_unlink_at(d, mf);
+            }
+#else
             plat_unlink_at(d, ename);
             plat_unlink_at(d, mf);
+#endif
             free(b);
             return 0;
         }
@@ -350,10 +435,25 @@ int kept_has(const kept *k, const char *key) {
 
 int kept_write(kept *k, int all_done, char *why, size_t n) {
     lines all = {0};
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+    for (size_t i = 0; i < k->now.n; i++)
+        if (lines_add(&all, k->now.v[i].m, k->now.v[i].k)) goto oom;
+    for (size_t i = 0; !all_done && i < k->earlier.n; i++)
+        if (!kset_has(&k->fresh, k->earlier.v[i].k) && lines_add(&all, k->earlier.v[i].m, k->earlier.v[i].k))
+            goto oom;
+    int header = snprintf(NULL, 0, "%s%lld\n", HEAD, (long long)k->until);
+    if (k->until < 0 || (long long)k->until > 999999999999LL || header < 0 ||
+        all.n > (KEPT_FILE_MAX - (size_t)header) / KEPT_LINE) {
+        free(all.v);
+        snprintf(why, n, "the kept set exceeds the bridge's format limits");
+        return -1;
+    }
+#else
     for (size_t i = 0; i < k->now.n; i++) lines_add(&all, k->now.v[i].m, k->now.v[i].k);
     for (size_t i = 0; !all_done && i < k->earlier.n; i++)
         if (!kset_has(&k->fresh, k->earlier.v[i].k)) lines_add(&all, k->earlier.v[i].m, k->earlier.v[i].k);
     if (all.n < k->now.n) { free(all.v); snprintf(why, n, "out of memory"); return -1; }
+#endif
     if (all.n) qsort(all.v, all.n, sizeof *all.v, by_line);
     char tmp[120], path[100];
     plat_dir d;
@@ -393,6 +493,12 @@ int kept_write(kept *k, int all_done, char *why, size_t n) {
     }
     plat_dir_close(d);
     return bad ? -1 : 0;
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+oom:
+    free(all.v);
+    snprintf(why, n, "out of memory");
+    return -1;
+#endif
 }
 
 /* ---------------------------------------------------------------- room */
@@ -404,12 +510,17 @@ static int by_use(const void *a, const void *b) {
     return x < y ? -1 : x > y;
 }
 
-long long make_room(const char *cache, const kept *k, long long *used, long long target) {
+long long make_room(kept_cache cache, const kept *k, long long *used, long long target) {
     __block cand *v = NULL;
     __block size_t nv = 0, cv = 0;
-    plat_dir c;
     /* <model>/<xx>/<key>.flac, as the cache's layout names them (entries_layout), no link followed */
+#if KEPT_CACHE_AT
+    plat_dir c = cache;
+    if (plat_dir_ok(c)) {
+#else
+    plat_dir c;
     if (!plat_dir_open(cache, &c)) {
+#endif
         plat_dir_each_b(c, ^(const char *mname, const plat_stat *mst) {
             unsigned char m_[32];
             const unsigned char *m = m_;            /* a block can't take an array */
@@ -447,7 +558,9 @@ long long make_room(const char *cache, const kept *k, long long *used, long long
             plat_dir_close(md);
             return 0;
         });
+#if !KEPT_CACHE_AT
         plat_dir_close(c);
+#endif
     }
     if (nv) qsort(v, nv, sizeof *v, by_use);
     long long removed = 0;

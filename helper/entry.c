@@ -9,7 +9,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <Accelerate/Accelerate.h>
+#if !defined(_WIN32)
+#include <Accelerate/Accelerate.h>          /* vDSP; Windows: plat.h's pocketfft (plat_irfft) */
+#elif !defined(M_PI)
+#define M_PI 3.14159265358979323846         /* -std=c11: mingw-w64's math.h doesn't define it */
+#endif
 #include <FLAC/metadata.h>
 #include <FLAC/stream_encoder.h>
 #include "entry.h"
@@ -167,9 +171,10 @@ int rebuilt_id(const char *fp, char out[65]) {            /* the bridge's rebuil
 }
 
 /* a model file (it may be a link: rekordbox's copy), read whole */
-int file_sha256(const char *path, char out[65]) {
+int file_sha256(const char *path, char out[65], plat_model_info *info) {
     plat_file f;
     if (plat_file_open_path(path, &f)) return -1;
+    if (info && plat_model_stat_file(f, info)) { plat_file_close(f); return -1; }
     unsigned char *buf = malloc(1 << 20);
     plat_sha256_ctx c;
     if (!buf || plat_sha256_init(&c)) { free(buf); plat_file_close(f); return -1; }

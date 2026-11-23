@@ -1,0 +1,30 @@
+# UP7 with Uninstall as the first elevated action since the app update. Same fixtures and
+# snapshot as worker-update.suite. The independent round leaves the old worker in bin until
+# this action. One same-protocol elevation produces a SKIP pending the release-plan ruling.
+include lib/vmlib.ps1
+include worker/rblib.ps1
+include uninstall/cases/unlib.ps1
+include uac/uaclib.ps1
+include admin-paths/worker-trace.ps1
+include admin-paths/worker-action.ps1
+include admin-paths/worker-releases.ps1
+include update/updatelib.ps1
+need http
+need vm
+need file repo/core/texts.def
+need file vm/uia/rbui/rbui.exe
+need fixture dist-test/a/payload.json
+need candidate dist-test/new/payload.json
+sys   60  releases               admin-paths/worker-pair-prep.ps1
+sys  120  prep                   worker/prep.ps1
+sys  120  switch-a               update/switch.ps1
+user 600  install                update/install.ps1
+user 420  initial-worker         admin-paths/worker-update-action.ps1
+sys  120  switch-new             update/switch.ps1
+sys   60  trace-app-update       admin-paths/worker-update-trace.ps1
+user 480  update-app             admin-paths/worker-update-action.ps1
+sys  120  check-app-update       admin-paths/worker-update-trace.ps1
+sys   60  trace-uninstall-first  admin-paths/worker-update-trace.ps1
+user 420  uninstall-first        admin-paths/worker-update-action.ps1
+sys  120  check-uninstall-first  admin-paths/worker-update-trace.ps1
+sys  120  switch-clean           update/switch.ps1

@@ -69,13 +69,17 @@
 #                                rekordbox quit, Try Again: the install runs (installed rewritten,
 #                                both choices logged), the marker gone, Stems Cache in place
 #   quit                         the app quit
+#   dialog                       g3.sh smoke's press: a dialog of macOS's own (display dialog, in an
+#                                applet osacompile builds here, given a bundle ID for the driver),
+#                                opened as DJ; the G3 Driver presses its OK; the applet gone and
+#                                its answer "button returned:OK"
 # Exit 0 when the step's checks passed; 1 when one failed; 2 when the step couldn't run; 3 (ax):
 # no Accessibility; 4 (kept, queued: rekordbox open): rekordbox shows a licence, sign-in or
 # activation text (rb_guard: a STOP line, nothing pressed; g3.sh keeps the clone running).
 set -u
 H=/Users/Shared/rbsp-harness
 step="${1:-}"; RUN="${2:-}"
-[ -n "$step" ] && [ -n "$RUN" ] || { sed -n '2,74p' "$0"; exit 2; }
+[ -n "$step" ] && [ -n "$RUN" ] || { sed -n '2,78p' "$0"; exit 2; }
 mkdir -p "$RUN"; touch "$RUN/result"
 # shellcheck source=../harness/lib.sh
 . "$H/lib.sh"
@@ -313,11 +317,13 @@ switch)
   traces | wc -l | tr -d ' ' > "$RUN/traces-before.txt"
   ok "switched: the old app opened again with the new build served ($(cat "$RUN/traces-before.txt") traces before)" ;;
 payload)
+  # the served payload's SHA-256 in a variable: check evals its test inside a function, where $3 isn't this step's
+  want_ps="$3"
   for _ in $(seq 1 120); do
-    [ -f "$SUP/payload/payload.json" ] && [ "$(shasum -a 256 "$SUP/payload/payload.json" | cut -c1-64)" = "$3" ] && break
+    [ -f "$SUP/payload/payload.json" ] && [ "$(shasum -a 256 "$SUP/payload/payload.json" | cut -c1-64)" = "$want_ps" ] && break
     sleep 1
   done
-  check '[ -f "$SUP/payload/payload.json" ] && [ "$(shasum -a 256 "$SUP/payload/payload.json" | cut -c1-64)" = "$3" ]' "the app saved the served payload.json (it read the new payload)"
+  check '[ -f "$SUP/payload/payload.json" ] && [ "$(shasum -a 256 "$SUP/payload/payload.json" | cut -c1-64)" = "$want_ps" ]' "the app saved the served payload.json (it read the new payload)"
   ! grep -q '^FAIL' "$RUN/result" ;;
 after-update)
   v="$3"
@@ -613,8 +619,25 @@ queued)
   check '[ ! -e "$SUP/busy" ]' "queued: the busy marker gone"
   check 'bridge_in_rekordbox && grep -q "cache=1" "$SUP/installed"' "queued: Stems Cache in place after the resumed install"
   ! grep -q '^FAIL' "$RUN/result" ;;
+dialog)
+  # osascript itself has no bundle ID (the driver finds apps by theirs): the same display dialog
+  # runs in an applet, its answer written to a file; opened in front (a background applet's dialog
+  # isn't shown)
+  dd="$H/dialog"; da="$dd/G3 Dialog.app"; did=io.github.rbstemsplus.g3dialog
+  rm -rf "$dd"; mkdir -p "$dd"; chown "$U" "$dd"
+  as_user osacompile -o "$da" -e 'set r to display dialog "g3 smoke" buttons {"OK"} default button "OK"' \
+    -e "do shell script \"echo button returned:\" & quoted form of (button returned of r) & \" > '$dd/answer'\"" 2>/dev/null \
+    && as_user plutil -insert CFBundleIdentifier -string "$did" "$da/Contents/Info.plist" \
+    && as_user codesign -f -s - "$da" 2>/dev/null || { fail "dialog: the applet couldn't be built (osacompile, plutil, codesign)"; exit 2; }
+  as_user open "$da"
+  drive press "$did" 30000 OK || { fail "dialog: the G3 Driver couldn't press OK ($(head -1 <<< "$DRIVE_OUT"))"; pkill -f "$da/"; exit 1; }
+  for _ in $(seq 1 50); do pgrep -f "$da/" >/dev/null || break; sleep 0.2; done
+  check '! pgrep -f "$da/" >/dev/null' "dialog: gone after the G3 Driver's press"
+  check '[ "$(cat "$dd/answer" 2>/dev/null)" = "button returned:OK" ]' "dialog: it answered \"button returned:OK\" (Accessibility press)"
+  pkill -f "$da/"
+  ! grep -q '^FAIL' "$RUN/result" ;;
 quit)
   pkill -x "RB Stems Plus"; for _ in $(seq 1 50); do pgrep -x "RB Stems Plus" >/dev/null || exit 0; sleep 0.2; done
   pkill -9 -x "RB Stems Plus"; true ;;
-*) sed -n '2,74p' "$0"; exit 2 ;;
+*) sed -n '2,78p' "$0"; exit 2 ;;
 esac

@@ -1,0 +1,11 @@
+# W13b from "clean Windows", with a clean profile and interactive desktop.
+# tests/win/vm-run.sh stage --build
+# tests/win/vm-run.sh run "clean Windows" prepare-w13b
+# Use --arch arm64, x64 or x64-prism for the matching architecture.
+include lib/vmlib.ps1
+need vm
+need file vm/uia/rbui/rbui.exe
+need file repo/win/shell/vm/w13b.ps1
+need file repo/tests/harness/traces/A/prepare-choose-estimate.jsonl
+user 600 w13b-spike prepare/w13b.ps1
+user 600 w13b-pt    prepare/w13b.ps1

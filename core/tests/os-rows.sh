@@ -23,6 +23,21 @@ add_row() { # file row
 b="$scratch/b"
 add_row "$b/schema.def" 'FIELD(F_WIN_ONLY_PROBE, S_SETTINGS, str, win, "a Windows-only field (os-rows.sh)")'
 add_row "$b/schema.def" 'COLUMN(C_WIN_ONLY_PROBE, T_STATUS_SETS, i64, win, "a Windows-only column (os-rows.sh)")'
+# a Windows-only table with its own column (multi-version rekordbox: the first win TABLE), and its
+# numbering block in schema.c under CORE_WIN_POLICY, as T_WIN_RB_VERSIONS has
+add_row "$b/schema.def" 'TABLE(T_WIN_TABLE_PROBE, S_STATUS, win, "a Windows-only table (os-rows.sh)")'
+add_row "$b/schema.def" 'COLUMN(C_WIN_TABLE_PROBE, T_WIN_TABLE_PROBE, str, win, "a Windows-only table'\''s column (os-rows.sh)")'
+awk '!done && /^\/\* every field is in one section/ {
+  print "#ifdef CORE_WIN_POLICY"
+  print "#define CORE_EQ_T_WIN_TABLE_PROBE_T_WIN_TABLE_PROBE CORE_PROBE"
+  print "enum {"
+  print "#define COLUMN(id, table, kind, os, doc) CORE_KEEP_##os(CORE_IF(CORE_EQ(table, T_WIN_TABLE_PROBE))(CI_##id,))"
+  print "#include \"schema.def\""
+  print "    CN_T_WIN_TABLE_PROBE"
+  print "};"
+  print "#endif"
+  done = 1 } { print }' "$b/schema.c" > "$b/schema.c.new" && mv "$b/schema.c.new" "$b/schema.c"
+grep -q 'CN_T_WIN_TABLE_PROBE' "$b/schema.c" || { echo "os-rows: the probe table's numbering block wasn't added to schema.c" >&2; exit 1; }
 add_row "$b/texts.def" 'SLOT(win_probe, win)'
 add_row "$b/texts.def" 'TEXT(T_WIN_ONLY_PROBE, win, "", "WINDOWS-ONLY-PROBE-TEXT {win_probe}")'
 add_row "$b/menus.def" 'MENU(M_WIN_ONLY_PROBE, win, M_HELP, item, T_WIN_ONLY_PROBE, "", "F2", 0, 0, "win_probe")'
@@ -32,7 +47,7 @@ cat >> "$b/core.c" <<'EOF'
 
 #ifdef CORE_WIN_POLICY
 int32_t core_win_only_probe(void);
-int32_t core_win_only_probe(void) { return F_WIN_ONLY_PROBE + C_WIN_ONLY_PROBE + FACT_WIN_ONLY_PROBE; }
+int32_t core_win_only_probe(void) { return F_WIN_ONLY_PROBE + C_WIN_ONLY_PROBE + FACT_WIN_ONLY_PROBE + T_WIN_TABLE_PROBE + C_WIN_TABLE_PROBE; }
 #endif
 EOF
 
@@ -54,4 +69,8 @@ strings "$scratch/text-win.o" | grep -q WINDOWS-ONLY-PROBE-TEXT || { echo "os-ro
 nm "$scratch/core-win.o" | grep -q '_core_win_only_probe' || { echo "os-rows: the Windows function is missing under CORE_WIN_POLICY" >&2; exit 1; }
 if strings "$scratch/out-b/arm64/obj/text.o" | grep -q 'WINDOWS-ONLY-PROBE-TEXT\|win_probe'; then echo "os-rows: the Windows text or slot is in the Mac objects" >&2; exit 1; fi
 strings "$scratch/text-win.o" | grep -q '^win_probe$' || { echo "os-rows: the Windows slot is missing under CORE_WIN_POLICY" >&2; exit 1; }
-echo "os-rows: $n Mac objects and both archives identical with a Windows-only row in every table (a Windows-only slot included) and a Windows-only function"
+for id in T_WIN_TABLE_PROBE C_WIN_TABLE_PROBE; do
+  strings "$scratch/schema-win.o" | grep -qx "$id" || { echo "os-rows: the Windows table's $id is missing under CORE_WIN_POLICY" >&2; exit 1; }
+  if strings "$scratch/out-b/arm64/obj/schema.o" | grep -q "$id"; then echo "os-rows: the Windows table's $id is in the Mac objects" >&2; exit 1; fi
+done
+echo "os-rows: $n Mac objects and both archives identical with a Windows-only row in every table (a Windows-only slot and a Windows-only table with its column included) and a Windows-only function"

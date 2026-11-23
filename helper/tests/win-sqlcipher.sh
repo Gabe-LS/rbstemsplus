@@ -6,6 +6,10 @@
 # 256,000 rounds: what every --playlists and --tracks pays first) is timed with each: LibTomCrypt's
 # early number for P-H5 (helper.md §2a: on Windows at most the Mac's time + 100 ms). Neither
 # touches rekordbox's library: the test key isn't rekordbox's, and library.c is built with a dummy.
+# Both are built from helper/sqlc_kdf.c (the amalgamation plus its PBKDF2 hook, as the Windows
+# helper builds it): with the derivation swapped for CommonCrypto's (--open-alt, --kdf-check), the
+# Mac's stand-in for the Windows helper's CNG derivation (T13, P-H5), each opens the other's
+# database too, and the LibTomCrypt build's --kdf-check compares the two derivations byte for byte.
 #
 #   helper/tests/win-sqlcipher.sh [OUT]      default build/helper-win-sqlcipher; exits 1 on a failure
 set -eu
@@ -41,9 +45,10 @@ MAC="-O2 -arch arm64 -mmacosx-version-min=12.0"
 (
   cd "$root"
   # shellcheck disable=SC2086
-  clang $MAC -w $(echo $COMMON) -DSQLCIPHER_CRYPTO_CC -c "$scratch/sqlc/sqlite3.c" -o "$scratch/sqlite3-cc.o"
+  clang $MAC -w $(echo $COMMON) -DSQLCIPHER_CRYPTO_CC -Ihelper -I"$scratch/sqlc" -c helper/sqlc_kdf.c -o "$scratch/sqlite3-cc.o"
   # shellcheck disable=SC2086
-  clang $MAC -w $(echo $COMMON) -DSQLCIPHER_CRYPTO_LIBTOMCRYPT -I"$scratch/ltcd/include" -c "$scratch/sqlc/sqlite3.c" -o "$scratch/sqlite3-ltc.o"
+  clang $MAC -w $(echo $COMMON) -DSQLCIPHER_CRYPTO_LIBTOMCRYPT -I"$scratch/ltcd/include" -Ihelper -I"$scratch/sqlc" -c helper/sqlc_kdf.c \
+    -o "$scratch/sqlite3-ltc.o"
   for p in cc ltc; do
     x=""; [ $p = ltc ] && x="$scratch/ltcd/lib/libtomcrypt.a"
     # shellcheck disable=SC2086
@@ -60,6 +65,12 @@ check "$out/win-library-ltc" --open "$scratch/cc.db"
 check "$out/win-library-cc" --open "$scratch/ltc.db"
 check "$out/win-library-cc" --open "$scratch/cc.db"
 check "$out/win-library-ltc" --open "$scratch/ltc.db"
+# the derivation through the other PBKDF2 (CommonCrypto's here, CNG's on Windows): the same keys
+check "$out/win-library-ltc" --open-alt "$scratch/cc.db"
+check "$out/win-library-ltc" --open-alt "$scratch/ltc.db"
+check "$out/win-library-cc" --open-alt "$scratch/ltc.db"
+check "$out/win-library-ltc" --kdf-check
+check "$out/win-library-cc" --kdf-check
 # a wrong key is refused by both (not just any file opens)
 printf 'SQLite format 3\0not a database' > "$scratch/junk.db"
 if "$out/win-library-ltc" --open "$scratch/junk.db" > /dev/null 2>&1; then echo "FAIL LibTomCrypt opened junk"; fails=$((fails + 1)); else echo "ok   LibTomCrypt refuses a file it can't decrypt"; fi

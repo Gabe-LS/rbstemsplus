@@ -18,7 +18,7 @@
 # `deps.sh check` compares the two, so the Mac files don't move (release.md §9.1).
 #
 # Not here yet (release.md T1-T6): pocketfft and BlocksRuntime, which scripts/win-deps.sh fetches
-# with its own pins, and the .NET and NuGet rows.
+# with its own pins, and the .NET and NuGet rows (but the test-only FlaUI ones, below).
 
 [llvm-mingw]
 version = 20261104
@@ -203,3 +203,61 @@ licence-file = LICENSE
 licence-sha256 = a337314dd82d26791112c1e5a85725b2eb92f5b7e6f9102fa4eaa2903f77518f
 notice = win/NOTICE.txt: Apple Lossless (ALAC) decoder (compiled into the prepare helper)
 checked = helper T9 2026-11-12
+
+# The VM suites' UI driver (tests/win/uia/build.sh, the by-hand plan's W1): FlaUI over UIA3, its
+# net48 DLLs (net45 for the interop) referenced by path from these nupkgs, never restored from
+# NuGet; test only, nothing ships (release.md §9.2's "nuget FlaUI" rows hold the same pins)
+
+[flaui-core]
+version = 5.0.0
+kind = file
+group = flaui
+url = https://api.nuget.org/v3-flatcontainer/flaui.core/5.0.0/flaui.core.5.0.0.nupkg
+sha256 = 191cc65ea82036b77f1872e6d4ebf743d3d120895bba2fa5248d126cd6f568a7
+platform = windows
+checked = W1 2026-11-16
+
+[flaui-uia3]
+version = 5.0.0
+kind = file
+group = flaui
+url = https://api.nuget.org/v3-flatcontainer/flaui.uia3/5.0.0/flaui.uia3.5.0.0.nupkg
+sha256 = d5d2e083539a04bf6c9053781dfd47332854a76faeb8e9c3c68cc82109f711f2
+platform = windows
+checked = W1 2026-11-16
+
+[interop-uiautomationclient]
+version = 10.19041.0
+kind = file
+group = flaui
+url = https://api.nuget.org/v3-flatcontainer/interop.uiautomationclient/10.19041.0/interop.uiautomationclient.10.19041.0.nupkg
+sha256 = 0d2ed17db2cb13a262f0580ab992db87577651c25a9899053df4114b4d9ff3b1
+platform = windows
+checked = W1 2026-11-16
+
+[flaui-core.lib]
+from = flaui-core
+use = test
+spdx = MIT
+licence-file = LICENSE.txt
+licence-sha256 = 5914c914df1029ae6f7f2682f04f6fc587e195424040933a43e6599d6cd8a529
+notice = none (test only: the VM suites' UI driver, never shipped)
+checked = W1 2026-11-16
+
+[flaui-uia3.lib]
+from = flaui-uia3
+use = test
+spdx = MIT
+licence-file = LICENSE.txt
+licence-sha256 = 5914c914df1029ae6f7f2682f04f6fc587e195424040933a43e6599d6cd8a529
+notice = none (test only: the VM suites' UI driver, never shipped)
+checked = W1 2026-11-16
+
+[interop-uiautomationclient.lib]
+from = interop-uiautomationclient
+use = test
+spdx = MIT
+licence-file = LICENSE.txt
+licence-sha256 = ae507f8cb7ce8b34d9ba817d165492af4225482305a8b92c7620f5fa7b7c57a1
+notice = none (test only: the VM suites' UI driver, never shipped)
+checked = W1 2026-11-16

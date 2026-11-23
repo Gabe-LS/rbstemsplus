@@ -148,12 +148,48 @@ static void t_composers(void) {
                                   "rekordbox library aren't touched.\n\nRB Stems Plus will be deleted, including all stems saved in its folder on \"GLS\" "
                                   "(about 1.2 GB), also any saved there by other computers or accounts."));
     tb_init(&b, CORE_OS_WIN, b_buf, sizeof b_buf);
-    const char *left[] = {"The stems saved on \"GLS\" stay: it isn't connected. To delete them, delete the folder \"E:\\RB Stems Plus Cache\" in File Explorer."};
+    const char *left[] = {"The stems saved on \"GLS\" stay. The last known folder was \"E:\\RB Stems Plus Cache\"."};
     w_own_files_removed(&b, "rekordbox is back to how it was.", FATE_CANT_DELETE, 0, 1, left, 1);
     CHECK(!b.err && !strcmp(b.p, "rekordbox is back to how it was. RB Stems Plus couldn't delete all of its files: delete the folder "
                                   "%LOCALAPPDATA%\\Programs\\RB Stems Plus in File Explorer. %LOCALAPPDATA%\\rbstemsplus\\Cache is a link, so RB Stems "
-                                  "Plus leaves it and what it points to alone. The stems saved on \"GLS\" stay: it isn't connected. To delete them, "
-                                  "delete the folder \"E:\\RB Stems Plus Cache\" in File Explorer."));
+                                  "Plus leaves it and what it points to alone. The stems saved on \"GLS\" stay. The last known folder was "
+                                  "\"E:\\RB Stems Plus Cache\"."));
+    /* Finding 6: Windows kept-stems, incomplete-cleanup and unmeasured confirmation texts; Mac unchanged */
+    static const struct { core_os os; core_text_id id; const char *drive, *want; } f6[] = {
+        {CORE_OS_WIN, T_LEFT_DRIVE_NOT_CONNECTED, "GLS",
+         "The stems saved on \"GLS\" stay. The last known folder was \"E:\\RB Stems Plus Cache\"."},
+        {CORE_OS_WIN, T_WIN_LEFT_DRIVE_NOT_CONNECTED_NAMELESS, NULL,
+         "The stems saved on Stems Cache's drive stay. The last known folder was \"E:\\RB Stems Plus Cache\"."},
+        {CORE_OS_WIN, T_LEFT_DRIVE_NOT_NAMED, "GLS",
+         "The stems saved on \"GLS\" stay. The last known folder was \"E:\\RB Stems Plus Cache\"."},
+        {CORE_OS_WIN, T_WIN_LEFT_DRIVE_NOT_NAMED_NAMELESS, NULL,
+         "The stems saved on Stems Cache's drive stay. The last known folder was \"E:\\RB Stems Plus Cache\"."},
+        {CORE_OS_WIN, T_LEFT_DRIVE_PARTLY, "GLS",
+         "Stems Cache cleanup on \"GLS\" couldn't be completed. The last known folder was \"E:\\RB Stems Plus Cache\"."},
+        {CORE_OS_WIN, T_WIN_LEFT_DRIVE_PARTLY_NAMELESS, NULL,
+         "Stems Cache cleanup on its drive couldn't be completed. The last known folder was \"E:\\RB Stems Plus Cache\"."},
+        {CORE_OS_WIN, T_WIN_UNINSTALL_ALL_DRIVE_UNMEASURED, "GLS",
+         "RB Stems Plus will be deleted. The stems saved on \"GLS\" will stay. The last known folder was \"E:\\RB Stems Plus Cache\"."},
+        {CORE_OS_WIN, T_WIN_UNINSTALL_ALL_DRIVE_UNMEASURED_NAMELESS, NULL,
+         "RB Stems Plus will be deleted. The saved stems on Stems Cache's drive will stay. The last known folder was \"E:\\RB Stems Plus Cache\"."},
+        {CORE_OS_MAC, T_LEFT_DRIVE_NOT_CONNECTED, "GLS",
+         "The stems saved on \"GLS\" stay: it isn't connected. To delete them, delete the folder \"/Volumes/GLS/RB Stems Plus Cache\" in Finder."},
+        {CORE_OS_MAC, T_LEFT_DRIVE_NOT_NAMED, "GLS",
+         "The stems saved on \"GLS\" stay. To delete them, delete the folder \"/Volumes/GLS/RB Stems Plus Cache\" in Finder."},
+        {CORE_OS_MAC, T_LEFT_DRIVE_PARTLY, "GLS",
+         "Some of the stems saved on \"GLS\" couldn't be deleted: delete the folder \"/Volumes/GLS/RB Stems Plus Cache\" in Finder."},
+    };
+    for (size_t i = 0; i < sizeof f6 / sizeof *f6; i++) {
+        const char *dir = f6[i].os == CORE_OS_WIN ? "E:\\RB Stems Plus Cache" : "/Volumes/GLS/RB Stems Plus Cache";
+        core_slot sl[2] = {
+            {CORE_SLOT_drive, 0, f6[i].drive, CORE_NTS},
+            {CORE_SLOT_dir, 0, dir, CORE_NTS},
+        };
+        const core_slot *sp = f6[i].drive ? sl : &sl[1];
+        int nsp = f6[i].drive ? 2 : 1;
+        size_t flen = 0;
+        CHECKS(core_text(f6[i].os, f6[i].id, sp, nsp, b_buf, sizeof b_buf, &flen) == CORE_OK && !strcmp(b_buf, f6[i].want), f6[i].want);
+    }
 }
 
 /* R1's line: one per state, none when there is nothing to put back */
@@ -218,11 +254,27 @@ static void t_shared_composers(void) {
     CHECK(!b.err && !strcmp(b.p, "rekordbox is back to how it was."));
 }
 
+static void t_win_batch_texts(void) {
+    TBW(b, 512);
+    w_win_batch_why(&b, ROOT_REKORDBOX_OPEN, "C:\\Program Files");
+    CHECK(!b.err && !strcmp(b.p, "Close rekordbox (also in other accounts on this PC), then try again."));
+    const core_slot slots[] = {SLOT_S(done, "7.2.19"), SLOT_S(failed, "7.2.20"), SLOT_S(why, "See the log in this window.")};
+    char text[512];
+    size_t len;
+    for (int id = T_WIN_CACHE_PARTIAL_INSTALLED; id <= T_WIN_RESTORE_PARTIAL; id++) {
+        CHECK(core_text(CORE_OS_WIN, id, slots, 3, text, sizeof text, &len) == CORE_OK);
+        CHECK(strstr(text, "7.2.19") && strstr(text, "7.2.20") && !strchr(text, '{') && !has_word(text, "Mac"));
+    }
+    CHECK(!strcmp(core_text_template(CORE_OS_WIN, T_WIN_SCOPE_CHANGED_MSG),
+                  "The installed versions of rekordbox changed while RB Stems Plus was checking them. Stems Cache was left as it was. Try again."));
+}
+
 void win_texts_tests(int *passed, int *failed) {
     g_passed = passed;
     g_failed = failed;
     t_shared_composers();
     t_r1_line();
+    t_win_batch_texts();
     t_column();
     t_words();
     t_composers();

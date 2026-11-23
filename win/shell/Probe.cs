@@ -460,6 +460,11 @@ namespace RbStemsPlus.Shell
         /// One key now (perf mode's waits: no whole snapshot).
         private static string Value(string key)
         {
+            // W13b reads the calendar without adding Windows-only fields to shared traces.
+            var picker = shell.PrepareTab?.Until;
+            if (key == "prepare.until.first")
+                return picker?.DisplayDateStart?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture) ?? "";
+            if (key == "prepare.until.open") return picker?.IsDropDownOpen == true ? "1" : "0";
             if (rec.Trace) return rec.Last(key);
             if (key.StartsWith("app.") || key.StartsWith("win.") || key.StartsWith("tab."))
             {

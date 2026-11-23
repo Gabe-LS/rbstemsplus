@@ -68,9 +68,11 @@ static int each_at(plat_dir d, plat_each_fn fn, void *ctx) {
 int (*models_test_unlink_fault)(const char *name);
 void (*models_test_before_place)(void);
 int (*models_test_rename_fault)(void);
+int (*models_test_engine_fault)(void);
 #  define UNLINK_FAULT(name) (models_test_unlink_fault ? models_test_unlink_fault(name) : 0)
 #  define BEFORE_PLACE() (models_test_before_place ? models_test_before_place() : (void)0)
 #  define RENAME_FAULT() (models_test_rename_fault ? models_test_rename_fault() : 0)
+#  define ENGINE_FAULT() (models_test_engine_fault ? models_test_engine_fault() : 0)
 #else
 #  define stat_at plat_stat_at
 #  define each_at plat_dir_each
@@ -78,6 +80,7 @@ int (*models_test_rename_fault)(void);
 #  define UNLINK_FAULT(name) 0
 #  define BEFORE_PLACE() ((void)0)
 #  define RENAME_FAULT() 0
+#  define ENGINE_FAULT() 0
 #endif
 
 /* originals\ couldn't be opened for a reason that doesn't say "none there": not missing, not a
@@ -419,6 +422,17 @@ static int place(const models *m, plat_dir od, const char *part, const char *sha
     return plat_rename_noreplace_at(od, part, od, dest);
 }
 
+/* the saved model sha's STEMS Engine version e (not empty) as <sha>.engine, when it has none: 0, or
+ * an errno (review b-a2a-F1: an untagged copy ranks below an older engine's tagged one) */
+static int tag_engine(plat_dir od, const char *sha, const char *e) {
+    char engine_file[80], text[70];
+    snprintf(engine_file, sizeof engine_file, "%s.engine", sha);
+    if (there(od, engine_file)) return 0;
+    int n = snprintf(text, sizeof text, "%s\n", e);
+    int r = ENGINE_FAULT();
+    return r ? r : native_support_write_at(od, engine_file, text, (size_t)n);
+}
+
 /* saveOriginal: rekordbox's model (dd\hdemucs.onnx, checksum sha taken just before) saved as
  * Pioneer's original: copied to <sha>.onnx.part.<pid>.<ns>, checked, flushed, then put in place. */
 static int save_original(const models *m, plat_dir dd, const char *sha) {
@@ -428,19 +442,28 @@ static int save_original(const models *m, plat_dir dd, const char *sha) {
 
     plat_dir od;
     if (open_originals(m, 1, &od)) return fail(m, MODELS_NOT_SAVED, "A copy of rekordbox's own stems model couldn't be saved.");
+    char e[64], part_base[80], part[128];
+    engine_of(dd, e);
+    int r;
     if (saved_is_good(od, sha)) {
+        /* the live model is that copy, so the current engine is its engine: a missing tag written */
+        if (e[0] && (r = tag_engine(od, sha, e))) {
+            snprintf(line, sizeof line, "save Pioneer's model: FAILED its STEMS Engine version (%s)", err_text(r));
+            say(m, line);
+            plat_dir_close(od);
+            return fail(m, MODELS_NOT_SAVED, "A copy of rekordbox's own stems model couldn't be saved.");
+        }
         snprintf(line, sizeof line, "save Pioneer's model: already saved (%.12s)", sha);
         say(m, line);
         plat_dir_close(od);
         return MODELS_OK;
     }
-    char e[64], part_base[80], part[128], engine_file[80];
-    engine_of(dd, e);
     snprintf(part_base, sizeof part_base, "%s.onnx.part", sha);
     run_temp(part, sizeof part, part_base);   /* <sha>.onnx.part.<pid>.<ns>: this save's own */
     clear_stale(od, part_base);               /* left by runs that were stopped */
     if (m->will_save) m->will_save(m->ctx);   /* the tests change the model here: the copy must not verify */
-    int sync, r = copy_at(dd, model_name, od, part, &sync);
+    int sync;
+    r = copy_at(dd, model_name, od, part, &sync);
     if (!r && !has_sha(od, part, sha)) {
         plat_unlink_at(od, part);
         r = EIO;
@@ -452,11 +475,12 @@ static int save_original(const models *m, plat_dir dd, const char *sha) {
         return r == ENOSPC && !sync ? MODELS_NO_SPACE_SAVE : MODELS_NOT_SAVED;
     }
     /* the engine version before the model: a saved model never appears without it */
-    snprintf(engine_file, sizeof engine_file, "%s.engine", sha);
-    if (e[0] && !there(od, engine_file)) {
-        char text[70];
-        int n = snprintf(text, sizeof text, "%s\n", e);
-        native_support_write_at(od, engine_file, text, (size_t)n);
+    if (e[0] && (r = tag_engine(od, sha, e))) {
+        plat_unlink_at(od, part);
+        snprintf(line, sizeof line, "save Pioneer's model: FAILED its STEMS Engine version (%s)", err_text(r));
+        say(m, line);
+        plat_dir_close(od);
+        return fail(m, MODELS_NOT_SAVED, "A copy of rekordbox's own stems model couldn't be saved.");
     }
     if (place(m, od, part, sha)) {
         plat_unlink_at(od, part);
@@ -553,6 +577,23 @@ int models_install_ours(const models *m, const char *source_dir, const char *sou
     return r;
 }
 
+#if defined(_WIN32) && defined(CORE_TEST_HOOKS)
+/* The VM can pause a successful staged copy before the rename, while CriticalWork owns it. */
+static void test_hold_model_copy(const models *m) {
+    const char *name = getenv("RBSP_TEST_COPY_HOLD");
+    if (!name || !*name || strlen(name) > 120) return;
+    char held[128], release[129];
+    snprintf(held, sizeof held, "%s-held", name);
+    snprintf(release, sizeof release, "%s-release", name);
+    HANDLE h = OpenEventA(EVENT_MODIFY_STATE, FALSE, held);
+    HANDLE r = OpenEventA(SYNCHRONIZE, FALSE, release);
+    if (h && r && SetEvent(h) && WaitForSingleObject(r, 60000) != WAIT_OBJECT_0)
+        say(m, "test build: model copy hold timed out");
+    if (r) CloseHandle(r);
+    if (h) CloseHandle(h);
+}
+#endif
+
 /* models_install_ours' copy: ours to .hdemucs.new, checked, rekordbox's model unchanged, renamed
  * over it. dd is closed on every way out */
 static int install_copy(const models *m, plat_dir dd, const char *source_dir, const char *source_name, const char *sha, const char *live,
@@ -581,6 +622,9 @@ static int install_copy(const models *m, plat_dir dd, const char *source_dir, co
         plat_dir_close(dd);
         return fail(m, MODELS_COPY_BAD, "The Demucs v4 model didn't copy correctly.");
     }
+#if defined(_WIN32) && defined(CORE_TEST_HOOKS)
+    test_hold_model_copy(m);
+#endif
     if (!unchanged(m, dd, live)) {
         plat_unlink_at(dd, tmp);
         plat_dir_close(dd);
@@ -704,8 +748,21 @@ int models_restore(const models *m, char why[128]) {
             r = fail(m, MODELS_NOT_BACK_WHY, "rekordbox's own stems model couldn't be put back.");
             break;
         }
-        if (m->after_rename) m->after_rename(m->ctx);   /* the tests corrupt it here */
-        if (!has_sha(dd, model_name, list[i].sha)) {
+        if (m->after_rename) m->after_rename(m->ctx);   /* the tests change the model or its folder here */
+        plat_dir current;
+        if (plat_dir_open(m->dir, &current)) {
+            r = fail(m, MODELS_NOT_BACK, "rekordbox's own stems model couldn't be put back.");
+            break;
+        }
+        plat_stat before, after;
+        int same_dir = !plat_dir_stat(dd, &before) && !plat_dir_stat(current, &after) && plat_id_same(before.id, after.id);
+        int verified = same_dir && has_sha(current, model_name, list[i].sha);
+        plat_dir_close(current);
+        if (!same_dir) {
+            r = fail(m, MODELS_NOT_BACK, "rekordbox's own stems model couldn't be put back.");
+            break;
+        }
+        if (!verified) {
             r = fail(m, MODELS_NOT_VERIFIED, "rekordbox's stems model didn't verify after it was put back.");
             break;
         }

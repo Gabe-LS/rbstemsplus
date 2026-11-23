@@ -1,6 +1,7 @@
 <Window x:Class="RbStemsPlus.Shell.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:RbStemsPlus.Shell"
         Width="1040" Height="680" MinWidth="960" MinHeight="540"
         ResizeMode="CanResize" WindowStartupLocation="CenterScreen" UseLayoutRounding="True">
   <!-- The main window (app.md §4.6): the menu bar drawn from menus.def (Shell.cs), then the tabs.
@@ -70,6 +71,32 @@
                   <TextBlock x:Name="CacheLabel" Style="{StaticResource Feature}" ToolTip="{Binding CacheTip}"
                              ToolTipService.IsEnabled="{Binding CacheLightShown}" />
                 </StackPanel>
+                <StackPanel Margin="0,0,0,8" Visibility="{Binding VersionsShown, Converter={StaticResource Visible}}">
+                  <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" Margin="0,0,0,4" />
+                  <ItemsControl ItemsSource="{Binding Versions}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate>
+                        <DockPanel Margin="0,0,0,3">
+                          <local:RbVersionGlyph DockPanel.Dock="Left" Style="{StaticResource Light}" Look="{Binding Look}" />
+                          <local:RbVersionRowText Text="{Binding Text}" TextWrapping="Wrap" ToolTip="{Binding Tip}"
+                                                  ToolTipService.IsEnabled="{Binding HasTip}"
+                                                  AutomationProperties.Name="{Binding Spoken}"
+                                                  AutomationProperties.HelpText="{Binding Tip}"
+                                                  AutomationProperties.AutomationId="{Binding AutomationId}" />
+                        </DockPanel>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+                <!-- R1 (app.md §5.2): rekordbox's ONNX Runtime missing or not the expected one; the
+                     line says what, Put Back Pioneer's File runs the worker's restore, and Don't Ask
+                     Again for This Version stops the watcher opening the app for it (N10) -->
+                <TextBlock x:Name="R1Line" Text="{Binding R1Line}" TextWrapping="Wrap" Margin="0,0,0,8"
+                           Visibility="{Binding R1Shown, Converter={StaticResource Visible}}" />
+                <Button x:Name="RestoreButton" Style="{StaticResource Action}" IsEnabled="{Binding RestoreEnabled}"
+                        Visibility="{Binding RestoreVisible, Converter={StaticResource Visible}}" />
+                <Button x:Name="R1DismissButton" Style="{StaticResource Action}" IsEnabled="{Binding R1DismissEnabled}"
+                        Visibility="{Binding R1DismissVisible, Converter={StaticResource Visible}}" />
                 <Button x:Name="InstallCache" Style="{StaticResource Action}" IsEnabled="{Binding InstallCacheEnabled}" />
                 <Button x:Name="ReinstallCache" Style="{StaticResource Action}" IsEnabled="{Binding ReinstallCacheEnabled}" />
                 <Button x:Name="SettingsButton" Style="{StaticResource Action}" IsEnabled="{Binding SettingsEnabled}" />
@@ -83,7 +110,7 @@
                                VerticalAlignment="Top" IsIndeterminate="{Binding Spinner}"
                                AutomationProperties.Name="{Binding StatusLine}"
                                Visibility="{Binding Spinner, Converter={StaticResource Visible}}" />
-                  <TextBlock x:Name="StatusLine" Text="{Binding StatusLine}" TextWrapping="Wrap" />
+                  <TextBlock x:Name="StatusLine" TextWrapping="Wrap" />
                 </DockPanel>
               </StackPanel>
             </Grid>

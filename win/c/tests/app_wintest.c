@@ -24,6 +24,7 @@
 #include <dbt.h>
 
 #include "../lifecycle.h"
+#include "../notify.h"
 #include "../report.h"
 #include "../shell.h"
 #include "../volumes.h"
@@ -365,6 +366,14 @@ static void test_report(void) {
 
 int main(int argc, char **argv) {
     if (argc >= 2 && !strcmp(argv[1], "--exit")) return 0;
+    /* Q13 drives these separately so Explorer can send the timeout callback while the owner
+     * process is still alive. Cleanup is restricted to the installed app's known AUMID. */
+    if (argc == 3 && !strcmp(argv[1], "--balloon")) {
+        if (life_set_aumid(LIFE_AUMID) || notify_show(argv[2], "Q13 notification from the VM test")) return 1;
+        Sleep(60000);
+        return 0;
+    }
+    if (argc == 2 && !strcmp(argv[1], "--balloon-cleanup")) return life_records_remove(LIFE_AUMID) != 0;
     if (argc >= 4 && !strcmp(argv[1], "--second")) {
         life_one *o = NULL;
         int r = life_one_take(argv[2], (uint32_t)atoi(argv[3]), &o);

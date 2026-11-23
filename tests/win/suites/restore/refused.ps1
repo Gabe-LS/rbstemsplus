@@ -16,6 +16,10 @@ $before = Get-LiveState $f $bridge
 if ($before -ne 'the bridge') { Skip "rekordbox's DLL is $before, not the bridge (the step before failed: its log)" }
 $out = Invoke-Restore
 "-Restore: $out"
-Check ([bool]$out) '-Restore said why, in its line (above)'
+if ($VmRun.Step -eq 'refused-unelevated') {
+    Check ($out -ceq (Get-BootText 'RestoreElevated')) '-Restore asked for an administrator PowerShell window'
+} else {
+    Check ($out -like '*reached through a link*') '-Restore refused because the folder is reached through a link'
+}
 Check ((Get-LiveState $f $bridge) -eq 'the bridge') "rekordbox's DLL left as it was (the bridge)"
 Done

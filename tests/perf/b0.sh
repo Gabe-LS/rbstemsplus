@@ -75,7 +75,7 @@ cmd_build() {
   } > "$A/B0/SOURCE"
   "$root/helper/tests/perf.sh" corpus "$A/corpus-v1" || die "the corpus"
   mkdir -p "$A/B0-records"
-  seal || exit 2
+  seal B0 corpus-v1 B0-records || exit 2
   say "B0 built into $A/B0; corpus in $A/corpus-v1; $A/SHA256SUMS written"
 }
 
@@ -117,7 +117,7 @@ cmd_record() {
     die "WARNING in the meta file(s) above: a short workload, not a run set (kept in $part)"
   fi
   mv "$part" "$out" || die "moving $part to $out"
-  seal || exit 2
+  seal "B0-records/$set" || exit 2
   say "B0 run set $set recorded into $out"
   cmd_status
 }

@@ -210,18 +210,23 @@ static int root_sd(SECURITY_DESCRIPTOR *sd, PACL acl, DWORD acl_size) {
     return 0;
 }
 
-static int ww_root_open(void *ctx, const char *path, int create, plat_dir *out) {
+static int ww_root_open(void *ctx, const char *path, int create, plat_dir *out, int *made) {
     (void)ctx;
     HANDLE h;
     out->h = NULL;
+    *made = 0;
     int e = nt_open(NULL, path, WW_HOLD_ACCESS, WW_HOLD_SHARE, FILE_OPEN, FILE_DIRECTORY_FILE, WR_OP_OPEN, &h);
+    int created = 0;
     if (e == ENOENT && create) {
         wchar_t w[ADMIN_PATH_MAX + 8] = L"\\\\?\\";
         SECURITY_DESCRIPTOR sd;
         union { ACL acl; unsigned char b[256]; } acl;
         if (!to_wide(path, w + 4, ADMIN_PATH_MAX) || root_sd(&sd, &acl.acl, sizeof acl)) return EINVAL;
         SECURITY_ATTRIBUTES sa = {sizeof sa, &sd, FALSE};
-        if (!CreateDirectoryW(w, &sa) && GetLastError() != ERROR_ALREADY_EXISTS) return wr_errno_win32((uint32_t)GetLastError(), WR_OP_OPEN);
+        /* made by this call only when CreateDirectoryW made it: one another run made meanwhile is
+         * opened and stays that run's (re-review blocker A) */
+        if (CreateDirectoryW(w, &sa)) created = 1;
+        else if (GetLastError() != ERROR_ALREADY_EXISTS) return wr_errno_win32((uint32_t)GetLastError(), WR_OP_OPEN);
         e = nt_open(NULL, path, WW_HOLD_ACCESS, WW_HOLD_SHARE, FILE_OPEN, FILE_DIRECTORY_FILE, WR_OP_OPEN, &h);
     }
     if (e) return e;
@@ -231,6 +236,7 @@ static int ww_root_open(void *ctx, const char *path, int create, plat_dir *out) 
         return rp > 0 ? ELOOP : EACCES;
     }
     out->h = h;
+    *made = created;
     return 0;
 }
 
@@ -301,16 +307,20 @@ static int lock_sd(SECURITY_DESCRIPTOR *sd, PACL acl, DWORD acl_size) {
     return 0;
 }
 
-static int ww_lock(void *ctx, plat_dir root, void **token) {
+static int ww_lock(void *ctx, plat_dir root, void **token, int *made) {
     (void)ctx;
     SECURITY_DESCRIPTOR sd;
     union { ACL acl; unsigned char b[128]; } acl;
+    *made = 0;
     if (lock_sd(&sd, &acl.acl, sizeof acl)) return EINVAL;
     /* an exclusive handle: share 0; the kernel closes it when its owner dies (no stale lock) */
     const ACCESS_MASK access = FILE_READ_DATA | FILE_WRITE_DATA | FILE_READ_ATTRIBUTES | READ_CONTROL | DELETE;
     for (int pass = 0; pass < 2; pass++) {
         HANDLE h;
-        int e = nt_open_sd(root.h, "lock", access, 0, pass ? FILE_CREATE : FILE_OPEN_IF, FILE_NON_DIRECTORY_FILE, WR_OP_OPEN, &sd, &h);
+        /* made only when this call's FILE_CREATE made it; an existing one is opened */
+        int e = nt_open_sd(root.h, "lock", access, 0, FILE_CREATE, FILE_NON_DIRECTORY_FILE, WR_OP_OPEN, &sd, &h);
+        if (!e) *made = !pass;
+        else if (e == EEXIST && !pass) e = nt_open_sd(root.h, "lock", access, 0, FILE_OPEN, FILE_NON_DIRECTORY_FILE, WR_OP_OPEN, &sd, &h);
         if (e) return e;   /* a sharing violation is EBUSY: another run holds it */
         if (is_reparse(h)) {
             NtClose(h);
@@ -343,6 +353,29 @@ static int ww_mapped(void *ctx, plat_dir d, const char *name) {
         return 0;
     }
     return e == EBUSY ? 1 : e == ENOENT ? 0 : -1;
+}
+
+/* a file held against writes, renames and removal: read access, share READ only (an open for
+ * writing, or for DELETE as a rename or removal takes, fails with a sharing violation while this
+ * handle is open), no reparse point */
+static int ww_hold_file(void *ctx, plat_dir d, const char *name, void **token) {
+    (void)ctx;
+    HANDLE h;
+    *token = NULL;
+    int e = nt_open(d.h, name, FILE_READ_DATA | FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_OPEN, FILE_NON_DIRECTORY_FILE, WR_OP_OPEN, &h);
+    if (e) return e;
+    int rp = is_reparse(h);
+    if (rp) {
+        NtClose(h);
+        return rp > 0 ? ELOOP : EIO;
+    }
+    *token = h;
+    return 0;
+}
+
+static void ww_release_file(void *ctx, void *token) {
+    (void)ctx;
+    if (token) NtClose(token);
 }
 
 typedef BOOL(WINAPI *enum_windows_fn)(WNDENUMPROC, LPARAM);
@@ -559,5 +592,5 @@ void worker_win_init(worker_win *ww) {
     ww->os = (admin_os){compat_os_windows(), ww,           ww_root_open,  ww_hold_dir,          ww_file_admin_only, ww_mkdir_at,
                         ww_rmdir_at,          ww_rename_noreplace, ww_lock, ww_unlock,         ww_mapped,          ww_rekordbox_windows,
                         ww_load_check,        ww_self_path, ww_delete_self, ww_say,             ww_sleep,           ww_now,
-                        ww_random_hex};
+                        ww_random_hex,        ww_hold_file, ww_release_file};
 }

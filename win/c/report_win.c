@@ -1,11 +1,15 @@
 /* report.h on Windows: WER's folders, the Desktop, and the Application event log. Imports
  * KERNEL32 and SHELL32 (known folders) and ole32 (CoTaskMemFree); wevtapi.dll isn't a KnownDLL
  * and is not on the static allowlist, so it is loaded at the first call by its full System32 path
- * with LOAD_LIBRARY_SEARCH_SYSTEM32 (app.md §7). Unverified until the VM run (W13a). */
+ * with LOAD_LIBRARY_SEARCH_SYSTEM32 (app.md §7). The account-name DLLs load the same way
+ * to stay off the static allowlist. Unverified until the VM run (W13a). */
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
 #endif
+#define SECURITY_WIN32
 #include <windows.h>
+#include <lm.h>
+#include <secext.h>
 #include <shlobj.h>
 #include <winevt.h>
 
@@ -16,11 +20,24 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define PROC(m, name) ((void (*)(void))GetProcAddress((m), (name)))
+
+static HMODULE load_system32(const wchar_t *file) {
+    wchar_t path[MAX_PATH];
+    UINT n = GetSystemDirectoryW(path, MAX_PATH);
+    size_t k = wcslen(file) + 1;
+    if (!n || n + 1 + k > MAX_PATH) return NULL;
+    path[n++] = L'\\';
+    memcpy(path + n, file, k * sizeof *path);
+    return LoadLibraryExW(path, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+}
+
 /* ------------------------------------------------------------------ folders */
 
 static const GUID local_app_data = {0xf1b32785, 0x6fba, 0x4fcf, {0x9d, 0x55, 0x7b, 0x8e, 0x7f, 0x15, 0x70, 0x91}};
 static const GUID program_data = {0x62ab5d82, 0xfdc1, 0x4dc3, {0xa9, 0xdd, 0x07, 0x0d, 0x1d, 0x49, 0x5d, 0x97}};
 static const GUID desktop = {0xb4bfcc3a, 0xdb2c, 0x424c, {0xb0, 0x29, 0x7f, 0xe9, 0x9a, 0x87, 0xc6, 0x41}};
+static const GUID profile = {0x5e6c858f, 0x0e22, 0x4760, {0x9a, 0xfe, 0xea, 0x33, 0x17, 0xb6, 0x71, 0x73}};
 
 /* a known folder's path + tail as UTF-8; 0, or -1 */
 static int known(const GUID *id, const char *tail, char *out, size_t n) {
@@ -48,6 +65,85 @@ int report_wer_roots(char roots[REPORT_WER_ROOTS][REPORT_PATH_MAX]) {
 
 int report_desktop(char *out, size_t n) { return known(&desktop, "", out, n); }
 
+int report_profile(char *out, size_t n) { return known(&profile, "", out, n); }
+
+int report_short_profile(const char *home, char *out, size_t n) {
+    wchar_t long_path[REPORT_PATH_MAX], short_path[REPORT_PATH_MAX];
+    if (n) out[0] = 0;
+    if (wr_utf8_to_16(home, strlen(home), (uint16_t *)long_path, REPORT_PATH_MAX) <= 0) return -1;
+    DWORD k = GetShortPathNameW(long_path, short_path, REPORT_PATH_MAX);
+    if (!k || k >= REPORT_PATH_MAX || !wcscmp(long_path, short_path)) return -1;
+    if (wr_utf16_to_8((const uint16_t *)short_path, k, out, n) > 0) return 0;
+    if (n) out[0] = 0;
+    return -1;
+}
+
+int report_user_name(char *out, size_t n) {
+    wchar_t w[257];
+    DWORD k = sizeof w / sizeof *w;
+    if (n) out[0] = 0;
+    if (!GetUserNameW(w, &k) || k < 2) return -1;   /* k counts the NUL */
+    return wr_utf16_to_8((const uint16_t *)w, k - 1, out, n) > 0 ? 0 : -1;
+}
+
+typedef NET_API_STATUS(WINAPI *user_info_fn)(LPCWSTR, LPCWSTR, DWORD, LPBYTE *);
+typedef NET_API_STATUS(WINAPI *buffer_free_fn)(LPVOID);
+typedef BOOLEAN(SEC_ENTRY *user_name_ex_fn)(EXTENDED_NAME_FORMAT, LPWSTR, PULONG);
+
+int report_full_name(const char *user, char *out, size_t n) {
+    wchar_t w[260];
+    if (n) out[0] = 0;
+    /* The local account database has the full name even when NameDisplay is unavailable. */
+    if (wr_utf8_to_16(user, strlen(user), (uint16_t *)w, sizeof w / sizeof *w) > 0) {
+        HMODULE m = load_system32(L"netapi32.dll");
+        if (m) {
+            user_info_fn get = (user_info_fn)PROC(m, "NetUserGetInfo");
+            buffer_free_fn release = (buffer_free_fn)PROC(m, "NetApiBufferFree");
+            LPBYTE info = NULL;
+            long k = -1;
+            if (get && release && get(NULL, w, 10, &info) == NERR_Success && info) {
+                const wchar_t *full = ((const USER_INFO_10 *)info)->usri10_full_name;
+                if (full) k = wr_utf16_to_8((const uint16_t *)full, wcslen(full), out, n);
+            }
+            if (info) release(info);
+            FreeLibrary(m);
+            if (k > 0) return 0;
+        }
+    }
+    HMODULE m = load_system32(L"secur32.dll");
+    if (m) {
+        user_name_ex_fn get = (user_name_ex_fn)PROC(m, "GetUserNameExW");
+        ULONG cap = sizeof w / sizeof *w;
+        long k = get && get(NameDisplay, w, &cap) ? wr_utf16_to_8((const uint16_t *)w, wcslen(w), out, n) : -1;
+        FreeLibrary(m);
+        if (k > 0) return 0;
+    }
+    if (n) out[0] = 0;
+    return -1;
+}
+
+char report_system_drive(void) {
+    wchar_t w[MAX_PATH];
+    UINT k = GetWindowsDirectoryW(w, MAX_PATH);
+    if (k < 2 || k >= MAX_PATH || w[1] != L':') return 0;
+    wchar_t c = w[0];
+    if (c >= L'a' && c <= L'z') c = (wchar_t)(c - L'a' + L'A');
+    return c >= L'A' && c <= L'Z' ? (char)c : 0;
+}
+
+uint64_t report_memory(void) {
+    MEMORYSTATUSEX m;
+    m.dwLength = sizeof m;
+    return GlobalMemoryStatusEx(&m) ? m.ullTotalPhys : 0;
+}
+
+void report_locale(char *out, size_t n) {
+    wchar_t w[LOCALE_NAME_MAX_LENGTH];
+    int k = GetUserDefaultLocaleName(w, LOCALE_NAME_MAX_LENGTH);
+    if (n) out[0] = 0;
+    if (k > 1 && wr_utf16_to_8((const uint16_t *)w, (size_t)(k - 1), out, n) <= 0 && n) out[0] = 0;
+}
+
 /* ------------------------------------------------------------------ the event log (wevtapi, loaded at first use) */
 
 typedef EVT_HANDLE(WINAPI *query_fn)(EVT_HANDLE, LPCWSTR, LPCWSTR, DWORD);
@@ -63,16 +159,9 @@ static struct {
 } ev;
 static INIT_ONCE ev_once = INIT_ONCE_STATIC_INIT;
 
-#define PROC(m, name) ((void (*)(void))GetProcAddress((m), (name)))
-
 static BOOL WINAPI ev_load(PINIT_ONCE once, PVOID param, PVOID *ctx) {
     (void)once; (void)param; (void)ctx;
-    wchar_t path[MAX_PATH];
-    UINT n = GetSystemDirectoryW(path, MAX_PATH);
-    static const wchar_t file[] = L"\\wevtapi.dll";
-    if (n == 0 || n + sizeof file / sizeof *file > MAX_PATH) return TRUE;
-    memcpy(path + n, file, sizeof file);
-    HMODULE m = LoadLibraryExW(path, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    HMODULE m = load_system32(L"wevtapi.dll");
     if (!m) return TRUE;
     query_fn q = (query_fn)PROC(m, "EvtQuery");
     next_fn x = (next_fn)PROC(m, "EvtNext");

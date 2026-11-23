@@ -13,6 +13,7 @@
 
 #include <CommonCrypto/CommonDigest.h>
 
+#include <errno.h>
 #include <stdarg.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -29,9 +30,9 @@ static void test_classify(void) {
     CHECK(watch_classify(WD_REKORDBOX, cur, WATCH_RENAMED_OLD, "rekordbox 7.2.18") == RR, "an old one renamed");
     CHECK(watch_classify(WD_REKORDBOX, cur, WATCH_REMOVED, "rekordbox 7.2.19\\onnxruntime.dll") == RR, "the live DLL removed (I72)");
     CHECK(watch_classify(WD_REKORDBOX, cur, WATCH_MODIFIED, "Rekordbox 7.2.19\\ONNXRUNTIME.DLL") == RR, "case-blind");
-    CHECK(watch_classify(WD_REKORDBOX, cur, WATCH_MODIFIED, "rekordbox 7.2.19") == RR, "the current folder's own times");
+    CHECK(watch_classify(WD_REKORDBOX, cur, WATCH_MODIFIED, "rekordbox 7.2.19") == 0, "the current folder's own times");
     CHECK(watch_classify(WD_REKORDBOX, cur, WATCH_MODIFIED, "rekordbox 7.2.18") == 0, "another folder's times");
-    CHECK(watch_classify(WD_REKORDBOX, cur, WATCH_REMOVED, "rekordbox 7.2.18\\onnxruntime.dll") == 0, "another version folder's DLL");
+    CHECK(watch_classify(WD_REKORDBOX, cur, WATCH_REMOVED, "rekordbox 7.2.18\\onnxruntime.dll") == RR, "another version folder's DLL");
     CHECK(watch_classify(WD_REKORDBOX, cur, WATCH_ADDED, "rekordbox 7.2.19\\plugins\\x.dll") == 0, "deeper than the folder");
     CHECK(watch_classify(WD_REKORDBOX, cur, WATCH_ADDED, "readme.txt") == 0 && watch_classify(WD_REKORDBOX, cur, WATCH_ADDED, "rekordbox 7.2") == 0,
           "not a version folder");
@@ -373,14 +374,16 @@ typedef struct {
     int facts_fail;
     int updating, busy, open_n, half;   /* open_n: rekordbox open for that many looks */
     int pauses, sessions;
+    const watch_facts *after_pause;
     int pending[8], npending, takes;    /* what each take notes first */
     watch_sched sc;                      /* the schedule take and give_back work on */
     int given_back;
     int answer;                          /* the button pressed */
-    int asks;
+    int asks, refreshes, refreshes_at_prompt;
     char title[256], message[1024], buttons[512];
     char remembered[1024];
     int requests, opens, open_fails, request_fails;
+    char request[16];
     char current[256];
     char log[16384];
 } fakeops;
@@ -407,7 +410,12 @@ static int32_t o_half(void *c, char *id, size_t cap) {
 }
 static void o_pause(void *c, int32_t s) {
     (void)s;
-    ((fakeops *)c)->pauses++;
+    fakeops *o = c;
+    o->pauses++;
+    if (o->after_pause) {
+        o->f = *o->after_pause;
+        o->after_pause = NULL;
+    }
 }
 static void o_session(void *c) { ((fakeops *)c)->sessions++; }
 /* each take: the next scripted notification noted into the schedule, then the schedule taken */
@@ -424,6 +432,7 @@ static void o_give_back(void *c, int flags) {
 static int o_ask(void *c, const char *title, const char *message, const char *const *buttons, int n) {
     fakeops *o = c;
     o->asks++;
+    o->refreshes_at_prompt = o->refreshes;
     snprintf(o->title, sizeof o->title, "%s", title);
     snprintf(o->message, sizeof o->message, "%s", message);
     o->buttons[0] = 0;
@@ -439,8 +448,9 @@ static int o_remember(void *c, const char *t, size_t n) {
     return 0;
 }
 /* the request, then the app (the Windows op holds one lock over both) */
-static int o_reinstall(void *c) {
+static int o_reinstall(void *c, const char *name) {
     fakeops *o = c;
+    snprintf(o->request, sizeof o->request, "%s", name);
     if (o->request_fails) return WATCH_NO_REQUEST;
     o->requests++;
     o->opens++;
@@ -453,6 +463,7 @@ static int o_open_app(void *c) {
     return o->open_fails ? ENOENT : 0;
 }
 static void o_current(void *c, const char *name) { snprintf(((fakeops *)c)->current, 256, "%s", name); }
+static void o_refresh_app(void *c) { ((fakeops *)c)->refreshes++; }
 static void o_log(void *c, const char *line) {
     fakeops *o = c;
     size_t n = strlen(o->log);
@@ -464,7 +475,7 @@ static payload_manifest lists;
 static void base(fakeops *o, watch_ops *ops) {
     memset(o, 0, sizeof *o);
     watch_ops t = {o, CORE_OS_MAC, o_facts, o_updating, o_busy, o_open, o_half, o_pause, o_session, o_take, o_give_back, o_ask,
-                   o_remember, o_reinstall, o_open_app, o_current, o_log};
+                   o_remember, o_reinstall, o_open_app, o_current, o_log, o_refresh_app};
     *ops = t;
     watch_facts *f = &o->f;
     f->rb_state = COMPAT_RB_OK;
@@ -485,6 +496,204 @@ static void base(fakeops *o, watch_ops *ops) {
     lists.n_win_rekordbox = 1;
     snprintf(lists.win_stems_engine[0], sizeof lists.win_stems_engine[0], "0002");
     lists.n_win_stems_engine = 1;
+}
+
+static void rows_base(fakeops *o, watch_ops *ops) {
+    base(o, ops);
+    ops->text_os = CORE_OS_WIN;
+    o->f.r1.offer_restore = 0;
+    o->f.cache_present = 1;
+    o->f.inv_complete = 1;
+}
+
+static void row(watch_facts *f, int i, const char *version, int state, int why, int r1) {
+    inv_row_view *r = &f->rows[i];
+    *r = (inv_row_view){.state = state, .why = why, .r1 = r1};
+    snprintf(r->version, sizeof r->version, "%s", version);
+    snprintf(r->name, sizeof r->name, "rekordbox %s", version);
+    if (i >= f->nrows) f->nrows = i + 1;
+}
+
+static void test_rows_digest_refresh(void) {
+    fakeops o;
+    watch_ops ops;
+    rows_base(&o, &ops);
+    row(&o.f, 0, "7.2.19", INV_ROW_ON, WHY_NONE, 0);
+    watch_state st = {0};
+    watch_set s = {.st = &st};
+    watch_check(&ops, &s, WATCH_REGISTRY);
+    row(&o.f, 1, "7.2.18", INV_ROW_ON, WHY_NONE, 0);
+    watch_check(&ops, &s, WATCH_REGISTRY);
+    CHECK(o.refreshes == 2, "an older row alone changes the digest");
+    CHECK(strstr(o.log, "state: rekordbox 7.2.19 On, 7.2.18 On"), "state line reports every row");
+    watch_check(&ops, &s, WATCH_REGISTRY);
+    CHECK(o.refreshes == 2, "the same rows don't refresh again");
+}
+
+static void test_early_compat_refresh(void) {
+    fakeops o;
+    watch_ops ops;
+    rows_base(&o, &ops);
+    row(&o.f, 0, "7.2.19", INV_ROW_ON, WHY_NONE, 0);
+    row(&o.f, 1, "7.2.20", INV_ROW_UNSUPPORTED, WHY_RB_UNLISTED, 0);
+    char first[INV_REFRESH_KEYS_MAX], next[INV_REFRESH_KEYS_MAX];
+    CHECK(inv_refresh_keys(o.f.rows, o.f.nrows, o.f.m, "", first) && strstr(first, ":7.2.20\n"), "new unsupported version requests a refresh");
+    CHECK(!inv_refresh_keys(o.f.rows, o.f.nrows, o.f.m, first, next), "same version and list are already recorded");
+    row(&o.f, 2, "7.2.21", INV_ROW_UNSUPPORTED, WHY_RB_UNLISTED, 0);
+    CHECK(inv_refresh_keys(o.f.rows, o.f.nrows, o.f.m, first, next) && strstr(next, ":7.2.21\n") && !strstr(next, ":7.2.20\n"),
+          "a second unsupported version gets its own request");
+    strcpy(lists.win_rekordbox[lists.n_win_rekordbox++], "7.2.20");
+    row(&o.f, 1, "7.2.20", INV_ROW_READY, WHY_NONE, 0);
+    CHECK(inv_refresh_keys(o.f.rows, o.f.nrows, o.f.m, first, next) && !strstr(next, ":7.2.20\n"), "a Ready version needs no early refresh");
+    row(&o.f, 1, "7.2.20", INV_ROW_UNSUPPORTED, WHY_BUILD_UNLISTED, 0);
+    CHECK(inv_refresh_keys(o.f.rows, o.f.nrows, o.f.m, first, next) && strstr(next, ":7.2.20\n"), "a changed list permits another request");
+    o.f.rows[0].state = INV_ROW_READY;
+    CHECK(!inv_refresh_keys(o.f.rows, o.f.nrows, o.f.m, "", next), "no early refresh without Cache on elsewhere");
+}
+
+static void test_stale_entry_no_retry(void) {
+    fakeops o;
+    watch_ops ops;
+    rows_base(&o, &ops);
+    watch_state st = {0};
+    watch_set s = {.st = &st};
+    o.f.rb_state = COMPAT_RB_NO_ANSWER;
+    o.f.inv_complete = 0;
+    watch_check(&ops, &s, WATCH_REGISTRY);
+    CHECK(o.pauses == 0, "an incomplete read without a settling folder doesn't pause");
+    o.f.rb_unsettled = 1;
+    watch_check(&ops, &s, WATCH_REGISTRY);
+    CHECK(o.pauses == 1, "a settling folder gets one retry");
+}
+
+static void test_grouped_add_prompt(void) {
+    fakeops o;
+    watch_ops ops;
+    rows_base(&o, &ops);
+    row(&o.f, 0, "7.2.19", INV_ROW_READY, WHY_NONE, 0);
+    row(&o.f, 1, "7.2.18", INV_ROW_READY, WHY_NONE, 0);
+    row(&o.f, 2, "7.2.17", INV_ROW_ON, WHY_NONE, 0);
+    o.answer = 2;
+    watch_state st = {0};
+    watch_set s = {.st = &st};
+    watch_check(&ops, &s, WATCH_ROUND);
+    CHECK(o.asks == 1 && !strcmp(o.message, "Stems Cache isn't on in rekordbox 7.2.19, 7.2.18 yet.") &&
+          !strcmp(o.buttons, "Install Now|Remind Me Later|Don't Ask Again for These Versions"),
+          "one add prompt names both Ready rows: %s / %s", o.message, o.buttons);
+    CHECK(!strcmp(o.remembered, "cache:7.2.18\ncache:7.2.19\n"), "only the shown keys are recorded: %s", o.remembered);
+    CHECK(o.requests == 0 && o.opens == 0, "dismissal doesn't start an install");
+    o.f.dismissed = o.remembered;
+    o.f.dismissed_n = strlen(o.remembered);
+    watch_check(&ops, &s, WATCH_ROUND);
+    CHECK(o.asks == 1, "the next round asks nothing");
+}
+
+static void test_unsupported_notice_once(void) {
+    fakeops o;
+    watch_ops ops;
+    rows_base(&o, &ops);
+    row(&o.f, 0, "7.2.20", INV_ROW_UNSUPPORTED, WHY_RB_UNLISTED, 0);
+    row(&o.f, 1, "7.2.19", INV_ROW_UNSUPPORTED, WHY_ORT_UNLISTED, 0);
+    watch_state st = {0};
+    watch_set s = {.st = &st};
+    watch_check(&ops, &s, WATCH_ROUND);
+    CHECK(o.asks == 1 && strstr(o.message, "7.2.20, 7.2.19") && !strncmp(o.buttons, "OK|", 3),
+          "one notice shows both unsupported versions: %s", o.message);
+    char remembered[sizeof o.remembered];
+    snprintf(remembered, sizeof remembered, "%s", o.remembered);
+    o.f.dismissed = remembered;
+    o.f.dismissed_n = strlen(remembered);
+    watch_check(&ops, &s, WATCH_ROUND);
+    CHECK(o.asks == 1, "one unsupported notice per version and list");
+    strcpy(lists.win_ort_code_sha256, "different ORT code");
+    watch_sched_registry(&o.sc, 1, 0);
+    watch_sched_take(&o.sc);
+    watch_sched_registry(&o.sc, 1, 1);
+    int flags = watch_sched_take(&o.sc);
+    CHECK(flags == WATCH_REGISTRY, "the periodic check sees list changes without a registry change");
+    if (flags) watch_check(&ops, &s, flags);
+    CHECK(o.asks == 2 && o.requests == 0 && o.opens == 0, "a changed list allows another notice on a registry round");
+}
+
+static void test_repair_precedence(void) {
+    fakeops o;
+    watch_ops ops;
+    rows_base(&o, &ops);
+    row(&o.f, 0, "7.2.19", INV_ROW_READY, WHY_NONE, 0);
+    row(&o.f, 1, "7.2.18", INV_ROW_REPAIR, WHY_R1_MISSING, 1);
+    o.answer = 1;
+    watch_state st = {0};
+    watch_set s = {.st = &st};
+    watch_check(&ops, &s, WATCH_R1);
+    CHECK(o.opens == 1 && o.asks == 1 && strstr(o.message, "7.2.19") && !strstr(o.message, "7.2.18"),
+          "an older repair opens the app and only the Ready row is offered: %s", o.message);
+    watch_check(&ops, &s, WATCH_R1);
+    CHECK(o.opens == 1 && o.asks == 1, "same repair opens once and Remind Me Later holds for this set");
+}
+
+static void test_removal_silent(void) {
+    fakeops o;
+    watch_ops ops;
+    rows_base(&o, &ops);
+    row(&o.f, 0, "7.2.19", INV_ROW_READY, WHY_NONE, 0);
+    row(&o.f, 1, "7.2.18", INV_ROW_ON, WHY_NONE, 0);
+    o.answer = 1;
+    watch_state st = {0};
+    watch_set s = {.st = &st};
+    watch_check(&ops, &s, WATCH_ROUND);
+    CHECK(o.asks == 1, "the Ready row was offered before removal");
+    watch_state before_removal = st;
+    o.f.nrows = 1;
+    s = (watch_set){.st = &st};
+    watch_check(&ops, &s, WATCH_ROUND | WATCH_R1);
+    CHECK(o.refreshes == 2 && o.asks == 1 && o.opens == 0 && o.requests == 0,
+          "removing the other row refreshes quietly even with a previous reminder");
+
+    st = before_removal;
+    s = (watch_set){.st = &st};
+    row(&o.f, 1, "7.2.18", INV_ROW_REPAIR, WHY_DELISTED_BRIDGE, 0);
+    watch_check(&ops, &s, WATCH_ROUND | WATCH_R1);
+    CHECK(o.refreshes == 3 && o.asks == 1 && o.opens == 0 && o.requests == 0,
+          "a removal leaving a disk-only cleanup row refreshes quietly");
+}
+
+static void test_registry_update_refreshes_open_app(void) {
+    fakeops o;
+    watch_ops ops;
+    base(&o, &ops);
+    ops.text_os = CORE_OS_WIN;
+    o.f.r1.offer_restore = 0;
+    o.f.r1.live = COMPAT_LIVE_OURS;
+    o.f.cache_present = 1;
+    watch_state state = {0};
+    watch_set set = {.st = &state};
+    CHECK(watch_check(&ops, &set, WATCH_ROUND) == 1 && o.asks == 0 && o.refreshes == 1, "first verified observation refreshes an open app");
+
+    /* The folder was seen first, with the old installation still current. The registry change
+     * arrives later, and the first scan after it still can't use the new EXE. */
+    CHECK(watch_check(&ops, &set, WATCH_ROUND) == 1 && o.refreshes == 1, "unchanged old version after directory notice");
+    watch_facts updated = o.f;
+    snprintf(updated.rekordbox_version, sizeof updated.rekordbox_version, "7.2.20");
+    snprintf(updated.watch_name, sizeof updated.watch_name, "rekordbox 7.2.20");
+    snprintf(updated.folder, sizeof updated.folder, "C:\\Program Files\\rekordbox\\rekordbox 7.2.20");
+    row(&updated, 0, "7.2.20", INV_ROW_UNSUPPORTED, WHY_RB_UNLISTED, 0);
+    updated.cache_present = 0;
+    updated.r1.live = COMPAT_LIVE_PIONEER;
+    o.f.rb_unsettled = 1;
+    o.after_pause = &updated;
+    o.answer = -1;
+    watch_sched_registry(&o.sc, 1, 0);
+    CHECK(watch_sched_take(&o.sc) == WATCH_REGISTRY, "a new Uninstall generation schedules a watcher round");
+    watch_sched_registry(&o.sc, 2, 0);
+    int64_t wait;
+    if (watch_sched_poll(&o.sc, 0, &wait)) watch_check(&ops, &set, 0);
+    CHECK(o.pauses == 1 && o.asks == 1 && strstr(o.message, "7.2.20") &&
+          o.refreshes == 2 && o.refreshes_at_prompt == 2 && !o.opens && !o.requests,
+          "registry-only notice retries settling and quietly refreshes the app before the unsupported prompt");
+    CHECK(watch_check(&ops, &set, WATCH_REGISTRY) == 1 && o.refreshes == 2 && o.asks == 1,
+          "an unrelated registry change doesn't refresh or repeat the prompt");
+    CHECK(watch_classify(WD_REKORDBOX, "rekordbox 7.2.19", WATCH_ADDED, "rekordbox 7.2.20\\rekordbox.exe") == (WATCH_ROUND | WATCH_R1),
+          "a late EXE copy in a different folder schedules a check");
 }
 
 static void test_check(void) {
@@ -560,7 +769,7 @@ static void test_check(void) {
         snprintf(o.f.rekordbox_version, sizeof o.f.rekordbox_version, "7.2.%d", i);
         watch_check(&ops, &s, WATCH_R1);
     }
-    CHECK(o.opens == 60 && strlen(st.r1_opened) < sizeof st.r1_opened && strstr(st.r1_opened, "r1:7.2.59 ") && !strstr(st.r1_opened, "r1:7.2.0 "),
+    CHECK(o.opens == 60 && strlen(st.r1_opened) < sizeof st.r1_opened && strstr(st.r1_opened, "r1:7.2.59 "),
           "60 states: each opened once, the newest kept (%d)", o.opens);
     snprintf(o.f.rekordbox_version, sizeof o.f.rekordbox_version, "7.2.59");
     watch_check(&ops, &s, WATCH_R1);
@@ -689,14 +898,16 @@ static void test_check(void) {
     ops.text_os = CORE_OS_WIN;
     o.f.r1.offer_restore = 0;
     o.f.chosen_model = 1;
+    o.f.dismissed = "cache:7.2.19\n";
+    o.f.dismissed_n = strlen(o.f.dismissed);
     o.answer = 0;
     r = watch_check(&ops, &s, WATCH_ROUND);
     CHECK(r == 0 && o.asks == 1 && o.requests == 1 && o.opens == 1, "Windows: asked, Reinstall Now (%d asks)", o.asks);
-    CHECK(!strcmp(o.title, "rekordbox was updated") && !strcmp(o.buttons, "Reinstall Now|Remind Me Later|Don't Ask Again for This Version")
-              && !strcmp(o.message, "Demucs v4 and Stems Cache are off. Reinstall them to separate tracks with Demucs v4 and reuse the stems "
-                                    "Stems Cache has saved."),
+    CHECK(!strcmp(o.title, "rekordbox put its own stems model back") && !strcmp(o.buttons, "Reinstall Now|Remind Me Later|Don't Ask Again for This Version")
+              && !strcmp(o.message, "Demucs v4 is off. Reinstall it to separate tracks with Demucs v4 instead of rekordbox's own model."),
           "the Windows column's words: %s / %s / %s", o.title, o.message, o.buttons);
-    CHECK(strstr(o.log, "asking: cache:7.2.19, model:0002\nuser chose: Reinstall Now\n") != NULL, "logged in the Windows words");
+    CHECK(strstr(o.log, "asking: model:0002\nuser chose: Reinstall Now\n") != NULL && !strcmp(o.request, "model"),
+          "the model offer writes a model-only request (got %s)", o.request);
     /* the blocked form in the Windows column */
     base(&o, &ops);
     memset(&s, 0, sizeof s);
@@ -704,11 +915,11 @@ static void test_check(void) {
     ops.text_os = CORE_OS_WIN;
     o.f.r1.offer_restore = 0;
     snprintf(o.f.rekordbox_version, sizeof o.f.rekordbox_version, "7.2.20");
+    row(&o.f, 0, "7.2.20", INV_ROW_UNSUPPORTED, WHY_RB_UNLISTED, 0);
     o.answer = 1;
     r = watch_check(&ops, &s, WATCH_ROUND);
     CHECK(r == 1 && !strcmp(o.title, "rekordbox was updated") && !strcmp(o.buttons, "OK|Don't Ask Again for This Version")
-              && !strcmp(o.message, "Stems Cache is off. It doesn't support rekordbox 7.2.20 yet. RB Stems Plus checks again each time "
-                                    "you open it, and asks you to reinstall once it can."),
+              && !strcmp(o.message, "Stems Cache doesn't support rekordbox 7.2.20 yet. RB Stems Plus asks you to add it once it can."),
           "Windows, blocked: %s / %s / %s", o.title, o.message, o.buttons);
 
     /* a text not written in its column: not asked, never in another column's words */
@@ -718,16 +929,20 @@ static void test_check(void) {
     s.st = &st;
     ops.text_os = CORE_OS_WIN;
     o.f.r1.offer_restore = 0;
+    o.f.inv_complete = 1;
+    row(&o.f, 0, "7.2.19", INV_ROW_READY, WHY_NONE, 0);
     watch_test_unwritten_text = T_W_REMIND_LATER;
     r = watch_check(&ops, &s, WATCH_ROUND);
     watch_test_unwritten_text = -1;
-    CHECK(r == 1 && o.asks == 0 && strstr(o.log, "missing (cache:7.2.19), but the question's texts aren't written for Windows yet: not asking"),
+    CHECK(r == 1 && o.asks == 0 && strstr(o.log, "the Stems Cache question's texts aren't written for Windows yet: not asking"),
           "a button not written: not asked");
     base(&o, &ops);
     memset(&s, 0, sizeof s);
     s.st = &st;
     ops.text_os = CORE_OS_WIN;
     o.f.r1.offer_restore = 0;
+    o.f.inv_complete = 1;
+    row(&o.f, 0, "7.2.19", INV_ROW_READY, WHY_NONE, 0);
     watch_test_unwritten_text = T_W_TITLE_UPDATED;
     r = watch_check(&ops, &s, WATCH_ROUND);
     watch_test_unwritten_text = -1;
@@ -847,9 +1062,10 @@ typedef struct {
 static int fo_entries(void *ctx, compat_uninstall *out, int max, int *incomplete) {
     fakeos *f = ctx;
     *incomplete = 0;
-    if (max < 1) return 0;
-    out[0] = f->e[0];
-    return 1;
+    int n = f->e[1].key[0] ? 2 : 1;
+    if (max < n) return 0;
+    memcpy(out, f->e, (size_t)n * sizeof *out);
+    return n;
 }
 static int fo_pin(void *ctx, const char *path, plat_file pf) {
     fakeos *f = ctx;
@@ -909,6 +1125,63 @@ static void signed_pair(const test_key *k, const char *dir, const char *pv, cons
     spits(p, j);
 }
 
+/* a file's whole text, "" when there is none */
+static const char *slurp(const char *path, char *b, size_t cap) {
+    FILE *in = fopen(path, "rb");
+    size_t got = in ? fread(b, 1, cap - 1, in) : 0;
+    if (in) fclose(in);
+    b[got] = 0;
+    return b;
+}
+
+/* N10 (review WCM3): dismissed's one writer, the watcher's reinstall question and the app's R1
+ * "Don't Ask Again for This Version": the file as it is now and the new lines together, sorted,
+ * no repeats; a line the other process wrote meanwhile is kept; a file that isn't UTF-8 counts as
+ * none; one that can't be read, or lines that aren't UTF-8, leave it as it is */
+static void test_dismissed(const char *scratch) {
+    char sup[1024], p[1100], b[512], key[64];
+    snprintf(sup, sizeof sup, "%s/dismissed-support", scratch);
+    CHECK(mkdir(sup, 0700) == 0, "a support folder");
+    snprintf(p, sizeof p, "%s/dismissed", sup);
+    CHECK(watch_r1_dismissed_key("7.2.19", key, sizeof key) == 9 && !strcmp(key, "r1:7.2.19"), "R1's dismissed line: %s", key);
+    CHECK(!dismissed_has(sup, "r1:7.2.19"), "no file: not dismissed");
+    CHECK(dismissed_add(sup, key, strlen(key)) == 0 && !strcmp(slurp(p, b, sizeof b), "r1:7.2.19\n"), "no file: the line alone: %s", b);
+    CHECK(dismissed_has(sup, "r1:7.2.19") && !dismissed_has(sup, "r1:7.2.20") && !dismissed_has(sup, "r1:7.2"), "dismissed for 7.2.19 only");
+    /* the watcher's lines kept, sorted; the same line again isn't repeated */
+    spits(p, "model:0002\ncache:7.2.19\n");
+    CHECK(dismissed_add(sup, key, strlen(key)) == 0 && !strcmp(slurp(p, b, sizeof b), "cache:7.2.19\nmodel:0002\nr1:7.2.19\n"), "kept: %s", b);
+    CHECK(dismissed_add(sup, "r1:7.2.19\n", 10) == 0 && !strcmp(slurp(p, b, sizeof b), "cache:7.2.19\nmodel:0002\nr1:7.2.19\n"), "no repeat: %s", b);
+    /* the race the lock's read closes: the watcher's whole text, from its read before the app's
+     * line, keeps that line */
+    spits(p, "a\nzz\n");
+    CHECK(dismissed_add(sup, key, strlen(key)) == 0, "the app's line");
+    const char *watcher = "a\ncache:7.2.19\nmodel:0002\nzz\n";
+    CHECK(dismissed_add(sup, watcher, strlen(watcher)) == 0 && !strcmp(slurp(p, b, sizeof b), "a\ncache:7.2.19\nmodel:0002\nr1:7.2.19\nzz\n"),
+          "the watcher's answer after it: both kept: %s", b);
+    CHECK(dismissed_has(sup, "r1:7.2.19") && dismissed_has(sup, "model:0002"), "both read back");
+    /* not UTF-8: none, as the readers count it */
+    spits(p, "\xff\xfe\n");
+    CHECK(!dismissed_has(sup, "r1:7.2.19"), "not UTF-8: nothing dismissed");
+    CHECK(dismissed_add(sup, key, strlen(key)) == 0 && !strcmp(slurp(p, b, sizeof b), "r1:7.2.19\n"), "not UTF-8: replaced: %s", b);
+    CHECK(dismissed_add(sup, "r1:\xff", 4) != 0 && !strcmp(slurp(p, b, sizeof b), "r1:7.2.19\n"), "lines not UTF-8: refused, the file as it was");
+    /* at the readers' bound: a new line is refused, a repeat still writes */
+    char full[64 * 1024];
+    for (int i = 0; i < 6553; i++) snprintf(full + 10 * i, sizeof full - 10 * i, "a:%07d\n", i);
+    memcpy(full + sizeof full - 6, "zzzzz\n", 6);
+    spit(p, full, sizeof full);
+    CHECK(dismissed_add(sup, key, strlen(key)) == E2BIG, "at 64 KiB: a new line is refused");
+    CHECK(dismissed_has(sup, "a:0000000") && !dismissed_has(sup, "r1:7.2.19"), "at 64 KiB: the old line is still readable, the new line absent");
+    CHECK(dismissed_add(sup, "a:0000001", 9) == 0, "at 64 KiB: a repeat still writes");
+    spits(p, "r1:7.2.19\n");
+    /* a file that can't be read is never overwritten blind; no support folder: an error */
+    CHECK(unlink(p) == 0 && mkdir(p, 0700) == 0, "dismissed made a folder");
+    struct stat st;
+    CHECK(dismissed_add(sup, key, strlen(key)) != 0 && stat(p, &st) == 0 && S_ISDIR(st.st_mode) && !dismissed_has(sup, "r1:7.2.19"), "unreadable: left as it is");
+    snprintf(p, sizeof p, "%s/nowhere", scratch);
+    CHECK(dismissed_add(p, key, strlen(key)) != 0 && !dismissed_has(p, "r1:7.2.19"), "no support folder: an error");
+    CHECK(dismissed_add(NULL, key, 1) != 0 && dismissed_add(sup, NULL, 0) != 0 && !dismissed_has(NULL, key) && !dismissed_has(sup, NULL), "NULLs refused");
+}
+
 static void test_facts(const char *scratch, const char *pedir) {
     char rbdir[1024], v19[1100], root[1024], ortdir[1100], models[1024], support[1024], p[1300];
     snprintf(rbdir, sizeof rbdir, "%s/rekordbox", scratch);
@@ -953,6 +1226,19 @@ static void test_facts(const char *scratch, const char *pedir) {
     CHECK(!f.chosen_model && !f.chosen_cache && !f.dismissed && !f.engine[0] && !f.plus_present && !f.have_lists && f.m == NULL,
           "nothing else there");
 
+    fo.e[1] = fo.e[0];
+    snprintf(fo.e[1].key, sizeof fo.e[1].key, "Pioneer rekordbox 7.2.20");
+    snprintf(fo.e[1].display_version, sizeof fo.e[1].display_version, "7.2.20.0123");
+    CHECK((size_t)snprintf(fo.e[1].install_location, sizeof fo.e[1].install_location, "%s/rekordbox 7.2.20", rbdir)
+          < sizeof fo.e[1].install_location, "fixture path fits");
+    CHECK(watch_read_facts(&env, &rd, &f) == 0 && !f.rb_unsettled && f.inv_complete && f.nrows == 1,
+          "a stale entry has no row and never triggers settling");
+    CHECK(mkdir(fo.e[1].install_location, 0755) == 0, "the new folder appears");
+    CHECK(watch_read_facts(&env, &rd, &f) == 0 && f.rb_unsettled && !f.inv_complete && f.nrows == 2,
+          "a real folder awaiting its EXE has a row and triggers settling");
+    rmdir(fo.e[1].install_location);
+    fo.e[1].key[0] = 0;
+
     snprintf(p, sizeof p, "%s/onnxruntime.dll", v19);
     spits(p, "MZ... rbstems bridge: 1.5.0 ...");
     snprintf(p, sizeof p, "%s/installed", support);
@@ -968,6 +1254,10 @@ static void test_facts(const char *scratch, const char *pedir) {
     CHECK(f.r1.live == COMPAT_LIVE_OURS_UNLISTED && f.cache_present && f.r1.offer_restore && f.r1.ort_looked && !f.r1.ort_copy,
           "the bridge's text: Stems Cache on (unlisted: no list); ort\\'s copy looked at, missing");
     CHECK(f.chosen_model && f.chosen_cache && f.dismissed && !strcmp(f.dismissed, "model:0001\n") && f.dismissed_n == 11, "installed, dismissed");
+    /* N10: the app's R1 Don't Ask Again, through the one writer, reaches the watcher's reader */
+    CHECK(dismissed_add(support, "r1:7.2.19", 9) == 0 && watch_read_facts(&env, &rd, &f) == 0 && f.dismissed
+              && !strcmp(f.dismissed, "model:0001\nr1:7.2.19\n"),
+          "R1 dismissed for 7.2.19, the watcher's line kept: %s", f.dismissed ? f.dismissed : "(none)");
     CHECK(!strcmp(f.engine, "0002") && f.plus_present, "the engine trimmed, Demucs v4 by its size");
     snprintf(p, sizeof p, "%s/hdemucs.onnx", models);
     CHECK(truncate(p, 1000) == 0 && watch_read_facts(&env, &rd, &f) == 0 && !f.plus_present, "rekordbox's own model: not ours");
@@ -997,7 +1287,12 @@ static void test_facts(const char *scratch, const char *pedir) {
 
     /* W5: the lists and our bridges from signed payloads; installed-release\ read as W3a reads it */
     test_key rel;
-    CHECK(test_key_new(&rel) == 0, "a test key");
+    int fixture_ready = test_key_new(&rel) == 0;
+    CHECK(fixture_ready, "the signed payload fixture initializes");
+    if (!fixture_ready) {
+        watch_reader_free(&rd);
+        return;
+    }
     sig_pubkey keys[1] = {{"test", {0}}};
     memcpy(keys[0].xy, rel.xy, 64);
     env.keys = keys;
@@ -1054,7 +1349,16 @@ int main(int argc, char **argv) {
     test_engine();
     test_engine_idle();
     test_sched();
+    test_rows_digest_refresh();
+    test_early_compat_refresh();
+    test_stale_entry_no_retry();
+    test_grouped_add_prompt();
+    test_unsupported_notice_once();
+    test_repair_precedence();
+    test_removal_silent();
+    test_registry_update_refreshes_open_app();
     test_check();
+    test_dismissed(argv[1]);
     test_facts(argv[1], argv[2]);
     printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;

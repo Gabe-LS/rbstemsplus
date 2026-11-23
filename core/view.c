@@ -39,6 +39,9 @@ void view_loc_overlay(core *c, core_facts *f) {
         f->s[id] = v;
         f->len[id] = v ? n : 0;
     }
+#ifdef CORE_WIN_POLICY
+    if (m->known == VIEW_LOC_STALE) core_fact_flag(f, FACT_LOC_MEASURED, 0);
+#endif
 }
 
 /* a fact holding one item a line ("" lines dropped), as an array in the scratch */
@@ -76,9 +79,12 @@ static char *scratch_buf(core *c) {
 
 static const char *built(tbuf *b) { return b->err ? "" : b->p; }
 
-/* LocationSnapshot.lightTip (LocationMonitor.swift:38): locationLight of the snapshot's status;
- * NULL when it has no status yet, or the location is fine */
+/* LocationSnapshot.lightTip (LocationMonitor.swift:38): locationLight of the snapshot's status. */
 const char *view_location_tip(core *c, const core_facts *f) {
+#ifdef CORE_WIN_POLICY
+    if ((c->os == CORE_OS_WIN && c->v.loc.known == VIEW_LOC_STALE) || win_location_unchecked(c->os, f))
+        return core_text_template(c->os, T_CHECKING_WHERE);
+#endif
     if (!vf_flag(f, FACT_LOC_MEASURED)) return NULL;
     loc_status st = {(int32_t)vf_i64(f, FACT_LOC_KIND, LOC_THIS_MAC), (int32_t)vf_i64(f, FACT_LOC_PROBE, PROBE_AVAILABLE),
                      vf_str_or_null(f, FACT_LOC_STATUS_DRIVE)};
@@ -119,10 +125,20 @@ int32_t view_cache_light(core *c, const core_facts *f, int waiter, const char **
     }
     in.location = view_location_tip(c, f);
     in.drive = vf_str_or_null(f, FACT_LOC_DRIVE);
+#ifdef CORE_WIN_POLICY
+    in.win_r1 = c->os == CORE_OS_WIN ? c->v.win_r1 : R1_OK;   /* R1 first (C19): refresh's and prepareFacts' light */
+#endif
     char *buf = scratch_buf(c);
     tbuf b;
     tb_init(&b, c->os, buf ? buf : (char[1]){0}, buf ? TEXT_CAP : 1);
-    int32_t look = light_cache(&b, &in);
+    int32_t look;
+#ifdef CORE_WIN_POLICY
+    if (c->os == CORE_OS_WIN && c->v.win_r1_bridge_repair.state == WIN_ROW_REPAIR) {
+        w_win_row_reason(&b, &c->v.win_r1_bridge_repair);
+        look = LOOK_LIMITED;
+    } else
+#endif
+        look = light_cache(&b, &in);
     *tip = buf ? built(&b) : "";
     return look;
 }
@@ -218,6 +234,83 @@ static void sha_result_job(core *c, void *payload) {
     }
 }
 
+/* ---------------------------------------------------------------- R1 (Windows, review WR1) */
+
+#ifdef CORE_WIN_POLICY
+/* R1's check (app.md §5.2): CORE_SLOW_R1 on a worker, its key "" (the host's own discovery of the
+ * current version folder), at start, at activation, on the watcher's notifications and when an
+ * action ends. Each ask moves r1_gen; an answer for an older one is dropped. No answer (no
+ * folder, unreadable, an unknown value) is R1_OK: nothing to put back. A changed state refreshes
+ * once, and the Prepare tab checks again quietly when it exists (CW2); the same state does
+ * nothing, except the first answer after an action, which refreshes once to give Put Back back
+ * (CW3: until then it stays off, so a restore that worked can't be clicked again on the old
+ * line), and an answer whose FACT_R1_DISMISSED moved, which refreshes once for Don't Ask Again's
+ * button (N10). A refresh never asks, so asks and refreshes never feed each other. */
+typedef struct {
+    uint64_t gen;
+    int answered, dismissed;
+    int64_t state;
+    int rows_set, nrows;
+    win_row rows[WIN_ROWS_MAX];
+} r1_result;
+typedef struct { r1_result *r; core_job *done; } r1_work;
+
+static void r1_result_job(core *c, void *payload);
+static void view_refresh_r1(core *c, const r1_result *r);
+
+static void r1_work_run(core_life *life, void *payload) {
+    r1_work *w = payload;
+    if (life->host.slow_fact && !(life->native & NATIVE_SLOW_FACT)) {
+        arena a = {0};
+        core_facts f;
+        facts_init(&f, &a);
+        if (life->host.slow_fact(life->host.ctx, CORE_SLOW_R1, "", 0, &f) == 0 && f.set[FACT_R1_STATE]) {
+            w->r->state = f.i[FACT_R1_STATE];
+            w->r->dismissed = f.set[FACT_R1_DISMISSED] && f.i[FACT_R1_DISMISSED];   /* N10 */
+            w->r->answered = 1;
+            if (f.set[FACT_WIN_RB_ROWS]) {
+                w->r->rows_set = 1;
+                w->r->nrows = win_rows_parse(f.s[FACT_WIN_RB_ROWS], f.len[FACT_WIN_RB_ROWS], w->r->rows, WIN_ROWS_MAX);
+            }
+        }
+        arena_free(&a);
+    }
+    job_post(life, w->done);   /* reserved: main always hears */
+}
+static void r1_work_drop(void *payload) { core_job_drop(((r1_work *)payload)->done); }
+
+void view_r1_check(core *c) {
+    if (c->os != CORE_OS_WIN || c->role != CORE_ROLE_APP) return;
+    uint64_t gen = ++c->v.r1_gen;   /* first: an older ask's answer can't release CW3's hold */
+    r1_work *w = malloc(sizeof *w);
+    r1_result *r = calloc(1, sizeof *r);
+    core_job *done = r ? job_reserve(c->life, r1_result_job, r, NULL) : NULL;
+    if (!w || !done) {   /* no answer will come: Put Back stays off (CW3) until the next ask answers */
+        free(w);
+        if (done) core_job_drop(done); else free(r);
+        return;
+    }
+    r->gen = gen;
+    w->r = r;
+    w->done = done;
+    core_post_work(c->life, CORE_WORK_FACT, r1_work_run, w, r1_work_drop);   /* refused: the same, till the next ask */
+}
+
+static void r1_result_job(core *c, void *payload) {
+    const r1_result *r = payload;
+    if (r->gen != c->v.r1_gen) return;   /* a newer ask is under way (it clears r1_after_action) */
+    int64_t s = r->answered && r->state >= R1_OK && r->state <= R1_ORT_MISSING ? r->state : R1_OK;
+    int d = s != R1_OK && r->dismissed;   /* N10: Don't Ask Again's button goes once this version is dismissed */
+    int changed = s != c->v.win_r1, pending = c->v.r1_after_action || d != c->v.win_r1_dismissed;
+    c->v.r1_after_action = 0;
+    if (!changed && !pending && !r->rows_set) return;
+    c->v.win_r1 = s;
+    c->v.win_r1_dismissed = d;
+    view_refresh_r1(c, r);
+    if (changed && !view_tabs_hidden(c)) view_prepare_changed(c, 1);   /* Prepare's problems (CW2) */
+}
+#endif
+
 /* ---------------------------------------------------------------- refresh */
 
 static void set_light(core *c, core_field look_f, core_field tip_f, core_field ax_f, int32_t look, const char *tip) {
@@ -272,14 +365,204 @@ static void status_gen_track(core *c, const core_facts *f) {
     c->v.status_key = k;
 }
 
+#ifdef CORE_WIN_POLICY
+static void win_rows_fields(core *c, const win_row *rows, int n, const char *summary, const char *location,
+                            int admin) {
+    model *m = &c->m;
+    int shown = n >= 2;
+    int count = shown ? n : 0;
+    table_obj *table = m->tab[T_WIN_RB_VERSIONS];
+    int reset = table->n != count;
+    int version_col = core_column_meta[C_WIN_RB_VERSION].index;
+    for (int i = 0; i < count && !reset; i++) {
+        const cell *v = &table->rows[i]->cells[version_col];
+        reset = !v->len || strcmp(v->v.s, rows[i].version);
+    }
+    if (reset && model_table_reset(m, T_WIN_RB_VERSIONS, count)) return;
+    for (int i = 0; i < count; i++) {
+        const win_row *r = &rows[i];
+        char text[192], why[512];
+        tbuf b;
+        tb_init(&b, CORE_OS_WIN, text, sizeof text);
+        w_win_row_text(&b, r, 0);
+        model_cell_str(m, C_WIN_RB_TEXT, i, built(&b), CORE_NTS);
+        tb_init(&b, CORE_OS_WIN, why, sizeof why);
+        if (r->state == WIN_ROW_ON && location) tb_puts(&b, location);
+        else if (r->state == WIN_ROW_READY && !admin) TB_TEXT0(&b, T_NEEDS_ADMIN);
+        else w_win_row_reason(&b, r);
+        model_cell_str(m, C_WIN_RB_TIP, i, built(&b), CORE_NTS);
+        int look = r->state == WIN_ROW_ON ? (location ? LOOK_LIMITED : LOOK_ON)
+                 : r->state == WIN_ROW_REPAIR ? LOOK_LIMITED : LOOK_OFF;
+        model_cell_i64(m, C_WIN_RB_LOOK, i, look);
+        model_cell_str(m, C_WIN_RB_VERSION, i, r->version, CORE_NTS);
+    }
+    model_set_str(m, F_WIN_CACHE_SUMMARY, summary, CORE_NTS);
+    model_set_i64(m, F_WIN_RB_ROWS_SHOWN, shown);
+}
+
+typedef struct {
+    int count, on, ready, repair, unchecked, dismiss;
+    const win_row *first_problem, *first_repair;
+    char summary[128], problem[TEXT_CAP];
+    char dismiss_versions[256];   /* F_WIN_R1_DISMISS_VERSIONS: the versions Don't Ask Again covers */
+} win_coverage;
+
+/* a version added to Don't Ask Again's list (comma-separated): 0, or -1 when it doesn't fit */
+static int win_dismiss_add(win_coverage *w, const char *version, size_t n) {
+    size_t at = strlen(w->dismiss_versions);
+    if (!n || at + n + 2 > sizeof w->dismiss_versions) return -1;
+    if (at) w->dismiss_versions[at++] = ',';
+    memcpy(w->dismiss_versions + at, version, n);
+    w->dismiss_versions[at + n] = 0;
+    w->dismiss++;
+    return 0;
+}
+
+static win_coverage win_coverage_read(const core_facts *f, const win_row *rows, int n) {
+    win_coverage w = {.count = n, .unchecked = n < 0 || vf_flag(f, FACT_LIB_UNCHECKED)};
+    for (int i = 0; i < n; i++) {
+        const win_row *r = &rows[i];
+        w.on += r->state == WIN_ROW_ON;
+        w.ready += r->state == WIN_ROW_READY;
+        w.unchecked |= r->why == WIN_WHY_NO_ANSWER;
+        if (r->state == WIN_ROW_REPAIR) {
+            w.repair++;
+            if (!w.first_repair) w.first_repair = r;
+        }
+        /* Don't Ask Again covers every version R1 asks about and isn't dismissed in: with two or
+         * more rows the repair rows shown, with one the row R1's line is about. WIN_R1_DISMISS
+         * writes exactly these versions, as the click sends them back */
+        if (w.dismiss >= 0 && r->r1 != R1_OK && !r->r1_dismissed && (n < 2 || r->state == WIN_ROW_REPAIR)
+            && win_dismiss_add(&w, r->version, strlen(r->version)))
+            w.dismiss_versions[0] = 0, w.dismiss = -1;   /* more than the list holds: no button */
+        if (!w.first_problem && r->state != WIN_ROW_ON) w.first_problem = r;
+    }
+    if (n <= 0 && w.dismiss == 0) {   /* no rows: R1's line is the current version folder's */
+        const char *current = vf_str(f, FACT_REKORDBOX_VERSION);
+        size_t len = 0;
+        for (int dots = 0; current[len] && (current[len] != '.' || ++dots < 3); len++) {}
+        win_dismiss_add(&w, current, len);
+    }
+    tbuf b;
+    if (n >= 2) {
+        tb_init(&b, CORE_OS_WIN, w.summary, sizeof w.summary);
+        w_win_cache_summary(&b, w.on, n);
+    }
+    tb_init(&b, CORE_OS_WIN, w.problem, sizeof w.problem);
+    if (w.unchecked && (n < 0 || n >= 2)) {
+        if (w.first_problem && w.first_problem->why == WIN_WHY_NO_ANSWER) w_win_row_reason(&b, w.first_problem);
+        else TB_TEXT0(&b, T_WIN_CACHE_NOT_CHECKED);
+    } else if (n >= 2 && w.first_problem) {
+        if (w.first_problem->state != WIN_ROW_READY) w_win_row_reason(&b, w.first_problem);
+        else if (!vf_flag(f, FACT_USER_IS_ADMIN)) TB_TEXT0(&b, T_NEEDS_ADMIN);
+        else {
+            const char *ready[WIN_ROWS_MAX];
+            int count = 0;
+            for (int i = 0; i < n; i++)
+                if (rows[i].state == WIN_ROW_READY) ready[count++] = rows[i].version;
+            char versions[WIN_ROWS_MAX * (WIN_VERSION_CAP + sizeof " and " - 1)];
+            tbuf list;
+            tb_init(&list, CORE_OS_WIN, versions, sizeof versions);
+            w_win_version_list(&list, ready, count);
+            core_slot version = SLOT_S(rekordbox, versions);
+            tb_text(&b, T_WIN_ROW_READY_TIP, &version, 1);
+        }
+    }
+    return w;
+}
+
+static void win_coverage_r1(core *c, const win_coverage *w) {
+    int busy = c->action_running || c->v.r1_after_action;
+    const win_row *repair = w->first_repair;
+    /* These inventory reasons identify our bridge even when R1 reports a foreign runtime. */
+    int our_bridge = repair && (repair->why == WIN_WHY_NOT_RECORDED || repair->why == WIN_WHY_DELISTED_BRIDGE);
+    c->v.win_r1_bridge_repair = our_bridge ? *repair : (win_row){0};
+    if (w->count >= 2 || (repair && (repair->r1 == R1_OK || our_bridge))) {
+        char line[512];
+        tbuf b;
+        tb_init(&b, CORE_OS_WIN, line, sizeof line);
+        if (repair) w_win_row_reason(&b, repair);
+        model_set_str(&c->m, F_WIN_R1_LINE, built(&b), CORE_NTS);
+        model_set_i64(&c->m, F_WIN_RESTORE_VISIBLE, w->repair > 0);
+        model_set_i64(&c->m, F_WIN_RESTORE_ENABLED, w->repair > 0 && !busy);
+        model_set_i64(&c->m, F_WIN_R1_DISMISS_VISIBLE, w->dismiss > 0);
+        model_set_i64(&c->m, F_WIN_R1_DISMISS_ENABLED, w->dismiss > 0 && !busy);
+        snprintf(c->v.win_r1_dismiss_versions, sizeof c->v.win_r1_dismiss_versions, "%s", w->dismiss > 0 ? w->dismiss_versions : "");
+    } else {
+        win_r1_fields(&c->m, c->v.win_r1, c->v.win_r1_dismissed, busy);
+        /* the compact layout: its button names the one version it asks about, or is hidden */
+        int ask = model_get_i64(&c->m, F_WIN_R1_DISMISS_VISIBLE) && w->dismiss > 0;
+        if (!ask) {
+            model_set_i64(&c->m, F_WIN_R1_DISMISS_VISIBLE, 0);
+            model_set_i64(&c->m, F_WIN_R1_DISMISS_ENABLED, 0);
+        }
+        snprintf(c->v.win_r1_dismiss_versions, sizeof c->v.win_r1_dismiss_versions, "%s", ask ? w->dismiss_versions : "");
+    }
+    model_set_str(&c->m, F_WIN_R1_DISMISS_VERSIONS, c->v.win_r1_dismiss_versions, CORE_NTS);
+}
+
+static int32_t win_coverage_light(core *c, const win_coverage *w, const win_row *rows, int32_t basic,
+                                  const char *location, const char **tip) {
+    if (w->count < 2) {
+        if (w->count < 0) *tip = w->problem;
+        return w->count < 0 && basic == LOOK_ON ? LOOK_LIMITED : basic;
+    }
+    char *buf = scratch_buf(c);
+    if (buf) {
+        tbuf b;
+        tb_init(&b, CORE_OS_WIN, buf, TEXT_CAP);
+        tb_puts(&b, w->summary);
+        if (*w->problem) {
+            tb_puts(&b, "\n");
+            tb_puts(&b, w->problem);
+        }
+        for (int i = 0; i < w->count; i++) {
+            tb_puts(&b, "\n");
+            w_win_row_text(&b, &rows[i], 1);
+        }
+        const char *detail = location ? location : basic == LOOK_LIMITED && !w->repair ? *tip : "";
+        if (*detail) {
+            tb_puts(&b, "\n");
+            tb_puts(&b, detail);
+        }
+        if (!b.err) *tip = buf;
+    }
+    if (!w->on) return LOOK_OFF;
+    return w->on < w->count || w->unchecked || location || basic == LOOK_LIMITED ? LOOK_LIMITED : LOOK_ON;
+}
+#endif
+
 /* Controller.refresh() (Controller.swift:222): every button's final state and label in one go */
+#ifdef CORE_WIN_POLICY
+static void view_refresh_r1(core *c, const r1_result *r) {
+#else
 void view_refresh(core *c) {
+#endif
     if (c->role != CORE_ROLE_APP) return;
     core_facts f;
     view_read_facts(c, &f, CORE_FACTS_REFRESH);
     int plus = vf_flag(&f, FACT_STEMS_PLUS_PRESENT), cache = vf_flag(&f, FACT_STEMS_CACHE_PRESENT);
     const char *ctip;
+#ifdef CORE_WIN_POLICY
+    win_row rows[WIN_ROWS_MAX];
+    const win_row *current = rows;
+    const char *location = NULL;
+    win_coverage coverage = {0};
+    if (c->os == CORE_OS_WIN) {
+        int n = win_rows_parse(vf_str(&f, FACT_WIN_RB_ROWS), f.len[FACT_WIN_RB_ROWS], rows, WIN_ROWS_MAX);
+        /* A slow answer is used when the cheap sheet did not carry this fact. Otherwise the
+         * cheap sheet is read after the answer, and may already describe a newer inventory. */
+        if (!f.set[FACT_WIN_RB_ROWS] && r && r->rows_set) { n = r->nrows; current = r->rows; }
+        coverage = win_coverage_read(&f, current, n);
+        if (n >= 2 && coverage.on) location = view_location_tip(c, &f);
+        win_rows_fields(c, current, n, coverage.summary, location, vf_flag(&f, FACT_USER_IS_ADMIN));
+        win_coverage_r1(c, &coverage);
+    }
+#endif
     int32_t clook = view_cache_light(c, &f, SHA_WAIT_REFRESH, &ctip);
+#ifdef CORE_WIN_POLICY
+    if (c->os == CORE_OS_WIN) clook = win_coverage_light(c, &coverage, current, clook, location, &ctip);
+#endif
     char pbuf[256];
     tbuf pb;
     tb_init(&pb, c->os, pbuf, sizeof pbuf);
@@ -303,6 +586,7 @@ void view_refresh(core *c) {
     in.plus_why = plus_blocked(&pf);
 #ifdef CORE_WIN_POLICY
     in.cache_why = c->os == CORE_OS_WIN ? cache_blocked_win(&kf, vf_flag(&f, FACT_ORT_LISTED), vf_flag(&f, FACT_LIB_UNCHECKED)) : cache_blocked(&kf);
+    in.win_cache_problem = coverage.problem;
 #else
     in.cache_why = cache_blocked(&kf);
 #endif
@@ -332,6 +616,22 @@ void view_refresh(core *c) {
     }
     gate_out g;
     gate_buttons(&in, &g);
+#ifdef CORE_WIN_POLICY
+    if (c->os == CORE_OS_WIN && coverage.count == 1 && coverage.first_repair &&
+        (coverage.first_repair->why == WIN_WHY_NOT_RECORDED || coverage.first_repair->why == WIN_WHY_DELISTED_BRIDGE)) {
+        g.install_cache = g.reinstall_cache = 0;   /* D13: no swap over this bridge, Put Back only */
+        g.reinstall = in.chosen_model && in.plus_why == FEAT_OK;
+        g.reinstall_features = T_FEATURE_PLUS;
+    }
+    if (c->os == CORE_OS_WIN && (coverage.count >= 2 || coverage.count < 0)) {
+        int may_change = in.user_is_admin && !coverage.unchecked;
+        int eligible = coverage.ready || coverage.on || kf.rekordbox_supported;
+        int opt_in = !coverage.unchecked && !in.chosen_cache && coverage.on && vf_flag(&f, FACT_CACHE_RECORD_OK);
+        g.install_cache = (may_change && coverage.ready) || opt_in;
+        g.reinstall_cache = may_change && in.chosen_cache && eligible;
+        g.reinstall = g.reinstall_cache || (in.chosen_model && in.plus_why == FEAT_OK);
+    }
+#endif
     view_buttons v = {g.install_plus, g.install_cache, g.reinstall, g.reinstall_plus, g.reinstall_cache, g.settings,
                       g.uninstall_plus, g.uninstall_cache, g.uninstall_all};
     show_buttons(c, &v);
@@ -347,6 +647,10 @@ void view_refresh(core *c) {
     }
 }
 
+#ifdef CORE_WIN_POLICY
+void view_refresh(core *c) { view_refresh_r1(c, NULL); }
+#endif
+
 /* ---------------------------------------------------------------- busy and prepareChanged */
 
 /* busy(msg): `buttons.forEach { $0.isEnabled = false }`: the window's seven (the combined
@@ -356,6 +660,13 @@ void view_busy_on(core *c) {
     v.install_plus = v.reinstall_plus = v.uninstall_plus = 0;
     v.install_cache = v.reinstall_cache = v.settings = v.uninstall_cache = 0;
     show_buttons(c, &v);
+#ifdef CORE_WIN_POLICY
+    if (c->os == CORE_OS_WIN) {   /* Put Back Pioneer's File and Don't Ask Again too: no second action under this one */
+        model_set_i64(&c->m, F_WIN_RESTORE_ENABLED, 0);
+        model_set_i64(&c->m, F_WIN_R1_DISMISS_ENABLED, 0);
+        core_mark_changed(c);
+    }
+#endif
 }
 
 void view_busy_off(core *c, int marked) {
@@ -368,7 +679,13 @@ void view_busy_off(core *c, int marked) {
     int quietly = !ended && c->v.quiet_during_action;
     c->v.changed_during_action = c->v.quiet_during_action = 0;
     view_location_measure(c);   /* an action may have moved the location (Settings, Clear, an uninstall) */
+#ifdef CORE_WIN_POLICY
+    if (c->os == CORE_OS_WIN && c->role == CORE_ROLE_APP) c->v.r1_after_action = 1;   /* Put Back off until R1 answers (CW3) */
+#endif
     view_refresh(c);
+#ifdef CORE_WIN_POLICY
+    view_r1_check(c);   /* what the action did to rekordbox's files (a restore, an install) */
+#endif
     if (ended) view_prepare_changed(c, 0);
     else if (quietly) view_prepare_changed(c, 1);
     else prep_update(c);
@@ -428,14 +745,23 @@ void view_location_changed(core *c) {
 void view_watcher_off(core *c, int off) {
     if ((off != 0) == c->v.watcher_off) return;
     c->v.watcher_off = off != 0;
+#ifdef CORE_WIN_POLICY
+    if (off) core_log(c->life, "watcher: installed but not running (turned off in Startup apps, or not started): reinstall reminders are off");
+#else
     if (off) core_log(c->life, "watcher: installed but not running (turned off in Login Items, or not loaded): reinstall reminders are off");
+#endif
     view_refresh(c);
 }
 
 /* ---------------------------------------------------------------- the location's memo (LocationMonitor) */
 
 static void loc_memo_clear(view_loc_memo *m) {
-    for (int k = 0; k < LOC_FACTS; k++) free(m->s[k]);
+    for (int k = 0; k < LOC_FACTS; k++) {
+#if defined(CORE_WIN_POLICY) && defined(CORE_DEBUG)
+        if (m->s[k]) LIVE_DEC();
+#endif
+        free(m->s[k]);
+    }
     memset(m->set, 0, sizeof m->set);
     memset(m->i, 0, sizeof m->i);
     memset(m->s, 0, sizeof m->s);
@@ -444,7 +770,14 @@ static void loc_memo_clear(view_loc_memo *m) {
 enum { LK_KIND = 1, LK_PROBE = 2, LK_DRIVE = 4, LK_FLOOR = 9, LK_IN_USE = 10 };   /* loc_ids' places */
 #define SIZE_EVERY_MS 600000   /* LocationMonitor: the size again every 10 minutes */
 
-typedef struct { int ok, size, declined; view_loc_memo r; } loc_result;   /* declined: the host answered nonzero */
+typedef struct {
+    int ok, size, declined;
+    view_loc_memo r;
+#ifdef CORE_WIN_POLICY
+    int not_now;
+    uint64_t size_gen;
+#endif
+} loc_result;
 typedef struct { loc_result *r; core_job *done; } loc_work;
 
 static void loc_work_run(core_life *life, void *payload) {   /* a worker: measureCheapState */
@@ -456,7 +789,8 @@ static void loc_work_run(core_life *life, void *payload) {   /* a worker: measur
         int32_t rc = life->host.slow_fact(life->host.ctx, CORE_SLOW_LOCATION, "", 0, &f);
         int ok = rc == 0;
 #ifdef CORE_WIN_POLICY
-        w->r->declined = rc != 0 && rc != CORE_SLOW_NOT_NOW;   /* not now: the memo, its size and its timer stay (review NW1) */
+        w->r->not_now = rc == CORE_SLOW_NOT_NOW;
+        w->r->declined = rc != 0 && !w->r->not_now;
 #else
         w->r->declined = !ok;
 #endif
@@ -465,6 +799,9 @@ static void loc_work_run(core_life *life, void *payload) {   /* a worker: measur
             w->r->r.set[k] = f.set[id];
             w->r->r.i[k] = f.i[id];
             if (f.set[id] && f.s[id] && !(w->r->r.s[k] = strdup(f.s[id]))) ok = 0;
+#if defined(CORE_WIN_POLICY) && defined(CORE_DEBUG)
+            if (w->r->r.s[k]) LIVE_INC();
+#endif
         }
         w->r->ok = ok;
         arena_free(&a);
@@ -713,8 +1050,17 @@ static void loc_result_job(core *c, void *payload) {
     view_loc_memo *m = &c->v.loc;
     m->working = 0;
     int moved = 0;
+#ifdef CORE_WIN_POLICY
+    if (c->os == CORE_OS_WIN && r->size_gen != m->size_gen) {
+        loc_memo_clear(&r->r);
+        goto rerun;
+    }
+#endif
     if (r->ok) {   /* the snapshot replaced; onChange when it differs (`s != old`) */
         moved = !m->known || !loc_same(m, &r->r);
+#ifdef CORE_WIN_POLICY
+        moved |= m->known == VIEW_LOC_STALE;
+#endif
         if (!m->every) every_arm(c);   /* startObserving's timer, once the host measures (again after an arm out of memory) */
         loc_memo_clear(m);
         memcpy(m->set, r->r.set, sizeof m->set);
@@ -746,11 +1092,18 @@ static void loc_result_job(core *c, void *payload) {
             every_cancel(m);   /* a plain no drops the timer a first not now armed (review LN2) */
             retry_cancel(m);   /* and the retry (review LN1) */
         } else if (c->life->host.slow_fact && !(c->life->native & NATIVE_SLOW_FACT)) {
+            if (c->os == CORE_OS_WIN && r->not_now && m->known && m->known != VIEW_LOC_STALE) {
+                m->known = VIEW_LOC_STALE;
+                moved = 1;
+            }
             if (!m->every) every_arm(c);   /* not now (review NW1): the timer asks again, even before a first answer; never for a host that doesn't measure (LN3) */
             if (!m->retry) retry_arm(c);   /* and sooner, backing off (review LN1) */
         }
 #endif
     }
+#ifdef CORE_WIN_POLICY
+rerun:
+#endif
     if (m->again) {   /* asked meanwhile: measured again (`rerun`) */
         int sz = m->again_size;
         m->again = m->again_size = 0;
@@ -763,8 +1116,17 @@ void view_location_measure(core *c) { view_location_update(c, 0); }
 
 void view_location_remeasure(core *c) {
     view_loc_memo *m = &c->v.loc;
-    m->size_kind = 0;   /* invalidateSize: "measuring…" until the next walk */
-    m->size_bytes = 0;
+#ifdef CORE_WIN_POLICY
+    int stale = c->os == CORE_OS_WIN && m->known && m->known != VIEW_LOC_STALE;
+    if (c->os == CORE_OS_WIN) {
+        if (stale) m->known = VIEW_LOC_STALE;
+        m->walk_again = 0;
+    } else
+#endif
+    {
+        m->size_kind = 0;   /* invalidateSize: "measuring…" until the next walk */
+        m->size_bytes = 0;
+    }
     m->size_time = 0;
     m->size_gen++;   /* a walk from before (Clear, a new location) isn't published */
 #ifdef CORE_WIN_POLICY
@@ -775,6 +1137,9 @@ void view_location_remeasure(core *c) {
     }
 #endif
     view_location_update(c, 1);
+#ifdef CORE_WIN_POLICY
+    if (stale) view_location_changed(c);
+#endif
 }
 
 /* a memo string, whole, in the flow's arena: "" when the memo has none, NULL out of memory */
@@ -830,6 +1195,9 @@ void view_location_update(core *c, int size) {
         return;
     }
     r->size = size;
+#ifdef CORE_WIN_POLICY
+    r->size_gen = m->size_gen;
+#endif
     w->r = r;
     w->done = done;
     m->working = 1;
@@ -910,10 +1278,13 @@ void view_start(core *c) {
     view_read_facts(c, &f, CORE_FACTS_REFRESH);
     int first = vf_flag(&f, FACT_STEMS_PLUS_PRESENT) || vf_flag(&f, FACT_STEMS_CACHE_PRESENT) ? CORE_TAB_STATUS : CORE_TAB_MANAGE;
 #ifdef CORE_WIN_POLICY
-    if (view_tabs_hidden(c)) first = CORE_TAB_MANAGE;   /* no Status tab in the first release */
+    if (view_tabs_hidden(c)) first = CORE_TAB_MANAGE;   /* Manage-only host */
 #endif
     model_set_i64(&c->m, F_TAB, first);
     view_refresh(c);
+#ifdef CORE_WIN_POLICY
+    view_r1_check(c);
+#endif
 }
 
 /* a tab comes to the front (viewWillAppear): the user's click or the core's own switch */

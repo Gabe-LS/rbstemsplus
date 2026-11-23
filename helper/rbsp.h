@@ -4,6 +4,11 @@
 #define RBSP_H
 #include <stddef.h>
 #include <stdint.h>
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_RATE)
+#include "plat_helper.h"
+#elif defined(RBSP_WIN_DECODE)
+#include "plat.h"
+#endif
 
 /* rekordbox's chunking: chunk i starts at i * HOP - PRE, L samples, zero-padded; the track's final
  * sample is never sent */
@@ -26,12 +31,27 @@ typedef struct {
     int16_t *p16;
     int ch, owner;
     size_t n;
+#if defined(_WIN32) || defined(RBSP_TEST_MF_TRACK)
+    size_t nominal_n;                   /* sample-table length when AAC decoded short */
+#endif
 } track;
 
 typedef struct {
     track t[MAX_TRACKS];
     int count;
     char how[200];                      /* how it was decoded, for the log */
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+    int aac;                             /* decoded through Media Foundation */
+#endif
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_RATE)
+    plat_finfo source;                   /* metadata from the file decoded, for the manifest */
+#endif
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_RATE) || defined(RBSP_TEST_WIN_PREPARE)
+    int source_rate;                     /* decoded sample rate before resampling */
+#endif
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE) || defined(RBSP_TEST_MF_TRACK)
+    enum { AAC_LENGTH_NONE, AAC_LENGTH_COMPLETE, AAC_LENGTH_SHORT } aac_length;
+#endif
 } tracks;
 
 void tracks_free(tracks *ts);
@@ -46,6 +66,45 @@ int probe_track(const char *path, double *seconds, int *aac, char *why, size_t w
 
 /* resample.c: rekordbox's sample-rate converter to 44.1 kHz; 0 when done, *out malloc'd planar */
 int rb_resample(const float *in, size_t n, int rate, float **out, size_t *nout);
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_RATE)
+/* resample_win.c (Windows): rekordbox for Windows' converter. rb_resample returns 2 when the
+ * table built here isn't the one proved for the rate. rb_resample_proved: 1 for a rate whose
+ * output was proved equal to rekordbox for Windows' own (Q12); other rates aren't prepared.
+ * rb_resample_build_proved: 1 when the core passed --resample-proved (the rekordbox.exe in use is
+ * in windows.resampler_proved); without it no file is resampled (Q15) */
+int rb_resample_proved(int rate);
+/* 1 when the table built on this PC for a proved rate is the proved one (built and checked once,
+ * then kept for rb_resample); the probe and the converter both ask it, so they agree */
+int rb_resample_table_ok(int rate);
+/* the converter's output frames for nin input frames at rate (to 44.1 kHz, from a reset state):
+ * the outputs n with floor(M n / L) <= nin - 1, i.e. ceil(L nin / M), L = 882, M = rate / 50;
+ * 0 for a rate it can't take or a count that would overflow. The estimate uses it too. */
+static inline size_t rb_resample_out_frames(size_t nin, int rate) {
+    if (rate <= 0 || rate % 50 || !nin) return 0;
+    size_t L = 882, M = (size_t)rate / 50, q = nin / M, r = nin % M;
+    if (q > (SIZE_MAX - L) / L) return 0;
+    return q * L + (r * L + M - 1) / M;
+}
+#endif
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_RATE) || defined(RBSP_TEST_WIN_PREPARE)
+extern int rb_resample_build_proved;
+/* The Windows rate gate used by the probe, the decoder and --quick. */
+int rb_win_rate_refused(int rate, const char *when, char *why, size_t whyn);
+#endif
+#if defined(_WIN32) && defined(RBSP_RESEARCH)
+#define RBSP_TEST_FORMAT_RATES 1
+#endif
+#ifdef RBSP_TEST_FORMAT_RATES
+extern int rb_aac_test_unproved;
+extern int rb_mp3_test_unproved;
+extern int rb_rates_test_unproved;
+
+static inline int rb_aac_candidate_rate(int rate, int ch) {
+    return ch == 1 && (rate == 16000 || rate == 22050 || rate == 24000);
+}
+
+int rb_resample_win_any(const float *in, size_t nin, int rate, float **out, size_t *nout);
+#endif
 
 /* mp4.c: the sound track's sample table; 0 when found */
 typedef struct {
@@ -58,7 +117,11 @@ int mp4_audio_track(const char *path, mp4_audio *out);
 
 /* mp3.c: rekordbox's MP3 reader (frame map, then its own libmpg123): 0 and *out (planar stereo,
  * float32) or 1 and why */
+#if defined(_WIN32) || defined(RBSP_WIN_DECODE)
+int rb_mp3_file(plat_file f, const char *libmpg123, float **out, size_t *n, int *rate, char *why, size_t whyn);
+#else
 int rb_mp3(const char *path, const char *libmpg123, float **out, size_t *n, char *why, size_t whyn);
+#endif
 
 /* aac.c: every distinct output of Apple's AAC decoder for the file (the 64-byte stack sweep),
  * int16 interleaved, sorted by content; *rate and *ch as the decoder reports them */
@@ -68,12 +131,19 @@ typedef struct {
     int count;
     int rate, ch;
 } aac_outputs;
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_RATE)
+int aac_decode_all(plat_file f, const char *ext, int stream, aac_outputs *o, char *why, size_t whyn);
+#else
 int aac_decode_all(const char *path, aac_outputs *o, char *why, size_t whyn);
+#endif
 void aac_outputs_free(aac_outputs *o);
 
 /* chunk i of a track (rekordbox's), planar [2][CHUNK_L] into c */
 void chunk_at(const track *t, size_t i, float *c);
 size_t n_chunks(size_t n);
+#if defined(_WIN32) || defined(RBSP_TEST_MF_TRACK)
+size_t track_chunks(const track *t);
+#endif
 
 /* The performance timing lines (helper/build.sh --test-timing, helper/tests/perf.sh; never a
  * release): "rbsp-timing ..." on stderr, times in ns of mach_absolute_time's clock. TIMING(...)
@@ -81,7 +151,11 @@ size_t n_chunks(size_t n);
 #ifdef RBSP_TEST_TIMING
 #include <time.h>
 #define TIMING(...) __VA_ARGS__
+#if defined(_WIN32)
+static inline uint64_t t_now(void) { return plat_now_mono_ns(); }   /* QueryPerformanceCounter's */
+#else
 static inline uint64_t t_now(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
+#endif
 extern uint64_t t_resample;             /* decode.c: the resampler's time for the current file */
 extern uint64_t t_ort;                  /* model.c: the last model_run's ONNX Runtime Run alone */
 #else

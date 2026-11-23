@@ -9,6 +9,7 @@
  *
  * os: all | mac | win. A win row exists only under CORE_WIN_POLICY (core.h), so it never reaches
  * the Mac objects; a mac row is dropped from a Windows-only build later, if one is made.
+ * W-core's win fields come after the shared ones (on the core branch until after G4, I19).
  * Rules: rows are added, never renamed or reordered among existing ones once G4 freezes the
  * schema (1.4.0). SECTION rows are never tagged and never added after API v1.
  *
@@ -36,6 +37,9 @@ SECTION(S_SETTINGS, "the Settings sheet's state")
 TABLE(T_STATUS_SETS,   S_STATUS,  all, "prepared playlists (kept sets)")
 TABLE(T_PREP_OUTLINE,  S_PREPARE, all, "the playlist tree, flattened in pre-order")
 TABLE(T_PREP_TRACKS,   S_PREPARE, all, "the chosen playlist's tracks and their estimate")
+/* Windows only (multi-version rekordbox, .orchestration/mv-spec.md §2.6): its columns' numbering
+ * is in schema.c under CORE_WIN_POLICY */
+TABLE(T_WIN_RB_VERSIONS, S_APP,   win, "Windows: one row per installed rekordbox version (Manage, 2 or more rows)")
 
 FIELD(F_WINDOW_TITLE,             S_APP, str,  all, "the window's title (TEST BUILD marked)")
 FIELD(F_STATUS_LINE,              S_APP, str,  all, "the Manage tab's status line")
@@ -94,6 +98,17 @@ FIELD(F_STATUS_AGAIN_ENABLED,     S_STATUS, flag, all, "Prepare Again: enabled")
 FIELD(F_STATUS_STOP_ENABLED,      S_STATUS, flag, all, "Stop Keeping…: enabled")
 FIELD(F_STATUS_RUN_LINE,          S_STATUS, str,  all, "the line beside the buttons: the run's summary, \"\" none")
 FIELD(F_PREP_OUTLINE_SCROLL_SEQ,  S_PREPARE, i64,  all, "one-shot: scroll F_PREP_SELECTED_ROW's outline row into view, once per new value. A selection the core makes sends no {\"ev\":\"select\"} back")
+/* Windows only (W-core, app.md §5.2): R1's line and "Put Back Pioneer's File" (win_r1_fields).
+ * After every shared field, so no shared field's Windows id moves when they merge after G4 (I19) */
+FIELD(F_WIN_R1_LINE,              S_APP, str,  win, "R1's line (w_r1_line): what is wrong with rekordbox's ONNX Runtime, \"\" when nothing")
+FIELD(F_WIN_RESTORE_VISIBLE,      S_APP, flag, win, "Put Back Pioneer's File is shown (R1 found something to put back)")
+FIELD(F_WIN_RESTORE_ENABLED,      S_APP, flag, win, "... and enabled: no action runs (click \"restore_pioneer\")")
+FIELD(F_WIN_R1_DISMISS_VISIBLE,   S_APP, flag, win, "Don't Ask Again for This Version is shown: Put Back is, and R1 isn't dismissed for this version (N10)")
+FIELD(F_WIN_R1_DISMISS_ENABLED,   S_APP, flag, win, "... and enabled, as Put Back (click \"r1_dismiss\")")
+/* Windows only (multi-version rekordbox, mv-spec §2.6): the versions' summary and table */
+FIELD(F_WIN_CACHE_SUMMARY,        S_APP, str,  win, "\"Stems Cache on in 1 of 2 versions\"; \"\" with fewer than 2 rows")
+FIELD(F_WIN_RB_ROWS_SHOWN,        S_APP, flag, win, "2 or more rows: the summary and T_WIN_RB_VERSIONS are shown, under the Stems Cache line; nothing else is replaced")
+FIELD(F_WIN_R1_DISMISS_VERSIONS,  S_APP, str,  win, "the versions Don't Ask Again covers now, newest first, comma-separated (\"7.2.20,7.2.19\"); \"\" when hidden. Its title: T_W_DONT_ASK for one, T_WIN_BTN_R1_DISMISS_MANY for several. A click sends them back as shown: {\"ev\":\"r1_dismiss\",\"versions\":...}")
 
 COLUMN(C_SET_NAME,       T_STATUS_SETS, str, all, "playlist name")
 COLUMN(C_SET_TRACKS,     T_STATUS_SETS, str, all, "track count, or –")
@@ -111,6 +126,11 @@ COLUMN(C_OUT_OPEN,       T_PREP_OUTLINE, flag, all, "the core's decision: a fold
 COLUMN(C_TRK_NAME,       T_PREP_TRACKS, str, all, "track")
 COLUMN(C_TRK_RESULT,     T_PREP_TRACKS, str, all, "Ready, To prepare, Preparing…, Checking…")
 COLUMN(C_TRK_WHY,        T_PREP_TRACKS, str, all, "the secondary note")
+
+COLUMN(C_WIN_RB_TEXT,    T_WIN_RB_VERSIONS, str, win, "\"7.2.19 · On\" (+ \" · Running\")")
+COLUMN(C_WIN_RB_LOOK,    T_WIN_RB_VERSIONS, i64, win, "LOOK_ON / LOOK_LIMITED / LOOK_OFF for the row's light")
+COLUMN(C_WIN_RB_TIP,     T_WIN_RB_VERSIONS, str, win, "the row's reason line, \"\" none")
+COLUMN(C_WIN_RB_VERSION, T_WIN_RB_VERSIONS, str, win, "X.Y.Z (the row's UI Automation id: RbRow_<version>)")
 
 
 #undef SECTION

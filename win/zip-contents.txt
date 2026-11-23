@@ -5,6 +5,7 @@ RB Stems Plus.exe
 RB Stems Plus.exe.config
 admin/RB Stems Plus.exe
 arm64/rbsp-core.dll
+rbsp-prepare.exe
 rbsp-watch-arm64.exe
 rbsp-watch-x64.exe
 stub/arm64/RB Stems Plus.exe

@@ -3,6 +3,7 @@
 
 #include "plat.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -55,11 +56,19 @@ static int alnum(char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z
  * rbsp-<letters, digits, '-'>.exe/.dll, not inside a longer word */
 static int image_at(const char *s, size_t i, size_t b) {
     if (i > 0 && alnum(s[i - 1])) return 0;
-    if (prefix_ci_n(s + i, b - i, "rekordbox.exe") || prefix_ci_n(s + i, b - i, "RB Stems Plus.exe")) return 1;
-    if (!prefix_ci_n(s + i, b - i, "rbsp-")) return 0;
-    size_t j = i + 5;
-    while (j < b && (alnum(s[j]) || s[j] == '-')) j++;
-    return j > i + 5 && (prefix_ci_n(s + j, b - j, ".exe") || prefix_ci_n(s + j, b - j, ".dll"));
+    size_t end;
+    if (prefix_ci_n(s + i, b - i, "rekordbox.exe")) end = i + sizeof "rekordbox.exe" - 1;
+    else if (prefix_ci_n(s + i, b - i, "RB Stems Plus.exe")) end = i + sizeof "RB Stems Plus.exe" - 1;
+    else {
+        if (!prefix_ci_n(s + i, b - i, "rbsp-")) return 0;
+        size_t j = i + 5;
+        while (j < b && (alnum(s[j]) || s[j] == '-')) j++;
+        if (j == i + 5 || !(prefix_ci_n(s + j, b - j, ".exe") || prefix_ci_n(s + j, b - j, ".dll"))) return 0;
+        end = j + 4;
+    }
+    /* EvtRender encodes the carriage return after .NET Runtime's Application line. */
+    return end == b || s[end] == '"' || s[end] == '\'' || s[end] == '<' || isspace((unsigned char)s[end])
+        || prefix_ci_n(s + end, b - end, "&#xD;");
 }
 
 static int images_in(const char *s, size_t a, size_t b) {

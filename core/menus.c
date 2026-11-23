@@ -42,6 +42,9 @@ int32_t core_menu_at(core_os os, int32_t i, core_menu_item *out) {
         out->menu = r->parent;
         out->kind = r->kind;
         out->title = r->title;
+#ifdef CORE_WIN_POLICY
+        if (os == CORE_OS_WIN && r->id == M_APP) out->title = T_WIN_MENU_APP;   /* its access key (W-core) */
+#endif
         out->key = os == CORE_OS_MAC ? r->key_mac : r->key_win;
         out->mods = os == CORE_OS_MAC ? r->mods_mac : r->mods_win;
         out->reserved = 0;

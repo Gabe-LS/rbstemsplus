@@ -194,11 +194,29 @@ int update_image_kind(const char *name) {
     size_t n = strlen(name);
     if (n == sizeof app - 1 && ascii_eq_n(name, app, n)) return UPDATE_IMAGE_APP;
     if (n >= sizeof watch - 1 && ascii_eq_n(name, watch, sizeof watch - 1)) return UPDATE_IMAGE_WATCHER;   /* as watcher_in's match */
+    static const char app83[] = "RBSTEM~", watch83[] = "RBSP-W~";   /* 8.3 forms (a ShortPath launch, review K2F3) */
+    if (n > sizeof watch83 - 1 && ascii_eq_n(name, watch83, sizeof watch83 - 1)) return UPDATE_IMAGE_WATCHER;
+    if (n > sizeof app83 - 1 && ascii_eq_n(name, app83, sizeof app83 - 1)) return UPDATE_IMAGE_APP;
     return UPDATE_IMAGE_OTHER;
 }
 
 int update_open_skips(unsigned long err) {
     return err == UPDATE_ERR_ACCESS_DENIED || err == UPDATE_ERR_INVALID_PARAMETER;
+}
+
+int update_listed_verdict(int opened, unsigned long err, int path, int match, int kind, int watcher_only) {
+    int ours = watcher_only ? kind == UPDATE_IMAGE_WATCHER : kind != UPDATE_IMAGE_OTHER;
+    if (!opened && err == UPDATE_ERR_INVALID_PARAMETER) return UPDATE_LISTED_SKIP;   /* gone */
+    if (path == 1 && match) return UPDATE_LISTED_FOUND;                              /* any session, any account */
+    if (!opened && path == 0) return UPDATE_LISTED_SKIP;                             /* gone since */
+    if (path == 1 && (opened || err == UPDATE_ERR_ACCESS_DENIED)) return UPDATE_LISTED_SKIP;
+    return ours ? UPDATE_LISTED_UNKNOWN : UPDATE_LISTED_SKIP;
+}
+
+int update_nt_path(int read, int matched, int canonical, int alias_resolved) {
+    if (!read) return -1;
+    if (matched) return 1;
+    return canonical && alias_resolved >= 0 ? 0 : -1;
 }
 
 int update_scan_result(int found, int unknown, int ended) {

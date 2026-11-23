@@ -10,4 +10,6 @@
 #include "entry_win.c"
 #else
 #include "../rbstems_bridge.c"
+#include "../../win/c/volumes.c"
+#include "../../win/c/volumes_win.c"
 #endif

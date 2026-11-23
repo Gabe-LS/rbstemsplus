@@ -122,9 +122,25 @@ static int copy_value(char *dst, size_t cap, const char *v) {
     return 1;
 }
 
-int admin_parse_args(int argc, const char *const *argv, admin_args *out, char *why, size_t n) {
-    static const char *const opts[5] = {"--proto", "--version", "--source", "--force", "--pipe"};
-    const char *val[5] = {NULL, NULL, NULL, NULL, NULL};
+/* --proto's value: 1 to 4 digits, no sign, no leading zero; the number, or -1 */
+static int proto_value(const char *p) {
+    size_t pl = strlen(p);
+    if (pl < 1 || pl > 4 || (pl > 1 && p[0] == '0')) return -1;
+    for (size_t i = 0; i < pl; i++)
+        if (!is_digit((unsigned char)p[i])) return -1;
+    return atoi(p);
+}
+
+static int is_sha256(const char *s) {
+    for (int i = 0; i < 64; i++)
+        if (!is_hex((unsigned char)s[i])) return 0;
+    return s[64] == 0;
+}
+
+/* the line's shape, whatever its --proto (admin_parse_args and admin_build_params) */
+static int parse_shape(int argc, const char *const *argv, admin_args *out, char *why, size_t n) {
+    static const char *const opts[6] = {"--proto", "--targets", "--manifest", "--source", "--force", "--pipe"};
+    const char *val[6] = {NULL, NULL, NULL, NULL, NULL, NULL};
     memset(out, 0, sizeof *out);
     out->verb = -1;
     if (n) why[0] = 0;
@@ -133,42 +149,80 @@ int admin_parse_args(int argc, const char *const *argv, admin_args *out, char *w
         if (n) snprintf(why, n, __VA_ARGS__);        \
         return ADMIN_EXIT_CHECK_FAILED;              \
     } while (0)
-    if (argc != 12 || !argv) BAD("expected a verb and five options (%d arguments)", argc - 1);
+    if (argc != ADMIN_ARGC || !argv) BAD("expected a verb and six options (%d arguments)", argc - 1);
     for (int i = 0; i < argc; i++)
         if (!argv[i]) BAD("a missing argument");
     if ((out->verb = admin_verb_of(argv[1])) < 0) BAD("unknown verb");
     for (int i = 2; i < argc; i += 2) {
         int k = -1;
-        for (int j = 0; j < 5; j++)
+        for (int j = 0; j < 6; j++)
             if (!strcmp(argv[i], opts[j])) k = j;
         if (k < 0) BAD("unknown option");
         if (val[k]) BAD("%s given twice", opts[k]);
         val[k] = argv[i + 1];
     }
-    /* --proto: 1 to 4 digits, no sign, no leading zero */
-    const char *p = val[0];
-    size_t pl = strlen(p);
-    if (pl < 1 || pl > 4 || (pl > 1 && p[0] == '0')) BAD("--proto isn't a number");
-    for (size_t i = 0; i < pl; i++)
-        if (!is_digit((unsigned char)p[i])) BAD("--proto isn't a number");
-    out->proto = atoi(p);
-    int needs_version = out->verb == ADMIN_INSTALL || out->verb == ADMIN_UNINSTALL || out->verb == ADMIN_RESTORE;
-    if (needs_version ? !admin_version_ok(val[1]) : (val[1][0] && !admin_version_ok(val[1])))
-        BAD("--version isn't x.y.z");
-    if (!copy_value(out->version, sizeof out->version, val[1])) BAD("--version is too long");
+    if ((out->proto = proto_value(val[0])) < 0) BAD("--proto isn't a number");
+    /* --targets: "*" for the verbs that sweep, else the checked scope */
+    int names = out->verb == ADMIN_INSTALL || out->verb == ADMIN_RESTORE;
+    if (strlen(val[1]) >= ADMIN_TARGETS_ARG_MAX || admin_targets_parse(val[1], out) || out->all == names)
+        BAD(names ? "--targets isn't a list of X.Y.Z:<16 hex>" : "--targets isn't *");
     int needs_source = out->verb == ADMIN_INSTALL || out->verb == ADMIN_INSTALL_WORKER;
-    if (needs_source ? !admin_abs_path_ok(val[2]) : val[2][0] != 0) BAD("--source isn't an absolute folder path");
-    if (!copy_value(out->source, sizeof out->source, val[2])) BAD("--source is too long");
-    if (strcmp(val[3], "0") && strcmp(val[3], "1")) BAD("--force isn't 0 or 1");
-    out->force = val[3][0] == '1';
-    if (!admin_pipe_name_ok(val[4])) BAD("--pipe isn't this app's local pipe");
-    memcpy(out->pipe, val[4], strlen(val[4]) + 1);
+    if (needs_source ? !is_sha256(val[2]) : strcmp(val[2], "-") != 0) BAD(needs_source ? "--manifest isn't a sha256" : "--manifest isn't -");
+    if (needs_source) memcpy(out->manifest, val[2], 65);
+    if (needs_source ? !admin_abs_path_ok(val[3]) : val[3][0] != 0) BAD("--source isn't an absolute folder path");
+    if (!copy_value(out->source, sizeof out->source, val[3])) BAD("--source is too long");
+    if (strcmp(val[4], "0") && strcmp(val[4], "1")) BAD("--force isn't 0 or 1");
+    out->force = val[4][0] == '1';
+    if (!admin_pipe_name_ok(val[5])) BAD("--pipe isn't this app's local pipe");
+    memcpy(out->pipe, val[5], strlen(val[5]) + 1);
 #undef BAD
+    return ADMIN_EXIT_OK;
+}
+
+int admin_parse_args(int argc, const char *const *argv, admin_args *out, char *why, size_t n) {
+    /* another protocol's line is that protocol's, whatever its shape and argument count, for
+     * every verb: said as such on its pipe when it names a valid one (D13, review finding 9).
+     * The one exception is install-worker's protocol-2 shape (I75), parsed below */
+    int verb = argc >= 2 && argv && argv[1] ? admin_verb_of(argv[1]) : -1;
+    if (verb >= 0)
+        for (int i = 2; i + 1 < argc; i += 2) {
+            int p;
+            if (argv[i] && argv[i + 1] && !strcmp(argv[i], "--proto") && (p = proto_value(argv[i + 1])) >= 0 && p != ADMIN_PROTO) {
+                if (verb == ADMIN_INSTALL_WORKER && parse_shape(argc, argv, out, NULL, 0) == ADMIN_EXIT_OK) break;
+                memset(out, 0, sizeof *out);
+                out->verb = verb;
+                out->proto = p;
+                for (int j = 2; j + 1 < argc; j += 2)
+                    if (argv[j] && argv[j + 1] && !strcmp(argv[j], "--pipe") && admin_pipe_name_ok(argv[j + 1]) && strlen(argv[j + 1]) < sizeof out->pipe)
+                        memcpy(out->pipe, argv[j + 1], strlen(argv[j + 1]) + 1);
+                if (n) snprintf(why, n, "the app speaks protocol %d, this worker %d", p, ADMIN_PROTO);
+                return ADMIN_EXIT_PROTOCOL;
+            }
+        }
+    int r = parse_shape(argc, argv, out, why, n);
+    if (r != ADMIN_EXIT_OK) return r;
     if (out->proto != ADMIN_PROTO && out->verb != ADMIN_INSTALL_WORKER) {
         if (n) snprintf(why, n, "the app speaks protocol %d, this worker %d", out->proto, ADMIN_PROTO);
         return ADMIN_EXIT_PROTOCOL;
     }
     return ADMIN_EXIT_OK;
+}
+
+int admin_start(int argc, const char *const *argv, const char *marker, int (*connect)(void *ctx, const char *pipe), void (*say)(void *ctx, const char *line),
+                void *ctx, admin_args *out) {
+    char why[160] = "";
+    int r = argv && argc >= 0 ? admin_parse_args(argc, argv, out, why, sizeof why) : ADMIN_EXIT_CHECK_FAILED;
+    if (!argv || argc < 0) memset(out, 0, sizeof *out);
+    /* nothing is said, and nothing done, without the app's own pipe: another protocol's line
+     * keeps its own code all the same, so the app offers the update */
+    if (!out->pipe[0] || connect(ctx, out->pipe)) return r == ADMIN_EXIT_PROTOCOL ? r : ADMIN_EXIT_CHECK_FAILED;
+    say(ctx, marker);
+    if (r != ADMIN_EXIT_OK) {
+        char line[ADMIN_LINE_MAX];
+        snprintf(line, sizeof line, "%s: nothing changed", why);
+        say(ctx, line);
+    }
+    return r;
 }
 
 /* appends one value in double quotes, as CommandLineToArgvW reads it back: backslashes are
@@ -194,27 +248,104 @@ static int put_quoted(char *out, size_t cap, size_t *at, const char *v) {
     return 1;
 }
 
+/* one X.Y.Z part at v: its digits' start, their count in *len */
+static const char *part(const char *v, size_t *len) {
+    const char *s = v;
+    while (is_digit((unsigned char)*v)) v++;
+    *len = (size_t)(v - s);
+    return s;
+}
+
+int admin_version_cmp(const char *a, const char *b) {
+    for (int i = 0; i < 3; i++) {
+        size_t al, bl;
+        const char *x = part(a, &al), *y = part(b, &bl);
+        a = x + al + (i < 2 && x[al] == '.');
+        b = y + bl + (i < 2 && y[bl] == '.');
+        while (al > 1 && *x == '0') x++, al--;   /* admin_version_ok allows "07": the same as "7" */
+        while (bl > 1 && *y == '0') y++, bl--;
+        if (al != bl) return al < bl ? -1 : 1;
+        int c = memcmp(x, y, al);
+        if (c) return c < 0 ? -1 : 1;
+    }
+    return 0;
+}
+
+static int hex16_ok(const char *h) {
+    for (int i = 0; i < 16; i++)
+        if (!is_hex((unsigned char)h[i])) return 0;
+    return h[16] == 0;
+}
+
+int admin_targets_parse(const char *s, admin_args *out) {
+    out->all = 0;
+    out->nt = 0;
+    memset(out->t, 0, sizeof out->t);
+    if (!s || strlen(s) >= ADMIN_TARGETS_ARG_MAX) return -1;
+    if (!strcmp(s, "*")) {
+        out->all = 1;
+        return 0;
+    }
+    int nt = 0;
+    for (;;) {
+        const char *comma = strchr(s, ',');
+        size_t l = comma ? (size_t)(comma - s) : strlen(s);
+        const char *colon = memchr(s, ':', l);
+        if (nt == ADMIN_TARGETS_MAX || !colon || (size_t)(colon - s) >= ADMIN_VERSION_MAX || l - (size_t)(colon - s) - 1 != 16) break;
+        admin_target *t = &out->t[nt];
+        memcpy(t->version, s, (size_t)(colon - s));
+        t->version[colon - s] = 0;
+        memcpy(t->exe16, colon + 1, 16);
+        t->exe16[16] = 0;
+        if (!admin_version_ok(t->version) || !hex16_ok(t->exe16) || (nt && admin_version_cmp(out->t[nt - 1].version, t->version) >= 0)) break;
+        nt++;
+        if (!comma) {
+            out->nt = nt;
+            return 0;
+        }
+        s = comma + 1;
+    }
+    memset(out->t, 0, sizeof out->t);
+    return -1;
+}
+
+long admin_targets_format(const admin_target *t, int n, char *out, size_t cap) {
+    if (!cap) return -1;
+    out[0] = 0;
+    if (!t || n < 1 || n > ADMIN_TARGETS_MAX) return -1;
+    size_t at = 0;
+    for (int i = 0; i < n; i++) {
+        if (!admin_version_ok(t[i].version) || !hex16_ok(t[i].exe16) || (i && admin_version_cmp(t[i - 1].version, t[i].version) >= 0)) {
+            out[0] = 0;
+            return -1;
+        }
+        int k = snprintf(out + at, cap - at, "%s%s:%s", i ? "," : "", t[i].version, t[i].exe16);
+        if (k < 0 || (size_t)k >= cap - at || at + (size_t)k >= ADMIN_TARGETS_ARG_MAX) {
+            out[0] = 0;
+            return -1;
+        }
+        at += (size_t)k;
+    }
+    return (long)at;
+}
+
 long admin_build_params(const admin_args *a, char *out, size_t cap) {
     if (!cap) return -1;
     out[0] = 0;
     const char *verb = admin_verb_name(a->verb);
     if (!verb) return -1;
-    /* the same rules as the parse, for this app's own protocol */
-    const char *argv[12];
-    char proto[8], force[2] = {a->force ? '1' : '0', 0};
+    /* the same rules as the parse, whatever the protocol */
+    char proto[8], force[2] = {a->force ? '1' : '0', 0}, targets[ADMIN_TARGETS_ARG_MAX];
+    if (a->all) snprintf(targets, sizeof targets, "*");
+    else if (admin_targets_format(a->t, a->nt, targets, sizeof targets) < 0) return -1;
     snprintf(proto, sizeof proto, "%d", a->proto);
-    argv[0] = "RB Stems Plus.exe";
-    argv[1] = verb;
-    argv[2] = "--proto", argv[3] = proto;
-    argv[4] = "--version", argv[5] = a->version;
-    argv[6] = "--source", argv[7] = a->source;
-    argv[8] = "--force", argv[9] = force;
-    argv[10] = "--pipe", argv[11] = a->pipe;
+    const char *argv[ADMIN_ARGC] = {"RB Stems Plus.exe", verb,       "--proto",  proto,     "--targets", targets,
+                                    "--manifest",        a->manifest[0] ? a->manifest : "-", "--source", a->source, "--force",
+                                    force,               "--pipe",   a->pipe};
     admin_args check;
-    int r = admin_parse_args(12, argv, &check, NULL, 0);
-    if (r != ADMIN_EXIT_OK && r != ADMIN_EXIT_PROTOCOL) return -1;
+    if (parse_shape(ADMIN_ARGC, argv, &check, NULL, 0) != ADMIN_EXIT_OK) return -1;
     size_t at = 0;
-    for (int i = 1; i < 12; i++)
+    for (int i = 1; i < ADMIN_ARGC; i++)
         if (!put_quoted(out, cap, &at, argv[i])) {
             out[0] = 0;
             return -1;
@@ -280,6 +411,8 @@ int admin_line_kind(const char *line, size_t n, char *val, size_t cap) {
         {"bridge", ADMIN_LINE_BRIDGE, 1},
         {"floor", ADMIN_LINE_FLOOR, 1},
         {"closed", ADMIN_LINE_CLOSED, 0},
+        {"target", ADMIN_LINE_TARGET, 1},
+        {"root-kept", ADMIN_LINE_ROOT_KEPT, 1},
     };
     if (cap) val[0] = 0;
     if (!n || line[0] != '@') return ADMIN_LINE_TEXT;
@@ -298,6 +431,36 @@ int admin_line_kind(const char *line, size_t n, char *val, size_t cap) {
         return recs[i].kind;
     }
     return ADMIN_LINE_UNKNOWN;
+}
+
+int admin_target_value(const char *val, char *version, int *code, char *what) {
+    static const char *const words[] = {ADMIN_TARGET_WHAT_INSTALLED, ADMIN_TARGET_WHAT_ALREADY, ADMIN_TARGET_WHAT_PUT_BACK,
+                                        ADMIN_TARGET_WHAT_KEPT,      ADMIN_TARGET_WHAT_NOT_STARTED, ADMIN_TARGET_WHAT_REFUSED};
+    const char *sp = val ? strchr(val, ' ') : NULL, *sp2 = sp ? strchr(sp + 1, ' ') : NULL;
+    if (!sp || !sp2 || (size_t)(sp - val) >= ADMIN_VERSION_MAX) return -1;
+    char v[ADMIN_VERSION_MAX];
+    memcpy(v, val, (size_t)(sp - val));
+    v[sp - val] = 0;
+    if (!admin_version_ok(v)) return -1;
+    const char *c = sp + 1;
+    size_t cl = (size_t)(sp2 - c);
+    int k = -1;
+    if (cl != 1 || c[0] != '-') {
+        if (cl < 1 || cl > 4 || (cl > 1 && c[0] == '0')) return -1;
+        k = 0;
+        for (size_t i = 0; i < cl; i++) {
+            if (!is_digit((unsigned char)c[i])) return -1;
+            k = k * 10 + (c[i] - '0');
+        }
+    }
+    for (size_t i = 0; i < sizeof words / sizeof words[0]; i++)
+        if (!strcmp(sp2 + 1, words[i])) {
+            memcpy(version, v, strlen(v) + 1);
+            *code = k;
+            memcpy(what, words[i], strlen(words[i]) + 1);
+            return 0;
+        }
+    return -1;
 }
 
 void admin_lines_init(admin_lines *l) { memset(l, 0, sizeof *l); }

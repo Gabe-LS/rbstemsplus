@@ -28,7 +28,10 @@ $cleanup = @()
 Check (Wait-Until { $script:cleanup = @(Get-CleanupRunOnce); $script:cleanup.Count -ge 1 } 60) 'a RunOnce cleanup value written (cmd.exe could not start)'
 foreach ($c in $cleanup) { "RunOnce: $c" }
 # the whole value, as ax_runonce_data writes it (case ignored): "<cmd>" /d /q /s /c "rd /s /q "<dir>""
+# <dir> as the app's %TEMP% names it: the long path, or its 8.3 form (a user name over 8
+# characters gives a TEMP of C:\Users\GABRIE~1\...: the value then names the same folder that way)
 $cmd = Join-Path $env:SystemRoot 'System32\cmd.exe'
-$named = @($copies | Where-Object { $n = $_; $want = "RB Stems Plus cleanup $($n.Substring(15)) = `"$cmd`" /d /q /s /c `"rd /s /q `"$(Join-Path $tmp $n)`"`""; @($cleanup | Where-Object { $_ -ieq $want }).Count -eq 1 })
+$short = try { (New-Object -ComObject Scripting.FileSystemObject).GetFolder($tmp).ShortPath } catch { $tmp }
+$named = @($copies | Where-Object { $n = $_; $wants = @($tmp, $short) | Select-Object -Unique | ForEach-Object { "RB Stems Plus cleanup $($n.Substring(15)) = `"$cmd`" /d /q /s /c `"rd /s /q `"$(Join-Path $_ $n)`"`"" }; @($cleanup | Where-Object { $c = $_; @($wants | Where-Object { $c -ieq $_ }).Count -eq 1 }).Count -eq 1 })
 Check ($copies.Count -ge 1 -and $named.Count -eq $copies.Count) "one per temp folder, named by its 16 hex, the whole value `"$cmd`" /d /q /s /c `"rd /s /q `"$tmp\<folder>`"`""
 Done

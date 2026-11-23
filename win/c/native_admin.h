@@ -31,7 +31,22 @@ enum { NA_FORGET = -2 };   /* native_admin_verb: nothing to run, admin returns 0
 int native_admin_verb(int kind);
 /* whether the verb needs the flow's checked bridge in the source folder (the install) */
 int native_admin_needs_bridge(int verb);
-/* admin's return for a client run's result */
+/* The worker's --targets (protocol 2, admin_proto.h) for verb from the core's scope token (core.h:
+ * on Windows host->admin's version is CORE_STEP_WIN_SCOPE's FACT_WIN_SCOPE), into out (n bytes,
+ * at least ADMIN_TARGETS_ARG_MAX): for install and restore the token's list as admin_targets_parse
+ * reads it, written back in its one form; "*" for the other verbs, whatever the token. Install's
+ * token ends in "@<sha256>", the payload.json its scope came from (re-review finding 6), into
+ * manifest (65 bytes; "" for the other verbs, whose token has none). 0, or -1 (out and manifest
+ * "") when install's or restore's token isn't that: the run isn't started. */
+int native_admin_targets(int verb, const char *token, char *out, size_t n, char manifest[65]);
+/* --manifest for verb (out, 65 bytes): for the install, the copied payload.json (copied: its
+ * sha256, this app's release's) must be the one its scope came from (scope: native_admin_targets'
+ * manifest), else ADMIN_EXIT_PROTOCOL (out "", not run: the scope came from another release's
+ * payload, so the core offers to update first, before any UAC); the other verbs take the copy's.
+ * ADMIN_EXIT_OK or ADMIN_EXIT_PROTOCOL */
+int native_admin_manifest(int verb, const char *scope, const char *copied, char out[65]);
+/* admin's return for a client run's result: the worker's code, with 15 (ROOT_WIN_SCOPE_CHANGED),
+ * 16 (ROOT_WIN_PARTIAL) and 17 (ROOT_WIN_UNDO_INCOMPLETE) as they are */
 int native_admin_code(const admin_result *r);
 /* The run's result line, as core.h asks of the host (the Mac's Admin.swift): "  ok: <verb>", or
  * "  FAILED: <verb> [exit <code>]" with the raw code before native_admin_code maps it (a negative
@@ -43,10 +58,21 @@ void native_admin_result_line(int verb, int code, char *out, size_t n);
  * windows.bridge.file. Otherwise the install is "update the app first" (12), decided before any
  * UAC prompt: staging a newer release's bridge beside this app's record mixes releases (I76). */
 int native_admin_bridge_ok(const payload_manifest *m, const char *bridge_sha, const char *bridge_name);
-/* What a source folder that couldn't be prepared means (NA6): with a verified record, a check
- * failed (4: an update wouldn't help); without one, the client's "update the app first" for the
- * verbs that need it (-1: run on with no source folder). */
-int native_admin_source_failed(int has_record);
+/* What a source folder that couldn't be prepared means for verb (NA6): for the install, with a
+ * verified record, a check failed (4: an update wouldn't help); without one, the client's "update
+ * the app first" for the verbs that need it (-1: run on with no source folder). The verbs that
+ * don't stage it (restore, uninstall, remove-root-folder) always run on: the installed worker
+ * in bin\ needs none, and a later install-worker is the client's "update first" (audit b-a1b-F5). */
+int native_admin_source_failed(int has_record, int verb);
+
+/* The installed-release pair in dir (payload.json and its .sig) read once and verified there and
+ * then (payload_check against keys, no floor; update.c's record rule: a windows part naming
+ * own's version) into *m, with sha (65 bytes) the sha256 of exactly the payload.json bytes that
+ * verified: what the app sends as --manifest and requires of the copy it hands the worker (review
+ * finding 6: never the digest of bytes read again later). 0, or -1 (sha ""). */
+int native_admin_record(const char *dir, const sig_pubkey *keys, size_t nkeys, const char *own, payload_manifest *m, char sha[65]);
+/* Whether the file at path is the bytes whose sha256 is sha (a 64-hex digest), read now: 1 or 0 */
+int native_admin_copy_is(const char *path, const char *sha);
 
 /* what to tell the core, in this order (NA_ATTEMPT first) */
 enum { NA_ATTEMPT = 1, NA_CLOSING = 2, NA_CLOSED = 4, NA_RESTART = 8 };

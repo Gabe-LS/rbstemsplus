@@ -1,10 +1,11 @@
 /* The core DLL's slow facts beside the sha256s (native_facts.h). C11 over common/plat.h. */
 #include "native_facts.h"
+#include "receipt.h"
+#include "pe_code.h"
 
 #include "update.h"
 #include "volumes.h"
 
-#include <stdlib.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,15 +53,6 @@ int native_r1(const compat_os *os, const char *folder, const char *root, const p
     return native_r1_state(&r, nb > 0);
 }
 
-int native_listed(const char *v, const char (*list)[PAYLOAD_NAME_MAX], int n) {
-    if (!v || !v[0]) return 0;
-    for (int i = 0; i < n; i++) {
-        size_t k = strlen(list[i]);
-        if (k && !strncmp(v, list[i], k) && (v[k] == 0 || v[k] == '.')) return 1;
-    }
-    return 0;
-}
-
 int native_listed_exact(const char *v, const char (*list)[PAYLOAD_NAME_MAX], int n) {
     if (!v || !v[0]) return 0;
     for (int i = 0; i < n; i++)
@@ -98,7 +90,7 @@ int native_blocked_cache(const compat_os *os, const char *folder, const char *rb
                          const payload_manifest *installed, const compat_r1 *r1, native_blocked *out) {
     memset(out, 0, sizeof *out);
     const payload_manifest *m = list_of(saved, installed);
-    out->rekordbox_supported = m && native_listed(rb_version, m->win_rekordbox, m->n_win_rekordbox);
+    out->rekordbox_supported = payload_win_rekordbox_supported(m, rb_version);
     if (!out->rekordbox_supported || !folder || !root) return 0;
     char ort[1100];
     plat_stat st;
@@ -177,4 +169,157 @@ int native_r1_read(const compat_os *os, const char *support, const char *own, co
     free(saved);
     free(inst);
     return r;
+}
+
+#if defined(_WIN32)
+#define NF_SEP "\\"
+#else
+#define NF_SEP "/"
+#endif
+
+static int nf_path(char *out, size_t cap, const char *folder, const char *leaf) {
+    int n = snprintf(out, cap, "%s" NF_SEP "%s", folder, leaf);
+    return n >= 0 && (size_t)n < cap;
+}
+
+static int nf_read_live(const compat_os *os, const char *path, const payload_manifest *m,
+                        const payload_manifest *installed, compat_file *file) {
+    if (compat_file_facts(os, path, 0, file)) return COMPAT_LIVE_UNREADABLE;
+    if (!file->present) return COMPAT_LIVE_MISSING;
+    if (!file->exists) return COMPAT_LIVE_FOREIGN;
+    if (!file->readable) return COMPAT_LIVE_UNREADABLE;
+    if (m && !strcmp(file->sha256, m->win_bridge.sha256)) return COMPAT_LIVE_OURS;
+    if (file->marker || (installed && !strcmp(file->sha256, installed->win_bridge.sha256))) return COMPAT_LIVE_OURS_UNLISTED;
+    if (compat_ort_file_facts(os, path, COMPAT_PIN, pe_code_sha256, file) || !file->readable) return COMPAT_LIVE_UNREADABLE;
+    if (m && !strcmp(file->sha256, m->win_bridge.sha256)) return COMPAT_LIVE_OURS;
+    if (file->marker || (installed && !strcmp(file->sha256, installed->win_bridge.sha256))) return COMPAT_LIVE_OURS_UNLISTED;
+    if (file->pin == COMPAT_PIN_OK) return COMPAT_LIVE_PIONEER;
+    return file->pin == COMPAT_PIN_NO ? COMPAT_LIVE_FOREIGN : COMPAT_LIVE_UNREADABLE;
+}
+
+static int nf_saved(const compat_os *os, const char *root, const char *version, compat_file *file) {
+    char parent[COMPAT_PATH_MAX], folder[COMPAT_PATH_MAX], path[COMPAT_PATH_MAX], sum[COMPAT_PATH_MAX];
+    if (!root || !nf_path(parent, sizeof parent, root, "pioneer") || !nf_path(folder, sizeof folder, parent, version)
+        || !nf_path(path, sizeof path, folder, "onnxruntime.dll") || !nf_path(sum, sizeof sum, folder, "SHA256SUMS")
+        || compat_ort_file_facts(os, path, COMPAT_PIN, pe_code_sha256, file) || !file->readable) return 0;
+    char expected[96];
+    int n = snprintf(expected, sizeof expected, "%s  onnxruntime.dll\n", file->sha256);
+    char *read = NULL;
+    size_t size;
+    if (plat_read_file(sum, sizeof expected, &read, &size)) return 0;
+    int complete = n > 0 && (size_t)n == size && !memcmp(expected, read, size);
+    free(read);
+    return complete;
+}
+
+static int nf_runtime_ok(const compat_file *runtime, const payload_manifest *m) {
+    if (!m || !runtime->readable || runtime->marker || runtime->pin != COMPAT_PIN_OK
+        || !m->win_ort_code_sha256[0] || strcmp(runtime->code_sha256, m->win_ort_code_sha256)) return 0;
+    for (int i = 0; i < m->n_win_ort_sha256; i++) {
+        if (!strcmp(runtime->sha256, m->win_ort_sha256[i])) return 1;
+    }
+    return 0;
+}
+
+void native_inventory_assess(const compat_os *os, const inv_list *list, const char *root, const payload_manifest *m,
+                             const payload_manifest *installed, inv_assess_row *out, native_inv_caps *caps) {
+    compat_file runtime = {0};
+    int looked_at_runtime = 0, runtime_ok = 0;
+    for (int i = 0; i < list->n; i++) {
+        const inv_install *r = &list->it[i];
+        inv_assess_row *a = &out[i];
+        native_inv_caps *c = &caps[i];
+        *a = (inv_assess_row){.live = COMPAT_LIVE_MISSING};
+        *c = (native_inv_caps){0};
+        if (r->trust == INV_STALE) continue;
+        char path[COMPAT_PATH_MAX];
+        compat_file live = {0}, saved = {0};
+        a->live = nf_path(path, sizeof path, r->folder, "onnxruntime.dll")
+            ? nf_read_live(os, path, m, installed, &live) : COMPAT_LIVE_UNREADABLE;
+        strcpy(a->live_sha, live.sha256);
+        a->listed = payload_win_rekordbox_supported(m, r->exe.pe.product_version);
+        int bridge = a->live == COMPAT_LIVE_OURS || a->live == COMPAT_LIVE_OURS_UNLISTED;
+        c->bridge = bridge;
+        c->trace = bridge || a->live == COMPAT_LIVE_UNREADABLE || (live.present && !live.exists);
+        if (r->trust == INV_DISK_ONLY && !bridge) continue;
+
+        if (a->live != COMPAT_LIVE_PIONEER && a->live != COMPAT_LIVE_UNREADABLE) {
+            a->saved_complete = nf_saved(os, root, r->version, &saved);
+            if (a->saved_complete) strcpy(a->saved_sha, saved.sha256);
+        }
+        const compat_file *original = a->live == COMPAT_LIVE_PIONEER ? &live : a->saved_complete ? &saved : NULL;
+        if (original) {
+            strcpy(a->original_sha, original->sha256);
+            strcpy(a->original_code, original->code_sha256);
+            a->original_bound = inv_original_bound(m, r->exe.pe.product_version, original);
+            c->original_signed = original->pin == COMPAT_PIN_OK && !original->marker;
+            snprintf(c->ort_version, sizeof c->ort_version, "%s", original->pe.product_version);
+        }
+
+        if (bridge && !looked_at_runtime) {
+            looked_at_runtime = root && nf_path(path, sizeof path, root, "ort" NF_SEP "onnxruntime.dll")
+                && !compat_ort_file_facts(os, path, COMPAT_PIN, pe_code_sha256, &runtime) ? 1 : -1;
+            runtime_ok = looked_at_runtime > 0 && nf_runtime_ok(&runtime, m);
+        }
+        if (!bridge) {
+            if (r->trust == INV_VERIFIED || r->trust == INV_UNVERIFIED) {
+                if (a->live == COMPAT_LIVE_MISSING) a->r1 = NF_R1_LIVE_MISSING;
+                if (a->live == COMPAT_LIVE_FOREIGN) a->r1 = NF_R1_FOREIGN;
+                if (a->live == COMPAT_LIVE_UNREADABLE) a->r1 = -1;
+            }
+            continue;
+        }
+
+        receipt saved_receipt;
+        a->receipt_ok = root && a->saved_complete && runtime.readable && !receipt_read(root, r->version, &saved_receipt)
+            && receipt_matches(&saved_receipt, r, live.sha256, saved.sha256, runtime.code_sha256);
+        if (looked_at_runtime < 0) a->r1 = -1;
+        else if (!runtime.present) a->r1 = NF_R1_ORT_MISSING;
+        else if (!runtime_ok) a->r1 = NF_R1_FOREIGN;
+        if (a->r1 == NF_R1_NOTHING && (!a->receipt_ok || !a->listed || !a->original_bound)) a->r1 = NF_R1_FOREIGN;
+        if (r->trust == INV_DISK_ONLY) a->r1 = NF_R1_NOTHING;  /* disk-only cleanup uses the uninstall sweep */
+        c->live_line = live.has_cache_line;
+        if (live.has_cache_line) {
+            memcpy(c->cache_line, live.cache_line, live.cache_line_len + 1);
+            c->cache_line_len = live.cache_line_len;
+        }
+    }
+}
+
+void native_inventory_running(const compat_os *os, const inv_list *list, inv_assess_row *out, char *versions, size_t cap) {
+    versions[0] = 0;
+    if (!os || !os->processes) return;
+    compat_proc *procs = malloc(COMPAT_PROCS_MAX * sizeof *procs);
+    if (!procs) return;
+    int n = os->processes(os->ctx, procs, COMPAT_PROCS_MAX);
+    int known = n >= 0 && n < COMPAT_PROCS_MAX;
+    for (int p = 0; p < n && p < COMPAT_PROCS_MAX; p++) {
+        compat_procs process;
+        compat_procs_classify(&procs[p], 1, NULL, &process);
+        if (!process.running) continue;
+        int found = 0;
+        if (procs[p].path[0]) {
+            for (int i = 0; i < list->n; i++) {
+                if (list->it[i].trust == INV_STALE) continue;
+                compat_procs_classify(&procs[p], 1, list->it[i].folder, &process);
+                if (!process.running_here) continue;
+                out[i].running = 1;
+                found = 1;
+                break;
+            }
+        }
+        known &= found;
+    }
+    free(procs);
+    if (!known) return;
+    size_t at = 0;
+    for (int i = list->n - 1; i >= 0; i--) {
+        if (!out[i].running) continue;
+        int k = snprintf(versions + at, cap - at, "%s\n", list->it[i].version);
+        if (k < 0 || (size_t)k >= cap - at) {
+            versions[0] = 0;
+            return;
+        }
+        at += (size_t)k;
+    }
 }

@@ -8,6 +8,8 @@
 // The core runs on this dispatcher's thread (the thread core_new ran on).
 using System;
 using System.Collections.Generic;
+using System.IO;
+using Microsoft.Win32;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
@@ -25,31 +27,17 @@ namespace RbStemsPlus.Shell
     {
         public readonly Host Host;
         public readonly ManageModel Model = new ManageModel();
-        /// the Status and Prepare tabs' models, their views only where the tabs are shown (PrepareShown)
+        /// the Status and Prepare tabs' models and views
         public readonly PrepareModel Prepare;
         public readonly StatusModel Status;
-#if PREPARE_TABS || SHELL_TEST
         private PrepareView prepareView;
         private StatusView statusView;
         /// the Prepare and Status tabs' views, where shown (the probe's fields)
         internal PrepareView PrepareTab => prepareView;
         internal StatusView StatusTab => statusView;
-#endif
-        /// The first Windows release hides the Status and Prepare tabs (I10, I86): it is built
-        /// without the code that creates them. The Prepare release (PREPARE_TABS, build.sh
-        /// --prepare) shows both; a TEST build shows both with RBSP_SHELL_TEST=prepare (W8b's
-        /// scenarios).
-#if PREPARE_TABS
-        internal static readonly bool PrepareShown = true;
-#elif SHELL_TEST
-        internal static readonly bool PrepareShown = TestHooks.Has("prepare");
-#else
-        internal static readonly bool PrepareShown = false;
-#endif
         public MainWindow Window { get; private set; }
         private readonly Dispatcher ui;
         private readonly LogSink log;
-        private readonly string version;
         private readonly UpdateNative update;
         private readonly CloseGate gate;
         private readonly CriticalWork critical;
@@ -58,6 +46,17 @@ namespace RbStemsPlus.Shell
         private IntPtr hwnd;
         private readonly string placePath;   // %LOCALAPPDATA%\rbstemsplus\window (app.md §4.6)
         private Activation activation;
+        private EventWaitHandle rekordboxChanged, rekordboxRepair;
+        private RegisteredWaitHandle rekordboxWait, repairWait;
+        private DispatcherTimer inventoryPoll, inventoryDebounce;
+        private FileSystemWatcher inventoryFolders;
+        private string inventoryPath;
+        private ulong inventoryGeneration;
+        private int inventoryFallbackTicks;
+        private bool inventoryRetry, inventoryAwaitingRefresh, inventoryRepairPending;
+
+        [DllImport("rbsp-core.dll", CallingConvention = CallingConvention.Cdecl, ExactSpelling = true)]
+        private static extern ulong core_win_rekordbox_generation();
         private readonly Presenter presenter;
         private bool rendered;
         private readonly CommitGate commit = new CommitGate();
@@ -69,12 +68,11 @@ namespace RbStemsPlus.Shell
         /// --uninstall's request (LaunchArgs.cs), sent at the first "shown"; null: a normal start
         public UninstallOnce Uninstall { get; set; }
 
-        public Shell(Dispatcher ui, LogSink log, string placePath, string version, UpdateNative update, SwapGuard guard, OneCopy oneCopy)
+        public Shell(Dispatcher ui, LogSink log, string placePath, UpdateNative update, SwapGuard guard, OneCopy oneCopy)
         {
             this.guard = guard;
             this.oneCopy = oneCopy;
             this.ui = ui;
-            this.version = version;
             this.placePath = placePath;
             this.log = log;
             this.update = update;
@@ -110,23 +108,17 @@ namespace RbStemsPlus.Shell
             try { CoreWin.core_win_set_quit(quitFn, IntPtr.Zero); }
             catch (EntryPointNotFoundException) { Log("shell: this core DLL takes no quit: an update can't quit the app"); }
             // core_new and the facts' warm-up first, so the warm runs while the window is built
-            // (HR4); a refusal returns before any window exists (Program's refusal paths and
-            // Exiting don't touch it). PrepareShown is the one field behind both the core's menu
-            // rows ("prepare_tabs") and the tabs created below (PM1)
-            if (!Host.Create(Host.WithPrepareTabs(config, PrepareShown))) return false;
-            Window = new MainWindow(Model);
-#if PREPARE_TABS || SHELL_TEST
-            // only in the builds that may show the tabs: PrepareView, StatusView and AddPrepareTabs
-            // are compiled only there, and build.sh's gate checks their names (none in the first
-            // release's exe, all three in the Prepare release's and every TEST exe)
-            if (PrepareShown)
+            // (HR4); a refusal returns before any window exists. CoreConfig uses PrepareShown for
+            // the core's menu rows ("prepare_tabs") and the window uses it for the tabs (PM1).
+            if (!Host.Create(config)) return false;
+            Window = new MainWindow(Model, Log);
+            if (CoreConfig.PrepareShown)
             {
                 prepareView = new PrepareView(Prepare);
                 statusView = new StatusView(Status, Model);
                 Window.AddPrepareTabs(statusView, prepareView);
                 Window.TabChosen += tab => Host.Send(Json.Tab(tab));
             }
-#endif
 #if SHELL_TEST
             ShellProbe.Start(this, ui);       // before the first render; nothing without the harness's probe.conf
 #endif
@@ -134,19 +126,30 @@ namespace RbStemsPlus.Shell
             // written before the window existed
             log.SetFlush(PostFlush);
             PostFlush();
-            activation = new Activation(Host.Send, flush => ui.BeginInvoke(DispatcherPriority.Background, flush));
+            activation = new Activation(Host.SendActivation, flush => ui.BeginInvoke(DispatcherPriority.Background, flush));
             Window.AppActivation += activation.App;
 #if SHELL_TEST
             Window.AppActivation += ShellProbe.AppActivation;
 #endif
             Window.Restored += activation.Restored;
+#if SHELL_TEST
+            Window.RepaintTrace += line => TestHooks.SessionTrace(line, Log);
+#endif
             Window.Clicked += id => Host.Send(Json.Click(id));
+            Window.R1Dismissed += versions => Host.Send(Json.R1Dismiss(versions));
             Window.Closing += Closing;
-            Window.Closed += (s, e) => { Host.Stop(); presenter.Stop(); Application.Current.Shutdown(); };
+            Window.Closed += (s, e) =>
+            {
+                StopWatchingRekordbox();
+                Host.Stop();
+                presenter.Stop();
+                Application.Current.Shutdown();
+            };
             Window.SourceInitialized += (s, e) =>
             {
                 hwnd = new WindowInteropHelper(Window).Handle;
                 HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
+                WatchRekordbox();
             };
             // a frame is on screen: the core's "shown" (ungated: its events bring a reload after a
             // failed render), then the update's `started` and pointers (or the leftovers) on a
@@ -182,10 +185,194 @@ namespace RbStemsPlus.Shell
             Window.Show();
         }
 
+        private RegisteredWaitHandle WatchSignal(string name, Action action, out EventWaitHandle signal)
+        {
+            signal = new EventWaitHandle(false, EventResetMode.AutoReset, name);
+            return ThreadPool.RegisterWaitForSingleObject(signal, (state, timedOut) => PostInventory(action),
+                                                          null, Timeout.Infinite, false);
+        }
+
+        private void PostInventory(Action action)
+        {
+            try
+            {
+                ui.BeginInvoke(DispatcherPriority.Background, (Action)(() =>
+                {
+                    if (inventoryPoll != null) action();
+                }));
+            }
+            catch (InvalidOperationException) { } // the dispatcher is shutting down
+        }
+
+        private void WatchRekordbox()
+        {
+            inventoryDebounce = new DispatcherTimer(DispatcherPriority.Background, ui);
+            inventoryDebounce.Tick += (s, e) =>
+            {
+                inventoryDebounce.Stop();
+                inventoryAwaitingRefresh = !inventoryRetry;
+                Host.RefreshRekordbox(showManage: inventoryRepairPending);
+                inventoryRepairPending = false;
+            };
+            Host.RekordboxRefreshed += InventoryRefreshed;
+            inventoryPoll = new DispatcherTimer(DispatcherPriority.Background, ui) { Interval = TimeSpan.FromSeconds(2) };
+            inventoryPoll.Tick += (s, e) => PollInventory();
+            inventoryPoll.Start();
+            try
+            {
+                rekordboxWait = WatchSignal(@"Local\io.github.rbstemsplus.rekordbox-changed", InventoryChanged, out rekordboxChanged);
+                repairWait = WatchSignal(@"Local\io.github.rbstemsplus.rekordbox-repair",
+                    () =>
+                    {
+                        inventoryRepairPending = true;
+                        InventoryChanged();
+                    }, out rekordboxRepair);
+            }
+            catch (Exception e) { Host.Fail("watcher refresh signals", e); }
+            try { inventoryPath = RekordboxFolder(); }
+            catch (Exception e) { Host.Fail("rekordbox folder location", e); }
+            PollInventory();
+        }
+
+        private static string RekordboxFolder()
+        {
+            string programs = null;
+#if SHELL_TEST
+            programs = Environment.GetEnvironmentVariable("RBSP_TEST_PROGRAMS");
+#endif
+            if (string.IsNullOrEmpty(programs))
+            {
+                using (var machine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+                using (var current = machine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion"))
+                {
+                    const string value = "ProgramFilesDir";
+                    if (current?.GetValueKind(value) == RegistryValueKind.String)
+                        programs = current.GetValue(value, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
+                }
+            }
+            return string.IsNullOrEmpty(programs) ? null : Path.Combine(programs, "rekordbox");
+        }
+
+        private void PollInventory()
+        {
+            ulong generation = core_win_rekordbox_generation();
+            if (generation != inventoryGeneration || (generation == 0 && ++inventoryFallbackTicks >= 30))
+            {
+                inventoryGeneration = generation;
+                inventoryFallbackTicks = 0;
+                InventoryChanged();
+            }
+            bool exists = Directory.Exists(inventoryPath);
+            if (exists == (inventoryFolders != null)) return;
+            if (exists) WatchInventoryFolder();
+            else
+            {
+                inventoryFolders.Dispose();
+                inventoryFolders = null;
+                InventoryChanged();
+            }
+        }
+
+        private void WatchInventoryFolder()
+        {
+            FileSystemWatcher watcher = null;
+            try
+            {
+                watcher = new FileSystemWatcher(inventoryPath)
+                {
+                    IncludeSubdirectories = true,
+                    NotifyFilter = NotifyFilters.DirectoryName | NotifyFilters.FileName | NotifyFilters.LastWrite
+                };
+                watcher.Created += OnInventoryFolder;
+                watcher.Changed += OnInventoryFolder;
+                watcher.Deleted += OnInventoryFolder;
+                watcher.Renamed += (s, e) =>
+                {
+                    if (InventoryName(e.OldName, e.ChangeType) || InventoryName(e.Name, e.ChangeType))
+                        PostInventory(InventoryChanged);
+                };
+                watcher.Error += (s, e) => PostInventory(() =>
+                {
+                    if (inventoryFolders != watcher) return;
+                    inventoryFolders.Dispose();
+                    inventoryFolders = null;
+                    InventoryChanged();
+                });
+                watcher.EnableRaisingEvents = true;
+                inventoryFolders = watcher;
+                InventoryChanged();
+            }
+            catch (Exception e)
+            {
+                watcher?.Dispose();
+                Host.Fail("rekordbox folder notifications", e);
+            }
+        }
+
+        private void OnInventoryFolder(object sender, FileSystemEventArgs e)
+        {
+            if (InventoryName(e.Name, e.ChangeType)) PostInventory(InventoryChanged);
+        }
+
+        private static bool InventoryName(string name, WatcherChangeTypes change)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            string[] parts = name.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            const string prefix = "rekordbox ";
+            if (!parts[0].StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
+            string[] version = parts[0].Substring(prefix.Length).Split('.');
+            if (version.Length != 3) return false;
+            foreach (string component in version)
+            {
+                if (component.Length == 0) return false;
+                foreach (char c in component)
+                    if (c < '0' || c > '9') return false;
+            }
+            if (parts.Length == 1) return change != WatcherChangeTypes.Changed;
+            return parts.Length == 2 &&
+                   (parts[1].Equals("rekordbox.exe", StringComparison.OrdinalIgnoreCase) ||
+                    parts[1].Equals("onnxruntime.dll", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private void InventoryChanged()
+        {
+            inventoryRetry = inventoryAwaitingRefresh = false;
+            DebounceInventory(TimeSpan.FromMilliseconds(1500));
+        }
+
+        private void DebounceInventory(TimeSpan delay)
+        {
+            inventoryDebounce.Stop();
+            inventoryDebounce.Interval = delay;
+            inventoryDebounce.Start();
+        }
+
+        private void InventoryRefreshed()
+        {
+            if (!inventoryAwaitingRefresh) return;
+            inventoryAwaitingRefresh = false;
+            if (!Host.LibUnchecked) return;
+            inventoryRetry = true;
+            DebounceInventory(TimeSpan.FromSeconds(3));
+        }
+
+        private void StopWatchingRekordbox()
+        {
+            inventoryPoll?.Stop();
+            inventoryPoll = null;
+            inventoryDebounce?.Stop();
+            Host.RekordboxRefreshed -= InventoryRefreshed;
+            inventoryFolders?.Dispose();
+            rekordboxWait?.Unregister(null);
+            repairWait?.Unregister(null);
+            rekordboxChanged?.Dispose();
+            rekordboxRepair?.Dispose();
+        }
+
         // the update's commit after a good frame, once (CommitGate); under --swap it also ends the guard
         private void TryCommit()
         {
-            if (commit.TryCommit(Host.RenderOk, guard == null ? (Func<bool>)null : guard.Finish)) update.AfterRender();
+            if (commit.TryCommit(Host.RenderOk, guard == null ? (Func<bool>)null : guard.Finish)) gate.RunHandoff(update.AfterRender);
         }
 
         /// A second start of the app signalled this copy (the one-copy window's signal, §5.9): the
@@ -223,18 +410,15 @@ namespace RbStemsPlus.Shell
         private void RenderApp(IntPtr snap, IntPtr delta)
         {
             uint moved = Snap.Moved(delta);
-#if PREPARE_TABS || SHELL_TEST
             if (prepareView != null && Snap.Has(moved, Section.S_PREPARE)) Prepare.Apply(new SnapPrepareSource(snap, delta));
             if (statusView != null && Snap.Has(moved, Section.S_STATUS)) Status.Apply(new SnapPrepareSource(snap, delta));
-#endif
             if (!Snap.Has(moved, Section.S_APP)) return;
             long seq = Model.LogShowSeq;
             Model.Apply(snap, delta == IntPtr.Zero);
             if (rendered && Model.LogShowSeq != seq) Window.ShowLogEnd();
             rendered = true;
-            // the tab the core asks for, when the window has it; otherwise (the first release shows
-            // the Manage tab only, I86) the tab shown is answered, once, from its own operation
-            // (never inside render)
+            // If the core asks for a tab the window lacks, report the actual tab once from a
+            // separate operation outside render.
             if (Window.HasTab(Model.Tab))
             {
                 tabAsked = false;
@@ -263,6 +447,8 @@ namespace RbStemsPlus.Shell
         public bool ModalOpen() => presenter.ModalOpen;
 #if SHELL_TEST
         internal bool PresenterIdle => presenter.Idle;
+        /// support (the parent of Logs and of the window's place file)
+        internal string SupportDir => System.IO.Path.GetDirectoryName(placePath);
 #endif
 
         // the flow thread waits while the presenter shows the window, in turn, from its own
@@ -270,7 +456,7 @@ namespace RbStemsPlus.Shell
         public DialogAnswer ShowDialog(DialogForm form)
         {
             DialogAnswer answer = null;
-            return presenter.RunAndWait(() => answer = new DialogWindow(form, Window).Run()) ? answer : null;
+            return presenter.RunAndWait(() => answer = new DialogWindow(form, Window, Log).Run()) ? answer : null;
         }
 
         public int PickFolder(string start, out string path)
@@ -322,6 +508,9 @@ namespace RbStemsPlus.Shell
         public bool QueryEndSession()
         {
             bool veto = gate.OnQueryEndSession();
+#if SHELL_TEST
+            TestHooks.SessionTrace(veto ? "query-veto" : "query-allow", Log);
+#endif
             Log(veto ? "logoff: a step must finish: the session waits for it" : "logoff: nothing to finish: quitting");
             return veto;
         }
@@ -334,7 +523,7 @@ namespace RbStemsPlus.Shell
         bool ICloseSide.CriticalRunning() => critical.Running();
         bool ICloseSide.CriticalWait(int ms) => critical.WaitIdle(ms);
         void ICloseSide.CriticalClose() => critical.Close();
-        void ICloseSide.RunOff(Action a) => new Thread(() => a()) { IsBackground = true, Name = "quit wait" }.Start();
+        void ICloseSide.RunOff(Action a) => new Thread(() => a()) { IsBackground = true, Name = "shell worker" }.Start();
         void ICloseSide.Post(Action a) => ui.BeginInvoke(DispatcherPriority.Normal, a);
         void ICloseSide.Close() => Window?.Close();
         void ICloseSide.Quitting() => oneCopy?.Quitting();
@@ -356,6 +545,9 @@ namespace RbStemsPlus.Shell
             switch (msg)
             {
                 case Win32.WM_ENDSESSION:
+#if SHELL_TEST
+                    TestHooks.SessionTrace(wParam != IntPtr.Zero ? "end-true" : "end-false", Log);
+#endif
                     gate.OnEndSession(wParam != IntPtr.Zero);
                     break;
                 case Win32.WM_DEVICECHANGE:
@@ -385,11 +577,12 @@ namespace RbStemsPlus.Shell
         // and titles pulled live when a menu opens (core_menu_state, allowed on main). Each item's
         // shortcut is a KeyBinding on the window whose CanExecute asks the core too, so a shortcut
         // does what the item would: nothing while it is disabled or hidden, nothing under a dialog
-        // (ShowDialog disables the window). What the first release hides (View > Status, View >
-        // Prepare, the Prepare menu and its items: I10, I86) the core answers hidden and off
-        // unless the start config says the tabs are shown ("prepare_tabs", Host.WithPrepareTabs
-        // from PrepareShown in Start), so their shortcuts do nothing; a start cross-check logs
-        // the core and the window disagreeing. About is drawn at the end of Help.
+        // (ShowDialog disables the window). The core's Prepare and Status menu rows follow
+        // "prepare_tabs" in CoreConfig. A start cross-check logs any disagreement with the window.
+        // The native rows are the shell's (MenuNatives.Of):
+        // Exit closes the window as its close box does, Edit's items are WPF's own commands on the
+        // focused text, About (at the end of Help) is ours; their keys (Alt+F4, Ctrl+X/C/V/A) are
+        // Windows' and WPF's, so they are shown, not bound.
 
         private void BuildMenus()
         {
@@ -400,13 +593,17 @@ namespace RbStemsPlus.Shell
             for (int i = 0; i < count; i++)
             {
                 if (Core.core_menu_at(CoreApi.CORE_OS_WIN, i, out CoreMenuItem m) != CoreApi.CORE_OK) continue;
-                if (m.kind == CoreApi.CORE_MENU_NATIVE) continue;
                 ItemsControl parent = m.menu < 0 ? (ItemsControl)bar : (items.TryGetValue(m.menu, out var p) ? p : null);
                 if (parent == null) continue;
                 if (m.kind == CoreApi.CORE_MENU_SEPARATOR) { parent.Items.Add(new Separator()); continue; }
                 var mi = new MenuItem { Header = m.title >= 0 ? Texts.Get((CoreText)m.title) : "" };
                 string ev = Core.Utf8z(m.evt);
-                if (ev.Length > 0)
+                if (m.kind == CoreApi.CORE_MENU_NATIVE)
+                {
+                    if (!Native(mi, m.id)) continue;
+                    mi.InputGestureText = MenuKey.Parse(Core.Utf8z(m.key), m.mods)?.Text ?? "";
+                }
+                else if (ev.Length > 0)
                 {
                     mi.Click += (s, e) => { if (e.OriginalSource == s) Host.Send(Json.Menu(ev)); };
                     Bind(mi, m.id, ev, Core.Utf8z(m.key), m.mods);
@@ -416,23 +613,32 @@ namespace RbStemsPlus.Shell
                 menuIds[mi] = m.id;
                 parent.Items.Add(mi);
             }
-            if (items.TryGetValue((int)CoreMenu.M_HELP, out var help))
-            {
-                help.Items.Add(new Separator());
-                var about = new MenuItem { Header = Texts.Get(CoreText.T_MENU_ABOUT) };
-                about.Click += (s, e) => ShowAbout();
-                help.Items.Add(about);
-            }
             RefreshStates(bar);   // the top-level menus: the rules' hidden ones stay hidden
             // the core's Prepare menu and the window's tabs come from the same PrepareShown (PM1)
             bool coreShows = (Core.core_menu_state(Host.C, (int)CoreMenu.M_PREPARE, out IntPtr _, out UIntPtr _) & CoreApi.CORE_MENU_HIDDEN) == 0;
-            if (coreShows != PrepareShown)
+            if (coreShows != CoreConfig.PrepareShown)
             {
                 Log("shell: the core's Prepare menu disagrees with the window's tabs");
 #if SHELL_TEST
                 ShellProbe.Mark("shell.prepare_mismatch");
 #endif
             }
+        }
+
+        // A native row's action; false: one this shell doesn't draw (logged, left out)
+        private bool Native(MenuItem mi, int id)
+        {
+            switch (MenuNatives.Of(id))
+            {
+                case MenuNative.Exit: mi.Click += (s, e) => Window.Close(); return true;
+                case MenuNative.Cut: mi.Command = ApplicationCommands.Cut; return true;
+                case MenuNative.Copy: mi.Command = ApplicationCommands.Copy; return true;
+                case MenuNative.Paste: mi.Command = ApplicationCommands.Paste; return true;
+                case MenuNative.SelectAll: mi.Command = ApplicationCommands.SelectAll; return true;
+                case MenuNative.About: mi.Click += (s, e) => ShowAbout(); return true;
+            }
+            Log("shell: menus.def's native row " + (CoreMenu)id + " isn't one the shell draws");
+            return false;
         }
 
         // An item's shortcut: the gesture shown beside its title, and a KeyBinding sending the
@@ -508,6 +714,6 @@ namespace RbStemsPlus.Shell
 #endif
 
         // through the presenter too: queued behind a dialog that is up, never stacked over it
-        internal void ShowAbout() => presenter.Run(() => new AboutWindow(Window, version).ShowDialog());
+        internal void ShowAbout() => presenter.Run(() => new AboutWindow(Window, update.ShownVersion(), Log).ShowDialog());
     }
 }

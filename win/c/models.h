@@ -74,6 +74,9 @@ extern int (*models_test_originals_fault)(int call);
 extern int (*models_test_unlink_fault)(const char *name);
 extern void (*models_test_before_place)(void);
 extern int (*models_test_rename_fault)(void);
+/* asked before the save writes a saved model's <sha>.engine: a nonzero errno is that write's
+ * answer (review b-a2a-F1) */
+extern int (*models_test_engine_fault)(void);
 extern int models_test_each_calls, models_test_originals_calls;
 #endif
 

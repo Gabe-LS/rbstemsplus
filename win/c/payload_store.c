@@ -19,6 +19,16 @@ enum { PATH_MAX_ = 4096, SIG_READ_MAX = 4096 };
 
 static const char json_name[] = "payload.json", sig_name[] = "payload.json.sig", floor_name[] = "payload-version";
 
+/* out->json_sha256: the sha256 of the bytes out was verified from */
+static void bytes_sha(const void *data, size_t n, payload_manifest *out) {
+    static const char h[] = "0123456789abcdef";
+    unsigned char d[32];
+    out->json_sha256[0] = 0;
+    if (plat_sha256(data, n, d)) return;
+    for (int i = 0; i < 32; i++) out->json_sha256[2 * i] = h[d[i] >> 4], out->json_sha256[2 * i + 1] = h[d[i] & 15];
+    out->json_sha256[64] = 0;
+}
+
 static int join(char *out, const char *dir, const char *name) {
     size_t d = strlen(dir), n = strlen(name);
     if (!d || d + 1 + n + 1 > PATH_MAX_) return -1;
@@ -62,6 +72,7 @@ int payload_saved(const payload_files *f, payload_manifest *out) {
     char fl[64];
     int a = accepted_floor(f, fl);
     int r = a < 0 ? PAYLOAD_NOT_VALID : payload_check(json, jn, sig, sn, f->keys, f->nkeys, a ? fl : NULL, out);
+    if (r == PAYLOAD_OK) bytes_sha(json, jn, out);
     free(json);
     free(sig);
     return r;
@@ -90,6 +101,7 @@ static int accept_locked(const payload_files *f, const void *data, size_t n, con
         if (win_write_atomic(f->floor_dir, floor_name, line, k + 1)) return PAYLOAD_NOT_SAVED;
     }
     if (win_write_atomic(f->payload_dir, sig_name, sig, sig_n) || win_write_atomic(f->payload_dir, json_name, data, n)) return PAYLOAD_NOT_SAVED;
+    bytes_sha(data, n, out);
     return PAYLOAD_OK;
 }
 

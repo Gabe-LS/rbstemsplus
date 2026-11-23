@@ -277,7 +277,9 @@ static int space_paused = -1;           /* under lock: -1 not measured yet (spac
 static int writer_checked;              /* under lock: this writer batch checked the marker (store_entry) */
 static long long hits, near_hits, misses, writes;
 static void lose(const char *why);
+#if !defined(_WIN32) && !defined(RBSTEMS_WIN_CACHE_TEST)
 static int repin(plat_id was);
+#endif
 
 /* ---------------------------------------------------------------- log, config */
 
@@ -373,12 +375,55 @@ static int test_any_volume(void) {          /* a test build may put a chosen loc
 #endif
 }
 
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+#include "../win/c/volumes.h"
+#ifdef RBSTEMS_WIN_CACHE_TEST
+static int plat_mkdir_open_at(plat_dir, const char *, int, plat_dir *);
+static int plat_dir_open_at_held(plat_dir, const char *, plat_dir *);
+static int plat_dir_identity(plat_dir, plat_id *);
+#endif
+static unsigned long device_generation;                  /* under lock */
+
+static void device_invalidated(void) {
+    pthread_mutex_lock(&lock);
+    device_generation++;
+    int active = loc_state == LOC_AVAILABLE && !plat_id_same(pin, (plat_id){0});
+    pin = (plat_id){0};
+    pthread_mutex_unlock(&lock);
+    if (active) plat_async_b(maint, ^{
+        pthread_mutex_lock(&lock);
+        int lost = plat_id_same(pin, (plat_id){0});
+        pthread_mutex_unlock(&lock);
+        if (lost) lose("not-connected");
+    });
+}
+
+static const char *chosen_volume_why(void) {
+    static vol_watch watch = {.invalidated = device_invalidated};
+    if (test_any_volume()) return NULL;
+    if (plat_win_drive_remote(base_dir)) return "not-local";
+    switch (vol_saved_watch(base_dir, &watch)) {
+    case VOL_OK: return NULL;
+    case VOL_REFUSE_NETWORK: return "not-local";
+    case VOL_REFUSE_READ_ONLY: return "read-only";
+    default: return "not-connected";
+    }
+}
+#endif
+
 /* Test builds only: pauses and failures at chosen moments, for bridge/tests (a drive detached
  * mid-write, mid-prune, mid-index-load; a write failing with a given errno; an open failing once) */
 #ifdef RBSTEMS_TEST_REAL_PATH
 static void test_pause(const char *name) {
+#ifdef RBSTEMS_WIN_CACHE_TEST
+    extern void cache_test_pause(const char *);
+    cache_test_pause(name);
+#endif
     const char *t = getenv(name);
-    if (t) usleep((useconds_t)(atof(t) * 1e6));
+    if (t) {
+        logf_("test: pause %s", name);                      /* bridge/tests can wait for it (RBSTEMS_HARNESS_WAIT_FOR) */
+        usleep((useconds_t)(atof(t) * 1e6));
+    }
 }
 static int test_errno(const char *name) {
     const char *t = getenv(name);
@@ -492,14 +537,23 @@ static plat_dir sub_open(plat_dir dir, const char *name, int create, uint64_t vo
 static plat_dir open_base(int create, int *err) {
     plat_dir fd = NO_DIR;
     if (!base_dir[0]) { *err = ENOENT; return fd; }
+#if !defined(_WIN32)
     if (!chosen && create) plat_mkdirs(base_dir);
+#else
+    (void)create;
+#endif
     *err = plat_dir_open(base_dir, &fd);
 #ifdef RBSTEMS_TEST_REAL_PATH
     if (test_open_errno && plat_dir_ok(fd)) { plat_dir_close(fd); fd = NO_DIR; *err = test_open_errno; }
     test_open_errno = 0;
 #endif
     if (!chosen) return fd;
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    plat_id opened;
+    int stat_error = plat_dir_ok(fd) ? plat_dir_identity(fd, &opened) : *err;
+#else
     plat_stat st;
+#endif
     pthread_mutex_lock(&lock);
     plat_id id = pin;
     pthread_mutex_unlock(&lock);
@@ -509,7 +563,17 @@ static plat_dir open_base(int create, int *err) {
         int e = *err;
         if (e == ENOENT || e == ENOTDIR || e == ELOOP || e == ENXIO || e == ENODEV || e == EIO || e == EACCES || e == EPERM || e == EROFS)
             lose(gone_why(e));
-    } else if (plat_dir_stat(fd, &st) || !plat_id_same(st.id, id)) {
+    }
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    else if (stat_error || !plat_id_same(opened, id)) {
+        /* Leave discovery to the maintenance queue, including when the device notification
+         * invalidated the pin without a change in the on-disk identity. */
+        plat_dir_close(fd);
+        fd = NO_DIR;
+        *err = EXDEV;
+        lose(plat_id_same(id, (plat_id){0}) ? "not-connected" : "folder");
+#else
+    else if (plat_dir_stat(fd, &st) || !plat_id_same(st.id, id)) {
         /* a drive connected again has new device numbers: checked at once (repin), and used
          * when the folder opened is the one that check pinned */
         int ok = 0;
@@ -525,6 +589,7 @@ static plat_dir open_base(int create, int *err) {
             *err = EXDEV;
             lose("folder");
         }
+#endif
     }
     return fd;
 }
@@ -546,6 +611,106 @@ static plat_dir entry_dir(const char *model, const char *key, int create, int *e
 /* NULL when base_dir (open as fd) holds our marker, else why not; "" when it couldn't be told
  * for want of descriptors or memory (not the location's fault: no verdict). common/marker.c */
 static const char *marker_check(plat_dir d) { return marker_check_at(d, cache_id); }
+
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+#include "../common/cache_owner.h"
+
+/* Only an exclusive directory creation can establish local cache ownership. */
+static int local_cache_identity(plat_dir d, plat_id id, char out[CACHE_OWNER_IDENTITY_MAX]) {
+    if (vol_dir_guid(d, out)) return -1;
+    cache_owner_identity(out, VOL_GUID_LEN, id);
+    return 0;
+}
+
+static int local_creation_identity(plat_dir d, const char *path, int created, char *identity) {
+    (void)path;
+    (void)created;
+    plat_id id;
+    int err = plat_dir_identity(d, &id);
+    if (!err && local_cache_identity(d, id, identity)) err = EIO;
+    return err;
+}
+
+static int make_local_cache(void) {
+    char parent[sizeof memo_dir];
+    memcpy(parent, memo_dir, sizeof parent);
+    char *name = strrchr(parent, SEP[0]);
+    if (!name) return ENOENT;
+    *name++ = 0;
+#if defined(_WIN32)
+    plat_mkdirs(parent);
+#endif
+    plat_dir p;
+    int err = plat_dir_open(parent, &p);
+    if (!err) {
+        err = cache_owner_init(p, name, memo_dir, local_creation_identity, plat_mkdir_open_at);
+        plat_dir_close(p);
+    }
+    return err;
+}
+
+static void local_cache_status(int err) {
+    const char *why = err ? cache_owner_reason(err) : "";
+    int state = err ? LOC_UNAVAILABLE : LOC_AVAILABLE;
+    pthread_mutex_lock(&lock);
+    int changed = loc_state != state || strcmp(loc_reason, why);
+    if (changed) space_paused = -1;
+    loc_state = state;
+    loc_reason = why;
+    pthread_mutex_unlock(&lock);
+    if (changed) {
+        if (err) logf_("cache: This PC is unavailable (%s, error %d)", why, err);
+        write_state();
+    }
+}
+
+static plat_dir open_local_cache(int *err) {
+    plat_dir d = NO_DIR;
+    if (!memo_dir[0]) { *err = ENOENT; return d; }
+    if ((*err = plat_dir_open(memo_dir, &d)) == ENOENT) {
+        *err = make_local_cache();
+        if (!*err) *err = plat_dir_open(memo_dir, &d);
+    }
+    return d;
+}
+
+static int local_marker_matches(plat_dir d, plat_id id) {
+    char identity[CACHE_OWNER_IDENTITY_MAX];
+    return !local_cache_identity(d, id, identity) && !cache_owner_check(d, identity);
+}
+
+static int mutation_allowed(plat_dir b, plat_id id) {
+    if (!chosen) return local_marker_matches(b, id);
+    pthread_mutex_lock(&lock);
+    int pinned = loc_state == LOC_AVAILABLE && plat_id_same(pin, id);
+    pthread_mutex_unlock(&lock);
+    if (!pinned || (!test_any_volume() && !vol_dir_on_volume(b, base_dir))) return 0;
+    const char *why = marker_check(b);
+    if (why && *why) lose(why);
+    return !why;
+}
+
+/* Keep intermediate folders from moving out of the checked cache during the mutation. */
+static plat_dir mutation_sub_open(plat_dir dir, const char *name, int create, uint64_t vol, int *err) {
+    plat_dir d;
+    plat_stat st;
+    if (create && (*err = plat_mkdir_at(dir, name)) && *err != EEXIST) return NO_DIR;
+    if ((*err = plat_dir_open_at_held(dir, name, &d))) return NO_DIR;
+    if (plat_dir_stat(d, &st) || st.id.vol != vol || !plat_dir_name_is(d, name)) {
+        *err = EXDEV;
+        plat_dir_close(d);
+        return NO_DIR;
+    }
+    return d;
+}
+
+static plat_dir mutation_entry_dir(plat_dir b, uint64_t vol, const char *model, const char *key,
+                                   int create, plat_dir *m, int *err) {
+    char xx[3] = {key[0], key[1], 0};
+    *m = mutation_sub_open(b, model, create, vol, err);
+    return plat_dir_ok(*m) ? mutation_sub_open(*m, xx, create, vol, err) : NO_DIR;
+}
+#endif
 
 /* A chosen location is still the folder validate pinned, with our marker (re-read at each prune,
  * each index load and the first write of each writer batch): else it is lost. 0 when it is. */
@@ -574,7 +739,8 @@ static int location_recheck(void) {
  * opened still on the volume walked) */
 static const char *check_location(plat_id *id, char mnt[PLAT_MOUNT_MAX]) {
     location_pin lp = {{0, {0, 0}}, ""};
-    const char *why = location_check(base_dir, cache_id, test_any_volume(), &lp);
+    const char *why = chosen_volume_why();
+    if (!why) why = location_check(base_dir, cache_id, test_any_volume(), &lp);
     *id = lp.id;
     strlcpy(mnt, lp.mount, PLAT_MOUNT_MAX);
     return why;
@@ -610,8 +776,11 @@ static const char *check_location(plat_id *id, char mnt[PLAT_MOUNT_MAX]) {
     if (!v.local) return "not-local";
     if (v.readonly) return "read-only";
     plat_dir fd;
+    test_pause("RBSTEMS_TEST_OPEN_DELAY");                 /* bridge/tests: an ancestor swapped after the walk */
     if ((e = plat_dir_open(base_dir, &fd))) return why_of(e);
-    const char *why = plat_dir_stat(fd, &st) ? "io-error" : marker_check(fd);
+    /* the folder opened is still on that volume: an ancestor swapped for a link after the walk
+     * can't move it to another one (common/location.c's review TC1; BW3) */
+    const char *why = plat_dir_stat(fd, &st) ? "io-error" : !any && st.id.vol != vol ? "folder" : marker_check(fd);
     if (why && !*why) why = "io-error";                     /* checked once: no descriptors is a failure here */
     *id = st.id;
     if (!why && (e = plat_dir_writable(fd))) why = e == EROFS ? "read-only" : "no-permission";
@@ -636,11 +805,15 @@ static unsigned recheck_every(void) {
     return RECHECK_EVERY;
 }
 
-/* schedules recheck while the chosen location is unavailable (not while Stems Cache is off) */
+/* Schedule a recheck while the configured cache is unavailable and Stems Cache is on. */
 static void recheck(void);
 static void arm_recheck(void) {
     pthread_mutex_lock(&lock);
+#if defined(_WIN32)
+    int go = base_dir[0] && enabled && !recheck_armed && loc_state == LOC_UNAVAILABLE && strcmp(loc_reason, "disabled");
+#else
     int go = chosen && !recheck_armed && loc_state == LOC_UNAVAILABLE && strcmp(loc_reason, "disabled");
+#endif
     if (go) recheck_armed = 1;
     pthread_mutex_unlock(&lock);
     if (go && plat_after_b(maint, (uint64_t)recheck_every() * 1000000000u, ^{ recheck(); })) {
@@ -654,8 +827,17 @@ static void validate(void) {
     test_pause("RBSTEMS_TEST_VALIDATE_DELAY");
     plat_id id = {0, {0, 0}};
     char mnt[PLAT_MOUNT_MAX] = "";
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    pthread_mutex_lock(&lock);
+    unsigned long generation = device_generation;
+    pthread_mutex_unlock(&lock);
+#endif
     const char *why = check_location(&id, mnt);
     pthread_mutex_lock(&lock);
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    if (generation != device_generation) why = "not-connected";
+    if (why) id = (plat_id){0};
+#endif
     loc_state = why ? LOC_UNAVAILABLE : LOC_AVAILABLE;
     loc_reason = why ? why : "";
     pin = id;
@@ -685,13 +867,28 @@ static void recheck(void) {
     pthread_mutex_lock(&lock);
     recheck_armed = 0;
     int still = loc_state == LOC_UNAVAILABLE;
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    unsigned long generation = device_generation;
+#endif
     pthread_mutex_unlock(&lock);
     if (!still) return;
+#if defined(_WIN32)
+    if (!chosen) {
+        int err = make_local_cache();
+        local_cache_status(err);
+        if (!err) first_prune(0);
+        else arm_recheck();
+        return;
+    }
+#endif
     plat_id id = {0, {0, 0}};
     char mnt[PLAT_MOUNT_MAX] = "";
     const char *why = check_location(&id, mnt);
     int back = 0, changed = 0;
     pthread_mutex_lock(&lock);
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    if (generation != device_generation) why = "not-connected";
+#endif
     if (loc_state == LOC_UNAVAILABLE) {
         if (!why) {
             loc_state = LOC_AVAILABLE;
@@ -884,9 +1081,17 @@ static void set_location(void) {
         loc_state = LOC_PENDING;
     } else {
         memcpy(base_dir, memo_dir, sizeof base_dir);
+#if !defined(_WIN32) && !defined(RBSTEMS_WIN_CACHE_TEST)
         loc_state = LOC_AVAILABLE;
+#endif
     }
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    int err = make_local_cache();
+    if (!chosen && base_dir[0]) local_cache_status(err);
+    else if (err) logf_("cache: This PC memo folder is unavailable (%s, error %d)", cache_owner_reason(err), err);
+#else
     plat_mkdirs(memo_dir);
+#endif
 }
 
 #if defined(_WIN32)
@@ -918,6 +1123,7 @@ static void bridge_core_start(void) {
     if (!near_on) logf_("cache: near hits off (near_hits=0): only exact hits are served");
     write_state();
     if (no_queue) return;
+    if (!chosen && ew_hooks_ok) arm_recheck();
     if (chosen && enabled && ew_hooks_ok) {
         if (plat_async_b(maint, ^{ validate(); })) {        /* BW6: not queued, so never pending */
             pthread_mutex_lock(&lock);
@@ -1004,10 +1210,31 @@ static void hex(const unsigned char *d, int n, char *out) {
     for (int i = 0; i < n; i++) snprintf(out + 2 * i, 3, "%02x", d[i]);
 }
 
+#if defined(_WIN32)
+static FILE *create_tmp(plat_dir x, const char *tmp, int rw, const char *mode, int *err);
+
+static void save_model_memo(const char *name, const char *stamp, const char *digest) {
+    int err;
+    plat_dir d = open_local_cache(&err);
+    if (!plat_dir_ok(d)) return;
+    plat_stat st;
+    char tmp[96];
+    if (!plat_dir_stat(d, &st) && local_marker_matches(d, st.id) &&
+        !pathf(tmp, sizeof tmp, "%s.%d.tmp", name, getpid())) {
+        FILE *f = create_tmp(d, tmp, 0, "wb", &err);
+        if (f) {
+            int ok = fprintf(f, "%s %s\n", stamp, digest) > 0;
+            ok = fclose(f) == 0 && ok;
+            if (!ok || plat_rename_at(d, tmp, d, name)) plat_unlink_at(d, tmp);
+        }
+    }
+    plat_dir_close(d);
+}
+#endif
+
 static int file_sha256_locked(const char *path, char out[65]) {
     /* the checksum is remembered per (size, modification time) in model-<inode>.sha256 */
     plat_stat st;
-#if defined(_WIN32)
     /* BX3: the memo's name, `want` and the hash all come from one handle, so a file swapped
      * between a stat and the open can't get the other's checksum. ORT still opens the path itself */
     plat_file mf = NO_FILE;
@@ -1016,14 +1243,16 @@ static int file_sha256_locked(const char *path, char out[65]) {
         plat_file_close(mf);
         return -1;
     }
+#if defined(_WIN32)
+    char memo[PATH_MAX], want[128], line[200];
 #else
-    if (plat_stat_path(path, 1, &st)) return -1;
-#endif
     char memo[PATH_MAX], tmp[PATH_MAX], want[128], line[200];
     FILE *f;
+#endif
     if (!memo_dir[0]) memo[0] = 0;                          /* no cache: no memo, hashed every time */
     else pathf(memo, sizeof memo, "%s" SEP "model-%llu.sha256", memo_dir, (unsigned long long)plat_id_number(st.id));
     snprintf(want, sizeof want, "%lld %ld", (long long)st.size, (long)st.mtime);
+    test_pause("RBSTEMS_TEST_HASH_DELAY");                  /* the memo's name and `want` taken, nothing read yet */
     int64_t size = 0;
     plat_file fd = NO_FILE;
     if (memo[0] && !plat_file_open_at(plat_dir_cwd(), memo, sizeof line - 1, &size, &fd)) {   /* memo: an absolute path */
@@ -1037,18 +1266,12 @@ static int file_sha256_locked(const char *path, char out[65]) {
             memcpy(out, line + wl + 1, 64);
             out[64] = 0;
             TIMING(t_memo = "memo";)
-#if defined(_WIN32)
             plat_file_close(mf);
-#endif
             return 0;
         }
     }
     TIMING(t_memo = "hashed";)
-#if defined(_WIN32)
     fd = mf;
-#else
-    if (plat_file_open_path(path, &fd)) return -1;          /* following links, as rekordbox names it */
-#endif
     unsigned char *buf = malloc(1 << 20);              /* per call: concurrent sessions hashed one shared buffer */
     plat_sha256_ctx c;
     if (!buf || plat_sha256_init(&c)) { free(buf); plat_file_close(fd); return -1; }
@@ -1060,11 +1283,15 @@ static int file_sha256_locked(const char *path, char out[65]) {
     unsigned char d[32];
     if (plat_sha256_final(&c, d) || e) return -1;
     hex(d, 32, out);
+#if defined(_WIN32)
+    if (memo[0]) save_model_memo(strrchr(memo, SEP[0]) + 1, want, out);
+#else
     if (memo[0] && !pathf(tmp, sizeof tmp, "%s.%d.tmp", memo, getpid()) && (f = plat_fopen_w(tmp, 0))) {
         int ok = fprintf(f, "%s %s\n", want, out) > 0;
         ok = fclose(f) == 0 && ok;
         if (!ok || plat_rename_path(tmp, memo) != 0) plat_unlink_path(tmp);
     }
+#endif
     return 0;
 }
 
@@ -1758,16 +1985,26 @@ static void unhex(const char *s, unsigned char *out) {     /* 64 lowercase hex d
 }
 
 /* deletes an entry's files (and companions) through its prefix folder; 0 if its FLAC is gone */
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+static int remove_entry(plat_dir b, uint64_t vol, const char *model, const char *key) {
+    int err, r = -1, e;
+    plat_dir m, x = mutation_entry_dir(b, vol, model, key, 0, &m, &err);
+    if (!plat_dir_ok(x)) { plat_dir_close(m); return -1; }
+#else
 static int remove_entry(const char *model, const char *key) {
     int err, r = -1, e;
     plat_dir x = entry_dir(model, key, 0, &err);
     if (!plat_dir_ok(x)) return -1;
+#endif
     for (int i = 0; i < ENTRIES_FILES; i++) {
         char name[80];
         entries_file(name, sizeof name, key, i);
         if ((e = plat_unlink_at(x, name)) == 0 || e == ENOENT) { if (!i) r = 0; }
     }
     plat_dir_close(x);
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    plat_dir_close(m);
+#endif
     return r;
 }
 
@@ -1800,8 +2037,15 @@ static int prune(void) {
     int err;
     plat_dir b = NO_DIR;
     plat_stat bs;
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    if (loc_now() != LOC_AVAILABLE) return 0;
+    b = open_base(0, &err);
+    if (!plat_dir_ok(b)) return !chosen && err == ENOENT;
+    if (plat_dir_stat(b, &bs) || !mutation_allowed(b, bs.id)) { plat_dir_close(b); return 0; }
+#else
     if (loc_now() != LOC_AVAILABLE || location_recheck() || !plat_dir_ok(b = open_base(0, &err))) return !chosen && !plat_dir_ok(b) && err == ENOENT;
     if (plat_dir_stat(b, &bs)) { plat_dir_close(b); return 0; }
+#endif
     pthread_mutex_lock(&lock);
     prune_running = 1;
     prune_pending = 0;
@@ -1838,13 +2082,21 @@ static int prune(void) {
         })) complete = 0;
     test_pause("RBSTEMS_TEST_PRUNE_DELAY");                 /* the top level walked, the model folders not yet */
     for (size_t i = 0; i < nm && complete; i++) {
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+        plat_dir m = mutation_sub_open(b, models[i], 0, vol, &err);
+#else
         plat_dir m = sub_open(b, models[i], 0, vol, &err);
+#endif
         if (!plat_dir_ok(m)) { if (err != ENOENT && err != EXDEV) complete = 0; continue; }
         if (plat_dir_each_b(m, ^int(const char *pn, const plat_stat *ps) {
                 int k = layout(pn, 2, IS_DIR(ps), IS_FILE(ps), NULL), e;
                 if (k == ENT_COMP_DIR) orphan(m, pn, ps, now);
                 if (k != ENT_PREFIX_DIR) return 0;
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+                plat_dir x = mutation_sub_open(m, pn, 0, vol, &e);
+#else
                 plat_dir x = sub_open(m, pn, 0, vol, &e);
+#endif
                 if (!plat_dir_ok(x)) { if (e != ENOENT && e != EXDEV) complete = 0; return !complete; }
                 if (plat_dir_each_b(x, ^int(const char *en, const plat_stat *es) {
                         int kind = layout(en, 3, IS_DIR(es), IS_FILE(es), pn);
@@ -1870,9 +2122,15 @@ static int prune(void) {
             })) complete = 0;
         plat_dir_close(m);
     }
+#if !defined(_WIN32) && !defined(RBSTEMS_WIN_CACHE_TEST)
     plat_dir_close(b);
+#endif
     plat_dir md;
     if (chosen && memo_dir[0] && !plat_dir_open(memo_dir, &md)) {   /* the memos' folder: its stale temporary files only */
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+        plat_stat ms;
+        if (!plat_dir_stat(md, &ms) && local_marker_matches(md, ms.id))
+#endif
         plat_dir_each_b(md, ^int(const char *name, const plat_stat *st) {
             if (IS_FILE(st) && entries_is_memo_tmp(name) && now - st->mtime > 3600 && !plat_unlink_at(md, name)) temps++;
             return 0;
@@ -1888,6 +2146,13 @@ static int prune(void) {
         kn = 0;
     }
     for (size_t i = 0; i < nm && mbin; i++) unhex(models[i], mbin[i]);
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    /* Entry eviction is a new deletion pass. Re-read ownership through the base we walked. */
+    if (complete && !mutation_allowed(b, bs.id)) complete = 0;
+#define REMOVE_ENTRY(model, key) remove_entry(b, vol, (model), (key))
+#else
+#define REMOVE_ENTRY(model, key) remove_entry(model, key)
+#endif
     if (complete) {
         qsort(pf, n, sizeof *pf, by_key);
         for (size_t i = 0; i < n;) {                        /* one entry: its files, grouped by key */
@@ -1912,10 +2177,10 @@ static int prune(void) {
             }
             if (kept) { kentries++; kbytes += bytes; }
             if (flac >= 0 && !kept && now - flac > (time_t)(max_days * 86400)) {
-                if (!remove_entry(models[model], key)) aged++;
+                if (!REMOVE_ENTRY(models[model], key)) aged++;
                 else total += bytes;
             } else if (flac < 0 && now - newest > 3600) {
-                remove_entry(models[model], key);           /* a summary or companions without the stems */
+                REMOVE_ENTRY(models[model], key);           /* a summary or companions without the stems */
             } else {
                 total += bytes;
                 if (flac >= 0) {                            /* the list of live entries reuses pf (live <= i) */
@@ -1934,7 +2199,7 @@ static int prune(void) {
             for (size_t i = 0; i < live && total > max_bytes * 9 / 10; i++) {
                 char key[65];
                 hex(pf[i].key, 32, key);
-                if (!remove_entry(models[pf[i].model], key)) {
+                if (!REMOVE_ENTRY(models[pf[i].model], key)) {
                     total -= pf[i].bytes;
                     evicted++;
                     if (pf[i].kept) { kevicted++; kentries--; kbytes -= pf[i].bytes; }
@@ -1942,6 +2207,10 @@ static int prune(void) {
             }
         }
     }
+#undef REMOVE_ENTRY
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    plat_dir_close(b);
+#endif
     if (kn || ksets)
         logf_("kept: %zu sets, %lld of their entries in the cache (%.2f GB)", ksets, kentries, kbytes / (double)(1LL << 30));
     if (kevicted) logf_("kept: %lld kept entries removed: the cache was over %.1f GB with every other entry gone", kevicted, max_bytes / (double)(1LL << 30));
@@ -2014,7 +2283,15 @@ static double free_bytes(const char **how) {
     if (t) { *how = "test"; return atof(t) * 1e9; }
     finder = !getenv("RBSTEMS_TEST_STATFS");
 #endif
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    if (!chosen) {
+        int err = make_local_cache();
+        local_cache_status(err);
+        if (err) { *how = "This PC cache unavailable"; return 0; }
+    }
+#else
     if (!chosen) plat_mkdirs(base_dir);                     /* this Mac's: it may have been cleared since loading */
+#endif
     return (double)plat_free_bytes(base_dir, finder, how);
 }
 
@@ -2082,6 +2359,9 @@ static void lose(const char *why) {
     if (was != LOC_UNAVAILABLE) {
         loc_state = LOC_UNAVAILABLE;
         loc_reason = why;
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+        pin = (plat_id){0};
+#endif
         old = forget_index_locked(&n);
         total_bytes = -1;
         space_paused = -1;
@@ -2100,6 +2380,7 @@ static void lose(const char *why) {
  * pinned and used, its space counted afresh and the index loaded again, as after a recheck.
  * 1 then (or when another thread pinned it meanwhile); 0 and nothing changed otherwise: the
  * caller loses it. Any thread: the space count runs on the maintenance queue. */
+#if !defined(_WIN32) && !defined(RBSTEMS_WIN_CACHE_TEST)
 static int repin(plat_id was) {
     plat_id id = {0, {0, 0}};
     char mnt[PLAT_MOUNT_MAX] = "";
@@ -2127,6 +2408,7 @@ static int repin(plat_id was) {
     plat_async_b(maint, ^{ first_prune(0); });
     return 1;
 }
+#endif
 
 /* ---------------------------------------------------------------- FLAC */
 
@@ -2275,7 +2557,11 @@ static int read_entry(const char *model, const char *key, int16_t *pcm, size_t f
 /* After a failed read or write of an entry: an I/O error may be the drive going. The location
  * is checked again (lose if it fails); otherwise it was that entry only, a miss. */
 static void entry_failed(int err) {
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    if (chosen && (err == EIO || err == ENXIO || err == ENODEV)) lose("io-error");
+#else
     if (chosen && (err == EIO || err == ENXIO || err == ENODEV)) location_recheck();
+#endif
 }
 
 /* ---------------------------------------------------------------- tensors */
@@ -2657,11 +2943,13 @@ static void store_entry(const char *model, const char *key, int16_t *pcm, float 
     if (getenv("RBSTEMS_TEST_WRITER_DELAY")) usleep((useconds_t)(atof(getenv("RBSTEMS_TEST_WRITER_DELAY")) * 1e6));
 #endif
     if (loc_now() != LOC_AVAILABLE) return;
+#if !defined(_WIN32) && !defined(RBSTEMS_WIN_CACHE_TEST)
     pthread_mutex_lock(&lock);
     int check = chosen && !writer_checked;
     writer_checked = 1;
     pthread_mutex_unlock(&lock);
     if (check && location_recheck()) return;
+#endif
     if (!space_ok()) return;                                /* under the floor: nothing written */
     int frames = 0;
     float *d = malloc(sizeof(float) * 2 * DESC_MAX_FRAMES), *s = malloc(L * sizeof(float)), *m = malloc(L * sizeof(float));
@@ -2690,7 +2978,21 @@ static void store_entry(const char *model, const char *key, int16_t *pcm, float 
         }
     }
     int err = 0;
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    plat_dir b = NO_DIR, md = NO_DIR, x = NO_DIR;
+    if (ok) {
+        b = chosen ? open_base(0, &err) : open_local_cache(&err);
+        if (plat_dir_ok(b)) {
+            plat_stat st;
+            err = plat_dir_stat(b, &st);
+            if (!err && !mutation_allowed(b, st.id)) err = chosen ? EACCES : ENOTEMPTY;
+            if (!err) x = mutation_entry_dir(b, st.id.vol, model, key, 1, &md, &err);
+        }
+        if (!chosen && err && !plat_dir_ok(x)) local_cache_status(err);
+    }
+#else
     plat_dir x = ok ? entry_dir(model, key, 1, &err) : NO_DIR;
+#endif
     int stored = 0;
     if (plat_dir_ok(x)) {
         long long before = entry_size(x, key);
@@ -2708,6 +3010,10 @@ static void store_entry(const char *model, const char *key, int16_t *pcm, float 
         if (stored) add_to_index(model, key, d, frames, (float)r, (float)g, rt, rf);
         if (over) queue_prune();
     }
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    plat_dir_close(md);
+    plat_dir_close(b);
+#endif
     if (ok && !stored) {
         logf_("ERROR writing %s/%s/%.2s/%s: %s", base_dir, model, key, key, strerror(err));
         if (err == EROFS) lose("read-only");

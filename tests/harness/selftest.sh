@@ -146,6 +146,23 @@ printf '7 1000000000000\n8 1000003000000\n' > "$d/pids.txt"
 ok '"$st" samples "$d" | grep -q "^P16 1 40.000$"' "P16 sample"
 ok '! "$st" samples "$d" | grep -q "^P16.own "' "P16.own only with the round's rusage files"
 ok '"$st" samples "$d" | grep -q "^P14 1 2490.000$"' "P14 across two processes"
+ok '[ "$("$st" samples "$d" | grep "^P14\." | cut -d" " -f1 | tr "\n" " ")" = "P14.launch " ]' "P14's split only from the events it needs (here the new app's start to its window)"
+# P14's split (information): the same two processes, the old app's status sets (1.3 s, 1.7 s since
+# 1970's 1e6 s), willTerminate (1.78), exit.begin and exit.end (1.80, 1.81); afterexit.txt's
+# script start (1.75, a short fraction) and wait over (2.01), another process's stamp left out
+d="$t/p14s/1"; mkdir -p "$d"
+{
+  echo "# mode=perf pid=7 launch_ns=-1000000000 probe_busy_ns=0 arch=arm64"
+  printf '10000000\tcmd\tanswer Update\t0\n300000000\tfield\tc.status:setStringValue\t0\n700000000\tfield\tc.status:setStringValue\t0\n'
+  printf '780000000\tev\twillTerminate\t0\n790000000\ttp\twillTerminate.flushed\t0\n800000000\ttp\texit.begin\t0\n810000000\ttp\texit.end\t0\n'
+} > "$d/perf-7.tsv"
+cp "$t/p14/1/perf-8.tsv" "$t/p14/1/pids.txt" "$d/"
+printf 'afterexit-7-start 1000001.75\nafterexit-7-work 1000002.010000000\nafterexit-99-work 1000001.900000000\n' > "$d/afterexit.txt"
+"$st" samples "$d" > "$t/p14s.out"
+for row in "P14 1 2490.000" "P14.status 1 290.000" "P14.download 1 400.000" "P14.quit 1 80.000" "P14.relaunch 1 1220.000" \
+           "P14.launch 1 500.000" "P14.shutdown 1 30.000" "P14.exit 1 10.000" "P14.wait 1 200.000" "P14.script 1 990.000" "P14.armed 1 60.000"; do
+  ok 'grep -qx "$row" "$t/p14s.out"' "P14's split: $row"
+done
 # P16.own: each round's rusage (vmtool rusage, before the command and after the dialog) takes its
 # children's lifetimes out of its wall time: round 1 40 ms less 30, round 2 50 ms less 25 (each
 # round its own files, by its "mark report N"); the CPU times are the differences
@@ -447,6 +464,7 @@ order() { tr '\n' ' ' < "$gq/$1.d/log" | sed 's/ $//'; }
 gp clean "$gq/A" "$gq/B" "$gq/clean"
 ok '[ "$rc" = 3 ] && gs clean | grep -qx "verdict=0" && grep -q "tooling check only" "$gq/clean/gate.txt" && [ "$(order clean)" = "A-p1 B-p1 B-p2 A-p2" ]' "GP: a clean stub session judges 0 over two alternating pairs (A B, B A); stubs are a tooling check only (3)"
 ok 'grep -q "^GP: information only (A is not B0, " "$gq/clean/gate.txt" && ! grep -q "^GP: pass" "$gq/clean/gate.txt"' "GP: a gate whose A isn't the archive's B0 is information only, never \"GP: pass\""
+ok '[ "$(head -1 "$gq/clean/gate.tsv")" = "# compare: pass" ] && grep -qx "# compare: information only (A is not B0)" "$gq/clean/gate.tsv" && grep -qx "# compare: information only (stubs: not a valid gate)" "$gq/clean/gate.tsv"' "GP: gate.tsv starts with the gate's summary line; each downgrade appends an information-only one (tests/perf/record.py refuses it)"
 mkdir -p "$gq/archive"; ln -s "$gq/A" "$gq/archive/B0"
 gp isb0 "$gq/A" "$gq/B" "$gq/isb0"
 ok 'grep -q "^GP: pass" "$gq/isb0/gate.txt" && ! grep -q "information only" "$gq/isb0/gate.txt" && gs isb0 | grep -qx "verdict=0"' "GP: ...with A the archive's B0 it is the gate"
@@ -501,6 +519,7 @@ hs() { cat "$hq/$1/session.txt" 2>/dev/null; }
 horder() { tr '\n' ' ' < "$hq/$1.d/log" | sed 's/ $//'; }
 hgp clean --idle-wait 5
 ok '[ "$rc" = 3 ] && hs clean | grep -qx "verdict=0" && [ "$(horder clean)" = "A-r1 B-r1 B-r2 A-r2" ] && hs clean | grep -q "^idle_at=A-r1 100000" && hs clean | grep -q "^display_start=" && grep -q "tooling check only" "$hq/clean/gate.txt"' "helper GP: alternating pairs under the idle guard, judged 0; stubs are a tooling check only (3)"
+ok '[ "$(head -1 "$hq/clean/gate.tsv")" = "# compare: pass" ] && grep -qx "# compare: information only (stubs: not a valid gate)" "$hq/clean/gate.tsv"' "helper GP: gate.tsv starts with the summary line; the stubs append an information-only one"
 STUB_GP_BMUL=1.3 hgp regr
 ok 'hs regr | grep -qx "verdict=1" && grep -q "^GP: REGRESSION: P-H1.run.demucs4" "$hq/regr/gate.txt"' "helper GP: +30% per track: a regression, named"
 STUB_GP_DISTURB_ONCE=B-r1 hgp once --idle-wait 5
@@ -511,9 +530,19 @@ STUB_GP_UNREADABLE=A-r1 hgp unread --idle-wait 5
 ok '[ "$rc" = 2 ] && hs unread | grep -q "^stopped=.* rc=2 HIDIdleTime unreadable"' "helper GP: an idle time that can't be read stops it (2)"
 STUB_GP_SHORT=A-r2 hgp short
 ok '[ "$rc" = 3 ] && hs short | grep -qx "short=A-r2"' "helper GP: a set that came out short: the measurement failed (3)"
+mkdir -p "$hq/stale"; echo '# compare: pass' > "$hq/stale/gate.tsv"; cp "$hq/stale/gate.tsv" "$hq/stale.tsv"
+hgp stale
+ok '[ "$rc" = 2 ] && grep -q "a new OUT for each session" "$hq/stale.out" && cmp -s "$hq/stale/gate.tsv" "$hq/stale.tsv"' "helper GP: a stale OUT is refused, its gate.tsv unchanged"
+mkdir -p "$hq/locked"; cp "$hq/stale.tsv" "$hq/locked/gate.tsv"; chmod 0300 "$hq/locked"
+hgp locked
+ok '[ "$rc" = 2 ] && grep -q "a new OUT for each session" "$hq/locked.out" && cmp -s "$hq/locked/gate.tsv" "$hq/stale.tsv"' "helper GP: an unreadable OUT is refused, its gate.tsv unchanged"
+chmod 0700 "$hq/locked"
 HELPER_PERF_BENCH="$hq/bench.sh" "$hp" gate "$gq/A" "$gq/B" "$hq/real" --corpus "$hq/corpus" > "$hq/real.out" 2>&1; rc=$?
 ok '[ "$rc" = 2 ] && grep -q "are the selftest.s" "$hq/real.out" && [ ! -e "$hq/real" ]' "helper GP: a real gate refuses the selftest's stubs"
-# abab.sh with a stub vm.sh (ABAB_VM): a TEST build folder whose payload.json its key signs
+# abab.sh with a stub vm.sh (ABAB_VM): a TEST build folder whose payload.json its key signs. The
+# stub's build.txt names the clone vm.sh's pointer names (ABAB_CLONE_FILE here, the selftest's own,
+# so another lane's vm.sh up/delete can't change it mid-run), with vm.sh's fallback rbsp-harness:
+# abab.sh's session.txt records the same, and stats.py checks the two
 tb="$t/tb"; rm -rf "$tb"; mkdir -p "$tb/test-keys"
 openssl ecparam -name prime256v1 -genkey -noout -out "$tb/test-keys/test-key.pem" 2>/dev/null
 echo zip > "$tb/rbstemsplus-app.zip"; echo model > "$tb/stemsplus-model.onnx"; echo '{}' > "$tb/payload.json"
@@ -526,7 +555,7 @@ case "$1" in
     label="$2"; shift 2
     for s in "$@"; do
       d="$STUB_ROOT/build/harness/results/$label/$s/1"; mkdir -p "$d"
-      printf 'app_sha256=%s\nclone=unknown\n' "$STUB_SHA" > "$d/build.txt"; echo "$s reopen perf: 0 failed" > "$d/result"
+      printf 'app_sha256=%s\nclone=%s\n' "$STUB_SHA" "$(cat "$ABAB_CLONE_FILE" 2>/dev/null || echo rbsp-harness)" > "$d/build.txt"; echo "$s reopen perf: 0 failed" > "$d/result"
       cp "$STUB_PERF" "$d/perf-1.tsv"
       echo "$label $SERVER_SRC $SERVER_KEY" >> "$STUB_LOG"
     done
@@ -541,7 +570,8 @@ STUB
 printf '#!/bin/bash\nv="$(cat "$STUB_IDLE_FILE")"; echo "$v"; [ "$v" = 0 ] && echo 1000 > "$STUB_IDLE_FILE"; true\n' > "$t/stubidle.sh"
 chmod +x "$t/stubvm.sh" "$t/stubidle.sh"
 ab="$root/tests/perf/abab.sh"; lb="selftest-abab-$$"; lbdir="$root/build/harness/results/$lb"
-abenv() { rm -rf "$lbdir"; : > "$t/stub.log"; ABAB_IDLE_WAIT=0 ABAB_VM="$t/stubvm.sh" STUB_ROOT="$root" STUB_SHA="$(shasum -a 256 "$tb/rbstemsplus-app.zip" | cut -d' ' -f1)" STUB_LOG="$t/stub.log" STUB_PERF="$t/results/A-1/perf-x/1/perf-1.tsv" "$@" > "$t/ab.out" 2>&1; rc=$?; }
+rm -f "$t/abab-clone"
+abenv() { rm -rf "$lbdir"; : > "$t/stub.log"; ABAB_IDLE_WAIT=0 ABAB_VM="$t/stubvm.sh" ABAB_CLONE_FILE="$t/abab-clone" STUB_ROOT="$root" STUB_SHA="$(shasum -a 256 "$tb/rbstemsplus-app.zip" | cut -d' ' -f1)" STUB_LOG="$t/stub.log" STUB_PERF="$t/results/A-1/perf-x/1/perf-1.tsv" "$@" > "$t/ab.out" 2>&1; rc=$?; }
 openssl ecparam -name prime256v1 -genkey -noout -out "$t/other-key.pem" 2>/dev/null
 abenv env SERVER_KEY_A="$t/other-key.pem" "$ab" "$lb" "$tb/rbstemsplus-app.zip" -n 1 --scenarios perf-x
 ok '[ "$rc" = 2 ] && [ ! -e "$lbdir/A-1" ]' "abab.sh: a side whose payload.json its key doesn't sign is refused"
@@ -551,6 +581,10 @@ ok 'grep -q "server_A=$tb key_A=$tb/test-keys/test-key.pem" "$lbdir/session.txt"
 abenv "$ab" "$lb" "$tb/rbstemsplus-app.zip" "$tb/rbstemsplus-app.zip" -n 2 --scenarios perf-x
 ok '[ "$rc" = 3 ] && [ "$(sed -n "s| .*||p" "$t/stub.log" | tr "\n" " ")" = "$lb/warmup-A $lb/warmup-B $lb/A-1 $lb/B-1 $lb/B-2 $lb/A-2 " ] && grep -q "^compare: MEASUREMENT FAILED: no gating row in this session.s plan" "$lbdir/compare.txt" && grep -q "^finished=.* rc=3$" "$lbdir/session.txt"' "abab.sh: A and B interleaved (A B, then B A), then compare under thresholds.txt (no gating row is perf-x's: 3), session.txt's rc the compare's"
 ok '"$st" compare "$lbdir" --rules "$t/rules.txt" | grep -q "^compare: pass$"' "stats.py reads abab.sh's session.txt (provenance, the plan)"
+echo c-sel > "$t/abab-clone"
+abenv "$ab" "$lb" "$tb/rbstemsplus-app.zip" "$tb/rbstemsplus-app.zip" -n 2 --scenarios perf-x
+ok 'grep -q " clone=c-sel " "$lbdir/session.txt" && "$st" compare "$lbdir" --rules "$t/rules.txt" | grep -q "^compare: pass$"' "abab.sh: a clone up (vm.sh's pointer): session.txt names it, and stats.py's provenance passes"
+rm -f "$t/abab-clone"
 # S1: each scenario's two warm-ups (one per side) come before its first measured launch; stats.py
 # never reads them (a warm-up 10 s slower changes nothing)
 abenv "$ab" "$lb" "$tb/rbstemsplus-app.zip" "$tb/rbstemsplus-app.zip" -n 1 --scenarios "perf-x perf-y"
@@ -697,8 +731,9 @@ PY' "prepare-fixture.ps1: every stand-in fact a facts.def fact of its kind"
 # vm.sh up: every clone runs with its template's MAC address (one rekordbox seat), never beside the
 # template or another VM with that MAC. A stub tart (TART, TART_HOME): its VMs are folders with a
 # config.json and a state; clone gives the copy a new MAC and run does when the MAC is in use (as
-# tart does), each call logged with the MAC the VM had then; ip fails (vm.sh stops there) unless
-# VS_IP=1
+# tart does), each call logged with the MAC the VM had then and its screen options (--dir left
+# out); with --vnc-experimental it prints its VNC URL as tart does; ip fails (vm.sh stops there)
+# unless VS_IP=1
 vs="$t/vmsh"; mkdir -p "$vs"
 cat > "$vs/tart" <<'STUB'
 #!/bin/bash
@@ -710,7 +745,10 @@ case "$1" in
   clone) cp -R "$V/$2" "$V/$3"; echo stopped > "$V/$3/state"; setmac "$3" "0e:00:00:00:00:0$(ls "$V" | wc -l | tr -d ' ')"; echo "clone $2 $3" >> "$L" ;;
   run) for d in "$V"/*/; do n="$(basename "$d")"; [ "$n" != "$2" ] && [ "$(cat "$d/state")" = running ] && [ "$(mac "$n")" = "$(mac "$2")" ] && setmac "$2" 0e:ff:ff:ff:ff:ff; done
        [ -n "${VS_REGEN:-}" ] && setmac "$2" 0e:ff:ff:ff:ff:fe
-       echo running > "$V/$2/state"; echo "run $2 $(mac "$2")" >> "$L" ;;
+       n="$2"; shift 2; o=""; for a in "$@"; do case "$a" in --dir=*) ;; *) o+=" $a" ;; esac; done
+       # its VNC line only when tart's output is unbuffered (else held until tart exits)
+       case "$o" in *--vnc-experimental*) [ -z "${VS_NOURL:-}" ] && [ "${NSUnbufferedIO:-}" = YES ] && echo "VNC server is running at vnc://:stub-pass@127.0.0.1:5999" ;; esac
+       echo running > "$V/$n/state"; echo "run $n $(mac "$n")$o" >> "$L" ;;
   ip) sleep 0.3; [ -n "${VS_IP:-}" ] && echo 192.0.2.1 ;;
   stop) echo stopped > "$V/$2/state"; echo "stop $2" >> "$L" ;;
   *) echo "tart $*?" >> "$L"; exit 1 ;;
@@ -721,17 +759,18 @@ vsvm() {   # vsvm NAME MAC STATE: a VM of the stub
   mkdir -p "$vs/home/vms/$1"; echo "$3" > "$vs/home/vms/$1/state"
   printf '{"cpuCount": 8, "ecid": "E", "macAddress": "%s", "version": 1}' "$2" > "$vs/home/vms/$1/config.json"
 }
-vsup() {   # vsup CLONE [VAR=VALUE…]: vm.sh up CLONE on the stub, its exit status into rc
-  local c="$1"; shift
+vsup() {   # vsup CLONE [VAR=VALUE…] [-- UP-OPTIONS…]: vm.sh up CLONE on the stub, its exit status into rc
+  local c="$1" e=() o=(); shift
+  while [ $# -gt 0 ]; do [ "$1" = -- ] && { shift; o=("$@"); break; }; e+=("$1"); shift; done
   : > "$vs/tart.log"
-  env "$@" TART="$vs/tart" TART_HOME="$vs/home" VM_STATE="$vs/state" "$root/tests/harness/vm.sh" up "$c" > "$vs/up.out" 2>&1; rc=$?
+  env ${e[@]+"${e[@]}"} TART="$vs/tart" TART_HOME="$vs/home" VM_STATE="$vs/state" "$root/tests/harness/vm.sh" up "$c" ${o[@]+"${o[@]}"} > "$vs/up.out" 2>&1; rc=$?
 }
 vsmac() { python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["macAddress"])' "$vs/home/vms/$1/config.json"; }
 T=f2:29:15:0c:4b:bc
 rm -rf "$vs/home"; vsvm rb26-template "$T" stopped; vsvm dj4-template 0e:12:34:56:78:9a running
 vsup c1
 ok '[ "$rc" = 1 ] && [ "$(cat "$vs/tart.log")" = "clone rb26-template c1
-run c1 $T" ] && [ "$(vsmac c1)" = "$T" ] && grep -q "\"cpuCount\": 8" "$vs/home/vms/c1/config.json" && [ "$(vsmac rb26-template)" = "$T" ]' "vm.sh up: the clone gets its template's MAC address after tart clone and before its start (its other keys kept; another template's VM running beside it is fine)"
+run c1 $T --no-graphics" ] && [ "$(vsmac c1)" = "$T" ] && grep -q "\"cpuCount\": 8" "$vs/home/vms/c1/config.json" && [ "$(vsmac rb26-template)" = "$T" ]' "vm.sh up: the clone gets its template's MAC address after tart clone and before its start (its other keys kept; another template's VM running beside it is fine)"
 echo stopped > "$vs/home/vms/c1/state"; vsvm rb26-template "$T" running
 vsup c2
 ok '[ "$rc" = 3 ] && [ ! -s "$vs/tart.log" ] && [ ! -d "$vs/home/vms/c2" ] && grep -q "rb26-template runs with rb26-template.s MAC address $T: one VM of rb26-template at a time, never beside it" "$vs/up.out"' "vm.sh up: the template running: exit 3, nothing cloned or started"
@@ -740,13 +779,39 @@ vsup c2
 ok '[ "$rc" = 3 ] && [ ! -s "$vs/tart.log" ] && [ ! -d "$vs/home/vms/c2" ] && grep -q "c1 runs with" "$vs/up.out"' "vm.sh up: another clone with the template's MAC running: exit 3, nothing cloned or started"
 echo stopped > "$vs/home/vms/c1/state"; vsvm c3 0e:aa:aa:aa:aa:aa stopped
 vsup c3
-ok '[ "$rc" = 1 ] && [ "$(cat "$vs/tart.log")" = "run c3 $T" ] && [ "$(vsmac c3)" = "$T" ]' "vm.sh up: a clone already there with another MAC address gets the template's before it starts"
+ok '[ "$rc" = 1 ] && [ "$(cat "$vs/tart.log")" = "run c3 $T --no-graphics" ] && [ "$(vsmac c3)" = "$T" ]' "vm.sh up: a clone already there with another MAC address gets the template's before it starts"
 echo stopped > "$vs/home/vms/c3/state"
 vsup c1 VS_REGEN=1 VS_IP=1
-ok '[ "$rc" = 3 ] && [ "$(cat "$vs/tart.log")" = "run c1 0e:ff:ff:ff:ff:fe
+ok '[ "$rc" = 3 ] && [ "$(cat "$vs/tart.log")" = "run c1 0e:ff:ff:ff:ff:fe --no-graphics
 stop c1" ] && grep -q "c1 stopped: it runs with MAC address 0e:ff:ff:ff:ff:fe, not only rb26-template.s $T" "$vs/up.out"' "vm.sh up: tart gave the started clone another MAC address: stopped at once, exit 3 (before SSH)"
 vsup rb26-template
 ok '[ "$rc" = 1 ] && [ ! -s "$vs/tart.log" ] && grep -q "is the template: vm.sh runs clones only" "$vs/up.out"' "vm.sh up: the template itself never started or changed by vm.sh"
+# the screen: headless by default (above: --no-graphics, no window on the owner's Mac); --vnc:
+# tart's VNC server, no window either (--no-graphics with it, or tart opens Screen Sharing), its
+# URL kept before the boot is awaited; --window: tart's window; the MAC pinned in each
+echo stopped > "$vs/home/vms/c1/state"
+vsup c1 -- --vnc
+ok '[ "$rc" = 1 ] && [ "$(cat "$vs/tart.log")" = "run c1 $T --vnc-experimental --no-graphics" ] && [ "$(cat "$vs/state/vnc-url")" = "vnc://:stub-pass@127.0.0.1:5999" ] && [ "$(stat -f %Lp "$vs/state/vnc-url")" = 600 ] && ! grep -q stub-pass "$vs/up.out"' "vm.sh up --vnc: tart's VNC server without a window, its URL kept (tart unbuffered: NSUnbufferedIO) in a 0600 file and not printed, the template's MAC"
+echo stopped > "$vs/home/vms/c1/state"; rm -f "$vs/state/vnc-url"
+vsup c1 VS_NOURL=1 VM_VNC_WAIT=2 -- --vnc
+ok '[ "$rc" = 1 ] && [ "$(cat "$vs/tart.log")" = "run c1 $T --vnc-experimental --no-graphics
+stop c1" ] && grep -q "c1 stopped: tart printed no VNC URL within 2 s" "$vs/up.out" && [ ! -e "$vs/state/vnc-url" ]' "vm.sh up --vnc: no URL from tart in time (60 s; 2 here): the clone stopped"
+echo running > "$vs/home/vms/c1/state"
+vsup c1 -- --vnc
+ok '[ "$rc" = 1 ] && [ ! -s "$vs/tart.log" ] && grep -q "c1 runs already without VNC" "$vs/up.out"' "vm.sh up --vnc: a clone already running headless isn't reused for the owner's clicks"
+echo stopped > "$vs/home/vms/c1/state"
+vsup c1 -- --window
+ok '[ "$rc" = 1 ] && [ "$(cat "$vs/tart.log")" = "run c1 $T" ]' "vm.sh up --window: tart's window (no screen option)"
+vsup c1 -- --usb --vnc
+ok '[ "$rc" = 1 ] && [ ! -s "$vs/tart.log" ] && grep -q "no --vnc or --window with it" "$vs/up.out"' "vm.sh up --usb --vnc: refused (vm-usb.swift has its own window)"
+vsup c1 -- --bogus
+ok '[ "$rc" = 1 ] && [ ! -s "$vs/tart.log" ] && grep -q "unknown option --bogus" "$vs/up.out"' "vm.sh up: an unknown option refused, nothing started"
+echo "vnc://x" > "$vs/state/vnc-url"; echo c1 > "$vs/state/clone"
+TART="$vs/tart" TART_HOME="$vs/home" VM_STATE="$vs/state" "$root/tests/harness/vm.sh" down > /dev/null 2>&1
+ok '[ ! -e "$vs/state/vnc-url" ] && [ "$(cat "$vs/home/vms/c1/state")" = stopped ]' "vm.sh down: the VNC URL forgotten with the VM"
+
+# netguard.sh, the night lanes' network wrapper: its own test (fakes only, no network, no ntfy)
+ok '"$root/tests/harness/netguard-test.sh" > "$t/netguard.out" 2>&1' "netguard-test.sh (its log: build/harness/selftest/netguard.out)"
 
 echo "selftest: $pass passed, $fail failed"
 [ "$fail" = 0 ]

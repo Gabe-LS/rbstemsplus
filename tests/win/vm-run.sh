@@ -3,18 +3,34 @@
 # rb-win-template, from a named snapshot, without a window on the owner's screen; the successor of
 # tests/win/probes/winps.sh. Only rb-win-template is ever driven: the owner's "Windows 11" VM is
 # refused by name. Must run outside the Mac sandbox (prlctl can't read the process list inside it).
+# VMRUN_VM=NAME drives another of the test VMs instead (a clone such as rb-win-hand), found by its
+# name and checked to bear it; never "Windows 11", and --record then needs VMRUN_GATES (a record
+# is rb-win-template's only). Each VM has its own lock and HTTP(S) port (rb-win-template 8766, any
+# other VM 8767; VMRUN_HTTP_PORT sets another), so runs on rb-win-template and on one other VM go
+# side by side: each run's job and results folders are its own (<run> names the time, the suite,
+# a VM other than rb-win-template and the pid), and stage and check wait for no run on any VM
+# (every run holds the share's flock .vm-run.share shared, they hold it alone). The Windows TEST
+# app downloads from the https:// URL it was built with (build.sh --win-test, 8766): on a VM
+# served at 8767 the one-liner's downloads come from that VM's server, the app's own (Stems
+# Cache's bridge, the update check) from rb-win-template's port, so the suites that need the
+# app's downloads (worker, restore, update) run on rb-win-template, or with a TEST build made for
+# 8767.
 #
 #   tests/win/vm-run.sh run SNAPSHOT SUITE [OPTIONS]
-#       reverts to SNAPSHOT (its name, or its {id}), switches Pause idle off, starts the VM and
-#       waits for `cmd /c ver`; copies hidden.exe in; serves the TEST build over HTTP; runs SUITE's
-#       steps (tests/win/suites/SUITE.suite, or a path) as SYSTEM or as the logged-in user, each
-#       with its own timeout; collects every step's output and status into
-#       build/win/results/<run>/; stops the VM and reverts it to SNAPSHOT again.
+#       reverts to SNAPSHOT (its name, or its {id}), switches Pause idle off, shares the main
+#       checkout's build/win as \\Mac\win (and nothing else), starts the VM and waits for
+#       `cmd /c ver` and for the share; copies hidden.exe in; serves the TEST build over HTTP;
+#       runs SUITE's steps (tests/win/suites/SUITE.suite, or a path) as SYSTEM or as the
+#       logged-in user, each with its own timeout; collects every step's output and status into
+#       build/win/results/<run>/; stops the VM, reverts it to SNAPSHOT again and stops it (a
+#       snapshot taken running comes back running).
 #       Exit 0: every step passed; 1: a step failed or timed out; 2: the run couldn't start or
 #       the VM couldn't be driven (said).
-#     --serve DIR   the folder served at http://10.211.55.2:8766/ (default build/win/dist-test:
+#     --serve DIR   the folder served at http://10.211.55.2:PORT/ (default build/win/dist-test:
 #                   the TEST build, scripts/build.sh --test http://10.211.55.2:8766/); inside the
 #                   share build/win only. Served when it exists; a suite with "need http" needs it
+#     --arch ARCH   select arm64 or x64 on a matching guest, or x64-prism on ARM64. With no
+#                   selection, suites keep their usual architecture coverage.
 #     --record      a release run (I76): build/gates/<commit>/vm-win/<suite>@<snapshot id>-<arch>.ok
 #                   when every step passed (else .failed; a rerun of the same suite, snapshot and
 #                   architecture replaces only that pair), with the commit, the suite, the
@@ -32,46 +48,87 @@
 #                   `stage --build` from HEAD (vm/.commit). HEAD's tests/win/suites and vm-run.sh
 #                   are frozen into the run's results folder (src/, by git archive) before the suite
 #                   is read: the run parses, hashes and runs those bytes, never the checkout's
-#                   (VX3, VX4). VMRUN_PRLCTL or VMRUN_UUID (test variables) need VMRUN_GATES too
-#     --keep        leave the VM running after the steps (no stop, no revert): for diagnostics
+#                   (VX3, VX4). VMRUN_PRLCTL, VMRUN_UUID (test variables) or VMRUN_VM need VMRUN_GATES too
+#     --keep        leave the VM running after the steps (no stop, no revert): for diagnostics;
+#                   a need-usb stick is taken back all the same (usb attach gives it again)
 #   tests/win/vm-run.sh check COMMIT [DIR]
-#       the check release.sh's step 4b runs: every row of tests/win/suites/release.list (as
-#       committed in COMMIT: SUITE ARCH SNAPSHOT) has one passing record for COMMIT and for the
-#       payload.json in DIR (default dist-test/ of this checkout), whose scripts are COMMIT's, and
-#       no failed one; a record passes when its arch, stage_commit, steps (COMMIT's suite's, in
-#       order, each PASS 0), candidates (served ... COMMIT) and, for a need vm suite, vm_commit
-#       are COMMIT's; then it writes build/gates/COMMIT/vm-win.ok (the rows and their records).
+#       the check release.sh's step 4b runs: each row in COMMIT's release.list needs a passing
+#       record for COMMIT and DIR/payload.json (default dist-test/). The worker row needs the real
+#       PC's pc-win.ok. Each other row needs one VM record and no failed one. A VM record passes
+#       when its arch, stage_commit, steps (COMMIT's suite's, in order, each PASS 0), candidates
+#       (served ... COMMIT) and, for a need vm suite, vm_commit are COMMIT's. On success it writes
+#       build/gates/COMMIT/vm-win.ok (the rows and their records).
 #       Exit 0 then, else 1 (said, and no vm-win.ok; a row with no suite yet is "no record").
-#       Under the share's lock: 2 while a run holds it (said)
-#   tests/win/vm-run.sh sys|user|user-high|user-signed [SECS] < SCRIPT.ps1
+#       Under the share's lock: 2 while a run on any VM holds it (said)
+#   tests/win/vm-run.sh check-vm COMMIT [DIR]
+#       first-run.sh's diagnostic, checking VM records for all rows without writing a release summary
+#   tests/win/vm-run.sh sys|user|user-high|user-signed|user-signed-high [SECS] < SCRIPT.ps1
 #       one script in the running VM, no revert (winps.sh's job): as SYSTEM (prlctl exec, no
 #       window), or as the logged-in user through a scheduled task and C:\rbtest\hidden.exe
 #       (user; user-high: with the user's full token), or through Windows' own conhost.exe
-#       --headless (user-signed: runs when Smart App Control blocks our unsigned hidden.exe).
+#       --headless (user-signed: runs when Smart App Control blocks our unsigned hidden.exe;
+#       user-signed-high: the signed launcher with the user's full token).
 #       SECS: the timeout (default 600). Exit: the script's status, 124 on a timeout
-#   tests/win/vm-run.sh stage [--build]
+#       sys|user-signed SECS --rbkit [IDLE] uses the rekordbox kit's prepared console account
+#       (VMRUN_RBKIT_USER, default rbtest) and C:\rbkit-vm for user output. SECS may be up to
+#       3600; IDLE is for user-signed only.
+#   tests/win/vm-run.sh server-address
+#       prints the configured TEST server HOST:PORT on the Mac, with no VM access.
+#   tests/win/vm-run.sh stage [--build] [--serve DIR]
 #       what the suites read from the share: repo/ (HEAD's scripts, tests/win, core/texts.def,
-#       win/c/aumid.h; repo/.commit names HEAD, repo/shas.txt lists them) and vm/<arch>/ (the
-#       test exes this checkout has built, x64 and arm64, and fixtures.txt; vm/shas.txt lists
-#       them), replaced whole; and the TEST build's fixture releases in dist-test/
-#       (stage-dist.sh) when it is there. --build: win/c/tests/run.sh, common/tests/win.sh and
-#       the core DLL's test-hooks build first, and vm/.commit names HEAD when the checkout was
-#       clean and HEAD didn't move. Says what is still missing
+#       win/c/aumid.h, win/c/afterexit.h; repo/.commit names HEAD, repo/shas.txt lists them) and vm/<arch>/ (the
+#       test exes this checkout has built, x64 and arm64, sysdesk.exe among them, and
+#       fixtures.txt) with vm/uia/rbui/ (the UI driver, tests/win/uia/build.sh; vm/shas.txt lists
+#       them all), replaced whole; and the TEST build's fixture releases in dist-test/
+#       (stage-dist.sh) when it is there. --build: win/c/tests/run.sh, common/tests/win.sh, the
+#       core DLL's test-hooks build and tests/win/uia/build.sh first, and vm/.commit names HEAD
+#       when the checkout was clean and HEAD didn't move. --serve DIR: the fixture releases are
+#       made in DIR too (a TEST build in the share that run --serve DIR serves). Says what is
+#       still missing
+#   tests/win/vm-run.sh snapshot NAME
+#       a snapshot of the VM as it is now (running or stopped), named NAME: refused when one of that
+#       name is there already, or while a run drives the VM (as "SAC On" after sac.suite --keep)
+#   tests/win/vm-run.sh usb attach|detach
+#       the USB stick vm-run.conf assigns to this VM (below) given to it (prlsrvctl usb set: it
+#       connects when the VM starts, or when the stick is plugged in) or taken back (usb del);
+#       exit 77 when none is assigned (never guessed from prlsrvctl usb list)
 #   tests/win/vm-run.sh selftest
 #       tests/win/vm-run-test.sh: everything above against a fake prlctl (no VM)
 #
+# The host facts no script may guess, in the main checkout's .orchestration/vm-run.conf
+# (git-excluded; VMRUN_CONF names another), one a line, '#' a comment:
+#   usb VM DEVICE-ID       the stick left in a Mac port for VM (its name, no spaces), DEVICE-ID as
+#                          prlsrvctl usb list prints it: a suite that says "need usb" gets it
+#   usb-reader VM DEVICE-ID  the empty USB card reader for a suite that says "need usb-reader"
+#                          assigned before the VM starts, and taken back when the run ends
+#   github allowed         Little Snitch lets Parallels reach github.com,
+#                          release-assets.githubusercontent.com (where GitHub's 302 points
+#                          today) and objects.githubusercontent.com (the owner's one-time rules): the steps
+#                          that fetch from GitHub run instead of SKIP
+# What a run read there it says to the steps in its job folder (\\Mac\win\job\<run>\):
+# usb.assigned, usb-reader.assigned (device ids) and github.allowed.
+#
 # A suite (tests/win/suites/*.suite) has one step per line, '#' starts a comment:
-#   MODE SECS NAME SCRIPT        MODE sys|user|user-high|user-signed; SECS at most 600; NAME
+#   MODE SECS NAME SCRIPT        MODE sys|user|user-high|user-signed|user-signed-high; SECS at most 600; NAME
 #                                [A-Za-z0-9._-]; SCRIPT a .ps1 relative to the suite's folder
+#   wait SECS NAME logon         after a step that signed the user out or restarted Windows
+#                                (vmlib's Start-Logoff/Start-Restart, which write
+#                                C:\rbtest\signout.mark first): waits at most SECS for the VM to
+#                                answer and the user to be signed in again (an explorer.exe started
+#                                after the mark: vmlib's Set-AutoLogon's); PASS then, TIMEOUT after SECS, FAIL
+#                                without the mark
 #   need http                    the run refuses to start without the served folder
 #   need file REL                ... without the file REL in the share (repo/..., vm/x64/...)
 #   need candidate REL           ... and REL, a payload.json, is this commit's release (--record)
 #   need fixture REL             ... and REL is an older or made-up release (recorded as it is)
 #   need vm                      the steps run vm/'s test exes (--record: built from HEAD)
+#   need usb                     vm-run.conf's stick for this VM assigned before the VM starts
+#                                (none assigned: the run goes on, the step that needs it SKIPs)
+#   need usb-reader              the same for vm-run.conf's empty card reader
 #   include SCRIPT               SCRIPT (beside the suite) goes in front of every step's script
 # Each step's script runs with these lines first: $ProgressPreference = 'SilentlyContinue' and
-# $VmRun = @{ Url; Run; Share; Results; Step; Secs } (the served URL, the run's id, \\Mac\win, the
-# run's results folder as the VM sees it, the step's name, its timeout), then the suite's
+# $VmRun = @{ Url; Run; Share; Results; Step; Secs; TestArch } (the served URL, the run's id,
+# \\Mac\win, the results folder, the step's name, timeout and selected test arch), then the suite's
 # includes. The step
 # runs as a child powershell.exe of a host-written wrapper (N-NAME.wrap.ps1), whose last line
 # "vm-run-exit RUN N CODE" carries its exit code (none, or one outside 0..255, is 1): the host
@@ -85,26 +142,47 @@
 # sometimes fails with "PrlJob_GetResult/GetRetCode: Invalid argument" having run nothing, so a
 # start is tried 3 times; the snapshots have Pause idle on, and a paused VM hangs prlctl exec, so
 # it is switched off after every revert; hidden.exe isn't in the snapshots, so it is copied in
-# after every revert; files the VM writes to the share are root's on the Mac, so the VM writes
-# only C:\rbtest and the host collects. Every wait is bounded, at most 10 minutes.
+# after every revert; a snapshot brings back the host sharing it was taken with ("clean Windows" has
+# none), so the share is set after every revert; it brings back Guest Shared Folders too, and each
+# revert then left an empty root-owned "/Volumes/[C] <vm>*.hidden" folder on the Mac, so guest
+# sharing is switched off after every revert (and a run warns of any new one); files the VM writes
+# to the share are root's on the Mac, so the VM writes only C:\rbtest and the host collects. Every wait is bounded, at most 10 minutes.
 set -uo pipefail
 here="$(cd "$(dirname "$0")/../.." && pwd)"
 root="${VMRUN_ROOT:-$here}"                                   # the checkout a record names
 self="$(perl -MCwd -e 'print Cwd::abs_path($ARGV[0])' "${BASH_SOURCE[0]}")"   # this runner (VX7)
 PRLCTL="${VMRUN_PRLCTL:-prlctl}"
 DEFAULT_UUID=202a80c8-4bc4-4e95-890e-a31d6bfd5b70           # rb-win-template: the one a record may name (VX8)
-UUID="${VMRUN_UUID:-$DEFAULT_UUID}"
-NAME=rb-win-template
+NAME="${VMRUN_VM:-rb-win-template}"
+# another VM by its name (prlctl takes a name for a uuid); vm_guard puts its uuid in once read
+if [ -n "${VMRUN_UUID:-}" ]; then UUID="$VMRUN_UUID"
+elif [ "$NAME" = rb-win-template ]; then UUID="$DEFAULT_UUID"
+else UUID="$NAME"; fi
 OWNERS_VM='Windows 11'
+# in a run's id (its job and results folders): a VM other than rb-win-template, by its name
+VMTAG=""; [ "$NAME" = rb-win-template ] || VMTAG="-${NAME//[^A-Za-z0-9._-]/_}"
 # the VM shares only the main checkout's build/win (\\Mac\win), also from a worktree
 SHARE="${VMRUN_SHARE:-$(cd "$(git -C "$here" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/build/win}"
 GATES="${VMRUN_GATES:-$root/build/gates}"
+# the host facts (the header): the main checkout's .orchestration/vm-run.conf
+CONF="${VMRUN_CONF:-$(cd "$(git -C "$here" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/.orchestration/vm-run.conf}"
+PRLSRVCTL="${VMRUN_PRLSRVCTL:-prlsrvctl}"
 SUITES="$here/tests/win/suites"
 BIND="${VMRUN_HTTP_BIND:-10.211.55.2}"      # the Mac on the VM's shared network
-PORT="${VMRUN_HTTP_PORT:-8766}"
+# the VM's own port, so two VMs' runs serve side by side: rb-win-template's is the one the TEST
+# builds name (build.sh --test http://10.211.55.2:8766/), any other VM's 8767
+if [ "$NAME" = rb-win-template ]; then PORT=8766; else PORT=8767; fi
+PORT="${VMRUN_HTTP_PORT:-$PORT}"
+# the Windows TEST app downloads over HTTPS from the same host and port (build.sh --win-test): the
+# server certificate build.sh keeps beside the share (build/test-keys/win-tls), when it is there
+TLS="${VMRUN_TLS:-$(dirname "$SHARE")/test-keys/win-tls}"
 LIMIT=600                                   # the longest wait of any kind, in seconds
+ONE_RBKIT=false ONE_IDLE=0                    # only enabled inside cmd_one
+RBKIT_USER="${VMRUN_RBKIT_USER:-rbtest}"      # --rbkit: the account signed in at the VM console
 BOOT="${VMRUN_BOOT:-600}"                   # how long the VM may take to answer `cmd /c ver`
 POLL="${VMRUN_POLL:-5}"                     # seconds between the boot probes
+SHAREWAIT="${VMRUN_SHAREWAIT:-120}"         # how long the VM may take to see a file on \\Mac\win
+VOLUMES="${VMRUN_VOLUMES:-/Volumes}"        # where the Mac mounts a VM's guest shares ([C] <vm>*.hidden)
 stop() { echo "vm-run.sh: $*" >&2; exit 2; }
 say() { echo "[$(date +%H:%M:%S)] $*"; }
 sha() { shasum -a 256 "$1" | cut -c1-64; }
@@ -144,11 +222,15 @@ vm_info() { bounded 60 "$PRLCTL" list -i "$UUID" 2> /dev/null || stop "prlctl li
 vm_field() { sed -n "s/^[[:space:]]*$1:[[:space:]]*//p" <<< "$2" | head -1; }
 # the one VM this script drives: by its uuid, and its name must be rb-win-template
 vm_guard() {
-  local info n
+  local info n id
+  [ "$NAME" != "$OWNERS_VM" ] || stop "VMRUN_VM is the owner's VM \"$OWNERS_VM\": never driven"
   info="$(vm_info)" || exit 2
   n="$(vm_field Name "$info")"
   [ "$n" != "$OWNERS_VM" ] || stop "$UUID is the owner's VM \"$OWNERS_VM\": never driven"
   [ "$n" = "$NAME" ] || stop "$UUID is \"$n\", not $NAME"
+  # a VM named by VMRUN_VM: from here on by its uuid
+  id="$(vm_field ID "$info")"; id="${id//[\{\}]/}"
+  [[ ! "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || UUID="$id"
 }
 vm_state() { vm_field State "$(vm_info)"; }
 
@@ -193,13 +275,102 @@ exec_sys() {
   return "$rc"
 }
 
-# revert SNAPSHOT-ID: switch, Pause idle off, started (or resumed), answering `cmd /c ver`
+# shares INFO: the host folders the VM shares, as prlctl list -i gives them: "NAME|+ or -|PATH" a line
+shares() {
+  sed -n '/^Host Shared Folders:/,/^Host defined sharing:/p' <<< "$1" \
+    | sed -n "s/^[[:space:]]\{1,\}\(.*\) (\([+-]\)) path='\(.*\)' mode='[a-z]*'\$/\1|\2|\3/p"
+}
+# same_dir A B: A (~ the home folder) and B are one existing folder
+same_dir() {
+  local a b
+  a="$(cd "${1/#\~/$HOME}" 2> /dev/null && pwd -P)" && b="$(cd "$2" 2> /dev/null && pwd -P)" && [ -n "$a" ] && [ "$a" = "$b" ]
+}
+# wide_sharing INFO: true when the VM shares the Mac's home or all its disks
+wide_sharing() { case "$(vm_field 'Host defined sharing' "$1")" in Off|Unknown|'') return 1 ;; esac; }
+# share_on: the VM shares the one host folder $SHARE, as "win" (\\Mac\win), and nothing else. A
+# snapshot brings back the sharing it was taken with ("clean Windows" has none), so this runs after
+# every revert. Host sharing switched on while the VM runs takes effect only at its next stop, but a
+# share added then is seen by the guest at once (share_seen waits for it). --shf-host-defined off
+# switches host sharing off as a whole, so a VM sharing home or all disks is refused instead
+share_on() {
+  local info n e p ok=0
+  info="$(vm_info)" || exit 2
+  ! wide_sharing "$info" || stop "the VM shares more than build/win (Host defined sharing: $(vm_field 'Host defined sharing' "$info")): narrow it by hand"
+  while IFS='|' read -r n e p; do
+    [ -n "$n" ] || continue
+    if [ "$n" = win ] && [ "$ok" = 0 ] && same_dir "$p" "$SHARE"; then
+      ok=1
+      [ "$e" = + ] || bounded 60 "$PRLCTL" set "$UUID" --shf-host-set win --enable > /dev/null || stop "the VM's share win couldn't be enabled"
+    else
+      bounded 60 "$PRLCTL" set "$UUID" --shf-host-del "$n" > /dev/null || stop "the VM's share \"$n\" ($p) couldn't be removed"
+    fi
+  done <<< "$(shares "$info")"
+  [ "$ok" = 1 ] || bounded 60 "$PRLCTL" set "$UUID" --shf-host-add win --path "$SHARE" --mode rw > /dev/null \
+    || stop "the share win ($SHARE) couldn't be added to the VM"
+  [ "$(vm_field 'Host Shared Folders' "$info")" = '(+)' ] || bounded 60 "$PRLCTL" set "$UUID" --shf-host on > /dev/null \
+    || stop "the VM's host sharing couldn't be switched on"
+  info="$(vm_info)" || exit 2
+  IFS='|' read -r n e p <<< "$(shares "$info")"
+  [ "$(shares "$info" | grep -c .)" = 1 ] && [ "$n" = win ] && [ "$e" = + ] && same_dir "$p" "$SHARE" \
+    || stop "the VM's shares aren't win ($SHARE) alone: $(shares "$info" | tr '\n' ' ')"
+  ! wide_sharing "$info" || stop "the VM shares more than build/win"
+  # Host Shared Folders isn't read back here: on a stopped VM (a snapshot taken shut down, as a
+  # linked clone's) Parallels 27 still says (-) after --shf-host on until the VM has run, yet the
+  # guest sees the share once started. share_seen, after the start, is the check that counts
+}
+# share_seen GUESTPATH: the guest sees GUESTPATH (on \\Mac\win) within $SHAREWAIT s
+share_seen() {
+  local t0; t0=$(date +%s)
+  while :; do
+    bounded 30 "$PRLCTL" exec "$UUID" cmd /c dir /b "$1" > /dev/null 2>&1 && return 0
+    [ $(( $(date +%s) - t0 )) -lt "$SHAREWAIT" ] || stop "the VM doesn't see $1 within $SHAREWAIT s (the share \\\\Mac\\win)"
+    sleep "$POLL"
+  done
+}
+
+# guest_off: the VM's Guest Shared Folders off (a snapshot brings them back); a warning when it fails
+guest_off() {
+  bounded 60 "$PRLCTL" set "$UUID" --shf-guest off > /dev/null \
+    || echo "vm-run.sh: warning: the VM's guest sharing couldn't be switched off (prlctl set $UUID --shf-guest off)" >&2
+}
+# hidden_vols: the Mac's "$VOLUMES/[C] $NAME*.hidden" entries, one per line ([C] literal); listing
+# $VOLUMES needs no sudo, the root-owned folders themselves aren't opened
+hidden_vols() {
+  local f
+  for f in "$VOLUMES/[C] $NAME"*.hidden; do [ -e "$f" ] && printf '%s\n' "$f"; done
+  return 0
+}
+HIDDEN_BEFORE=""; HIDDEN_CHECK=0
+# hidden_report: any "[C] $NAME*.hidden" entry that wasn't there before the run, as a warning
+hidden_report() {
+  local f
+  [ "$HIDDEN_CHECK" = 1 ] || return 0
+  HIDDEN_CHECK=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    grep -qxF -- "$f" <<< "$HIDDEN_BEFORE" \
+      || echo "vm-run.sh: warning: $f appeared during the run (an empty root-owned folder of the VM's guest sharing: sudo rmdir it by hand)" >&2
+  done <<< "$(hidden_vols)"
+  return 0
+}
+
+# revert SNAPSHOT-ID: switch, Pause idle off, the share on, started (or resumed), answering `cmd /c ver`
 revert() {
   local st t0
   say "revert to $1"
   bounded "$LIMIT" "$PRLCTL" snapshot-switch "$UUID" -i "$1" > /dev/null || stop "prlctl snapshot-switch $1 failed"
+  guest_off
   bounded 60 "$PRLCTL" set "$UUID" --pause-idle off > /dev/null || stop "Pause idle couldn't be switched off (prlctl exec would hang)"
+  share_on
   st="$(vm_state)"
+  # the run's USB stick (need usb) connects as the VM starts: a snapshot taken running comes back
+  # from memory, never through a start, so it is stopped first and started cold
+  if [ -n "$USB_WANT$USB_READER_WANT" ] && [ "$st" != stopped ]; then
+    halt || stop "the VM couldn't be stopped for a cold start (USB assignment)"
+    st=stopped
+  fi
+  [ -z "$USB_WANT" ] || usb_set "$USB_WANT"
+  [ -z "$USB_READER_WANT" ] || usb_set "$USB_READER_WANT"
   case "$st" in
     running) ;;
     stopped) bounded "$LIMIT" "$PRLCTL" start "$UUID" > /dev/null || stop "prlctl start failed" ;;
@@ -221,6 +392,52 @@ halt() {
   bounded 180 "$PRLCTL" stop "$UUID" > /dev/null 2>&1 || bounded 60 "$PRLCTL" stop "$UUID" --kill > /dev/null 2>&1 \
     || { echo "vm-run.sh: the VM couldn't be stopped" >&2; return 1; }
 }
+# restore SNAPSHOT-ID: the VM stopped, reverted, and stopped again (a snapshot taken while the VM
+# ran, as "clean Windows", comes back running); bounded
+restore() {
+  halt || return 1
+  bounded "$LIMIT" "$PRLCTL" snapshot-switch "$UUID" -i "$1" > /dev/null || { echo "vm-run.sh: the revert to $1 failed" >&2; return 1; }
+  guest_off
+  halt
+}
+
+# ---- the host facts (vm-run.conf) and the USB stick -------------------------------------------
+
+# conf_usb [usb|usb-reader]: the device id vm-run.conf assigns to this VM ("" for none)
+conf_usb() {
+  local id
+  [ -f "$CONF" ] || return 0
+  id="$(awk -v vm="$NAME" -v kind="${1:-usb}" '{ sub(/#.*/, "") } $1 == kind && $2 == vm && NF == 3 { print $3; exit }' "$CONF")"
+  # an argument of prlsrvctl's: never an option
+  [[ "$id" != -* ]] || stop "$CONF: the USB device id \"$id\" for $NAME starts with -"
+  printf '%s' "$id"
+}
+# conf_github: Little Snitch lets the VM reach GitHub ("github allowed")
+conf_github() { [ -f "$CONF" ] && awk '{ sub(/#.*/, "") } $1 == "github" && $2 == "allowed" && NF == 2 { f = 1 } END { exit !f }' "$CONF"; }
+USB_WANT=""   # the stick a run's suite needs (need usb), from vm-run.conf
+USB_READER_WANT=""
+USB_ON=()     # the devices this process assigned to the VM: taken back by cleanup
+# usb_set ID: ID assigned to the VM (it connects when the VM starts or the stick is plugged in)
+usb_set() {
+  # ours from before the call: a set that times out or is interrupted is still taken back
+  USB_ON+=("$1")
+  bounded 60 "$PRLSRVCTL" usb set "$1" "$UUID" > /dev/null || stop "prlsrvctl usb set $1 $UUID failed (is the device plugged into the Mac? prlsrvctl usb list)"
+  say "the USB device $1 is assigned to $NAME"
+}
+# usb_del: take back each assigned device (prlsrvctl usb del), retaining failures for cleanup
+usb_del() {
+  local id bad=0 left=()
+  for id in ${USB_ON[@]+"${USB_ON[@]}"}; do
+    if bounded 60 "$PRLSRVCTL" usb del "$id" > /dev/null; then
+      say "the USB device $id is no longer assigned to $NAME"
+    else
+      echo "vm-run.sh: the USB device $id couldn't be taken back from $NAME: prlsrvctl usb del $id by hand" >&2
+      left+=("$id"); bad=1
+    fi
+  done
+  USB_ON=(${left[@]+"${left[@]}"})
+  return "$bad"
+}
 
 # ---- steps ------------------------------------------------------------------------------------
 
@@ -230,8 +447,8 @@ q() { local s=${1//\'/\'\'}; printf "'%s'" "$s"; }
 prelude() {
   printf '$ProgressPreference = %s\n' "$(q SilentlyContinue)"
   printf 'try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { }\n'
-  printf '$VmRun = @{ Url = %s; Run = %s; Share = %s; Results = %s; Step = %s; Secs = %d }\n' \
-    "$(q "$URL")" "$(q "$RUN")" "$(q '\\Mac\win')" "$(q "\\\\Mac\\win\\results\\$RUN")" "$(q "$1")" "${2:-600}"
+  printf '$VmRun = @{ Url = %s; Run = %s; Share = %s; Results = %s; Step = %s; Secs = %d; TestArch = %s }\n' \
+    "$(q "$URL")" "$(q "$RUN")" "$(q '\\Mac\win')" "$(q "\\\\Mac\\win\\results\\$RUN")" "$(q "$1")" "${2:-600}" "$(q "${test_arch:-}")"
 }
 
 # wrapper N GUESTSTEP: what prlctl (or the user's scheduled task) runs for step N: the step's script
@@ -278,19 +495,23 @@ verdict() {
 # through a scheduled task, waits for it at most SECS, prints its output and exits with its status
 launcher() {
   printf '$mode = %s; $job = %s; $out = %s; $secs = %d; $task = %s\n' "$(q "$1")" "$(q "$2")" "$(q "$3")" "$4" "$(q "rbstems-run-$RUN")"
+  printf '$rbkit = $%s; $idle = %d; $rbkitUser = %s\n' "${ONE_RBKIT:-false}" "${ONE_IDLE:-0}" "$(q "$RBKIT_USER")"
   cat <<'EOF'
 $ProgressPreference = 'SilentlyContinue'
 # the job's log passed on as UTF-8 (the Mac's log is UTF-8)
 try { [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false } catch { }
-New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
-Remove-Item $out, "$out.done" -ErrorAction SilentlyContinue
 $user = (Get-CimInstance Win32_ComputerSystem).UserName
 if (-not $user) { 'vm-run: nobody is logged in'; exit 3 }
+if ($rbkit -and $user -ne "$env:COMPUTERNAME\$rbkitUser") { "vm-run: $rbkitUser must be logged in at the console"; exit 3 }
+if ($rbkit -and -not (Test-Path -LiteralPath (Split-Path $out) -PathType Container)) { 'vm-run: prepare C:\rbkit-vm first'; exit 3 }
+New-Item -ItemType Directory -Force (Split-Path $out) | Out-Null
+Remove-Item $out, "$out.done" -ErrorAction SilentlyContinue
 # the run's own task (rbstems-run-<run>), never another run's; one still "running" (a program it
 # started lives on) would ignore the new start: ended first
 Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
 $ps = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass"
-if ($mode -eq 'user-signed') {
+$signed = $mode -in 'user-signed', 'user-signed-high'
+if ($signed) {
   # the job's exit code into .done, as hidden.exe writes it: always (finally), 1 when it failed
   # without one or threw
   $cmd = "`$c = 1; try { & '$job' *> '$out'; `$c = `$LASTEXITCODE; if (`$null -eq `$c) { `$c = 1 } } catch { `$c = 1 } finally { Set-Content '$out.done' `$c }"
@@ -299,7 +520,7 @@ if ($mode -eq 'user-signed') {
   if (-not (Test-Path 'C:\rbtest\hidden.exe')) { 'vm-run: C:\rbtest\hidden.exe is missing'; exit 3 }
   $a = New-ScheduledTaskAction -Execute 'C:\rbtest\hidden.exe' -Argument "$out $ps -File $job"
 }
-if ($mode -eq 'user-high') { $p = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest }
+if ($mode -in 'user-high', 'user-signed-high') { $p = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest }
 else { $p = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive }
 $s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Seconds ($secs + 60))
 $code = 1
@@ -307,13 +528,22 @@ try {
   Register-ScheduledTask -TaskName $task -Action $a -Principal $p -Settings $s -Force | Out-Null
   Start-ScheduledTask -TaskName $task
   $t = 0
-  while (-not (Test-Path "$out.done") -and $t -lt (2 * $secs)) { Start-Sleep -Milliseconds 500; $t++ }
+  $lastChange = 0; $length = -1; $silent = $false
+  while (-not (Test-Path "$out.done") -and $t -lt (2 * $secs)) {
+    Start-Sleep -Milliseconds 500; $t++
+    if ($idle) {
+      $log = Get-Item -LiteralPath $out -ErrorAction SilentlyContinue
+      if ($log -and $length -ne $log.Length) { $length = $log.Length; $lastChange = $t }
+      if ($t - $lastChange -ge (2 * $idle)) { $silent = $true; break }
+    }
+  }
   # hidden.exe's log is the wrapper's UTF-8 output; user-signed's (*>) is UTF-16 with a BOM,
   # which Get-Content finds by itself
-  if (Test-Path $out) { if ($mode -eq 'user-signed') { Get-Content $out } else { Get-Content $out -Encoding UTF8 } }
+  if (Test-Path $out) { if ($signed) { Get-Content $out } else { Get-Content $out -Encoding UTF8 } }
   if (-not (Test-Path "$out.done")) {
     Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue
-    "vm-run: TIMEOUT waiting for the user job ($secs s)"; $code = 124
+    if ($silent) { "RB-KIT: no output for $idle s"; $code = 142 }
+    else { "vm-run: TIMEOUT waiting for the user job ($secs s)"; $code = 124 }
   } else {
     # the job's code, 1 when it is unreadable or outside 0..255 (-196608, or a multiple of 256,
     # would reach the Mac as 0)
@@ -323,6 +553,7 @@ try {
   }
 } finally {
   Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+  if ($rbkit) { Remove-Item -LiteralPath $out, "$out.done" -Force -ErrorAction SilentlyContinue }
 }
 exit ([int]$code)
 EOF
@@ -332,16 +563,57 @@ EOF
 # wrapper N-NAME.wrap.ps1; a user step's launcher), run; output to stdout; status (see verdict)
 step() {
   local inc mode="$1" secs="$2" name="$3" body="$4" n="$5" jobs="$SHARE/job/$RUN" g="\\\\Mac\\win\\job\\$RUN"
+  local guest_out="C:\\rbtest\\job\\$RUN\\$n-$name.txt"
   mkdir -p "$jobs" || return 2
-  { prelude "$name" "$secs"; while IFS= read -r inc; do [ -z "$inc" ] || cat "$inc"; done <<< "${INCLUDES:-}"; cat "$body"; } > "$jobs/$n-$name.ps1" || return 2
+  {
+    if [ "${ONE_RBKIT:-false}" = true ]; then printf '\357\273\277'; fi
+    prelude "$name" "$secs"
+    while IFS= read -r inc; do [ -z "$inc" ] || cat "$inc"; done <<< "${INCLUDES:-}"
+    cat "$body"
+  } > "$jobs/$n-$name.ps1" || return 2
   wrapper "$n" "$g\\$n-$name.ps1" > "$jobs/$n-$name.wrap.ps1" || return 2
   if [ "$mode" = sys ]; then
     exec_sys "$g\\$n-$name.wrap.ps1" "$secs"
     return
   fi
-  launcher "$mode" "$g\\$n-$name.wrap.ps1" "C:\\rbtest\\job\\$RUN\\$n-$name.txt" "$secs" > "$jobs/$n-$name.launch.ps1" || return 2
+  if [ "${ONE_RBKIT:-false}" = true ]; then guest_out="C:\\rbkit-vm\\$RUN.txt"; fi
+  launcher "$mode" "$g\\$n-$name.wrap.ps1" "$guest_out" "$secs" > "$jobs/$n-$name.launch.ps1" || return 2
   # the launcher's own wait is SECS; prlctl gets a minute more to register, collect and return
   exec_sys "$g\\$n-$name.launch.ps1" "$((secs + 60))"
+}
+
+# wait_logon SECS N NAME: step N, "wait SECS NAME logon": a probe as SYSTEM, every POLL seconds for
+# at most SECS (each bounded to 60 s: a guest going down can hang prlctl exec), until a user is
+# signed in again after C:\rbtest\signout.mark's time (an explorer.exe in a user session started
+# after it): its last line then "vm-run-exit RUN N 0", status 0. No mark: "... 3", status 3 at once
+# (FAIL: the step before signed nobody out). After SECS: 124 (TIMEOUT). A failed exec (the VM
+# restarting) is tried again
+wait_logon() {
+  local t0 rc out f="$SHARE/job/$RUN/$2-$3.wait.ps1" g="\\\\Mac\\win\\job\\$RUN\\$2-$3.wait.ps1"
+  mkdir -p "$SHARE/job/$RUN" || return 2
+  cat > "$f" <<'EOF' || return 2
+# vm-run-wait (tests/win/vm-run.sh): signed in again since the sign-out mark? Core types only, so
+# it runs in ConstrainedLanguage too (Smart App Control On: sac.suite's restart)
+$ProgressPreference = 'SilentlyContinue'
+$mark = 'C:\rbtest\signout.mark'
+if (-not (Test-Path -LiteralPath $mark)) { 'vm-run-wait: no C:\rbtest\signout.mark: the step before signed nobody out'; exit 3 }
+$since = [DateTime]::SpecifyKind([DateTime][long]((Get-Content -LiteralPath $mark -TotalCount 1).Trim()), 'Utc')
+$user = (Get-CimInstance Win32_ComputerSystem).UserName
+$ex = @(Get-CimInstance Win32_Process -Filter "Name = 'explorer.exe'" | Where-Object { $_.SessionId -ne 0 -and $_.CreationDate.ToUniversalTime() -gt $since })
+if ($user -and $ex.Count) { "vm-run-wait: $user signed in (explorer.exe $($ex[0].ProcessId), session $($ex[0].SessionId), started $($ex[0].CreationDate.ToUniversalTime().ToString('HH:mm:ss')) UTC; the mark $($since.ToString('HH:mm:ss')) UTC)"; exit 0 }
+"vm-run-wait: not yet (user '$user', $($ex.Count) explorer.exe since the mark)"
+exit 75
+EOF
+  t0=$(date +%s)
+  while :; do
+    out="$(bounded 60 "$PRLCTL" exec "$UUID" powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$g" 2>&1)"; rc=$?
+    grep -v 'ps: Operation not permitted' <<< "$out"
+    case "$rc" in
+      0|3) echo "vm-run-exit $RUN $2 $rc"; return "$rc" ;;
+    esac
+    [ $(( $(date +%s) - t0 )) -lt "$1" ] || { echo "vm-run: no sign-in after the mark within $1 s"; return 124; }
+    sleep "$POLL"
+  done
 }
 
 # killjob N: after step N timed out, as SYSTEM: every process whose command line names step N's
@@ -376,7 +648,7 @@ EOF
 parse() {
   local dir line mode secs name script rest i=0
   dir="$(cd "$(dirname "$1")" && pwd)"
-  STEPS=""; NEED_HTTP=0; NEED_VM=0; NEEDS=""; INCLUDES=""; CANDIDATES=""; FIXTURES=""
+  STEPS=""; NEED_HTTP=0; NEED_VM=0; NEED_USB=0; NEED_USB_READER=0; NEEDS=""""; INCLUDES=""; CANDIDATES=""; FIXTURES=""
   while IFS= read -r line || [ -n "$line" ]; do
     i=$((i + 1))
     line="${line%%#*}"
@@ -387,12 +659,15 @@ parse() {
       # need vm: the steps run the share's vm/ (stage --build's test exes): --record needs them
       # built from HEAD
       if [ "$secs" = vm ] && [ -z "${name:-}" ]; then NEED_VM=1; continue; fi
+      # need usb: vm-run.conf's stick for this VM assigned before the VM starts (none: the step SKIPs)
+      if [ "$secs" = usb ] && [ -z "${name:-}" ]; then NEED_USB=1; continue; fi
+      if [ "$secs" = usb-reader ] && [ -z "${name:-}" ]; then NEED_USB_READER=1; continue; fi
       # need file REL: a file in the share (staged by the lane: vm-run.sh stage, the TEST build);
       # need candidate REL: a payload.json of a release this commit makes (--record: its commit is
       # HEAD); need fixture REL: one of an older or made-up release (recorded, not bound to HEAD)
       case "$secs" in file|candidate|fixture) ;; *) secs="" ;; esac
       [ -n "$secs" ] && [ -n "${name:-}" ] && [ -z "${script:-}" ] && [[ "$name" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "$name" != *..* ]] \
-        || stop "$1:$i: \"need http\", \"need vm\" or \"need file|candidate|fixture REL\" (REL plain, no ..)"
+        || stop "$1:$i: \"need http\", \"need vm\", \"need usb\", \"need usb-reader\" or \"need file|candidate|fixture REL\" (REL plain, no ..)"
       NEEDS+="$name"$'\n'
       [ "$secs" != candidate ] || CANDIDATES+="$name"$'\n'
       [ "$secs" != fixture ] || FIXTURES+="$name"$'\n'
@@ -404,10 +679,16 @@ parse() {
         || stop "$1:$i: \"include SCRIPT\" (a file beside the suite)"
       INCLUDES+="$dir/$secs"$'\n'; continue
     fi
-    case "$mode" in sys|user|user-high|user-signed) ;; *) stop "$1:$i: no mode \"$mode\"" ;; esac
+    case "$mode" in sys|user|user-high|user-signed|user-signed-high|wait) ;; *) stop "$1:$i: no mode \"$mode\"" ;; esac
     [[ "$secs" =~ ^[0-9]+$ ]] && [ "$secs" -ge 1 ] && [ "$secs" -le "$LIMIT" ] || stop "$1:$i: the timeout must be 1 to $LIMIT seconds"
     [[ "${name:-}" =~ ^[A-Za-z0-9._-]+$ ]] || stop "$1:$i: a step's name is [A-Za-z0-9._-]"
     [ -z "${rest:-}" ] || stop "$1:$i: too many fields"
+    if [ "$mode" = wait ]; then
+      # wait SECS NAME logon: the sign-in after a sign-out or a restart (no script: wait_logon's)
+      [ "${script:-}" = logon ] || stop "$1:$i: \"wait SECS NAME logon\""
+      grep -q "^[^ ]* [^ ]* $name " <<< "$STEPS" && stop "$1:$i: two steps named $name"
+      STEPS+="wait $secs $name logon"$'\n'; continue
+    fi
     [ -n "${script:-}" ] && [ -f "$dir/$script" ] || stop "$1:$i: no script $dir/${script:-}"
     grep -q "^[^ ]* [^ ]* $name " <<< "$STEPS" && stop "$1:$i: two steps named $name"
     STEPS+="$mode $secs $name $dir/$script"$'\n'
@@ -430,14 +711,128 @@ served_same() {
 # HTTP on", unbuffered) and lives; refused when the port answers before it starts; the payload.json
 # it sends checked against DIR's
 serve() {
-  local t=0
+  local t=0 ready_polls=60 ready_poll=0.5
+  # In the host tests, check more often with the same 30 s startup budget.
+  if [ "${VMRUN_TEST_FAST_HTTP:-0}" = 1 ]; then ready_polls=600; ready_poll=0.05; fi
   port_taken && stop "something already answers on $URL: stop it first (lsof -nP -iTCP:$PORT)"
   # http.server's handler, but nothing through a link (a path whose real path isn't itself: 404),
   # so nothing outside DIR is ever served
+  local cert="" key=""
+  if [ -f "$TLS/server.pem" ] && [ -f "$TLS/server-key.pem" ]; then cert="$TLS/server.pem"; key="$TLS/server-key.pem"; fi
+  # one port for both: a connection whose first byte is a TLS handshake (0x16) is answered over
+  # TLS with that certificate (its handshake in the request's own thread), any other as HTTP.
+  # Beside the served folder, platform.suite's winhttp steps (app.md 5.4) get /w3/: a made-up
+  # file with Range, redirects to it over https and http, a PAC file and a CONNECT tunnel to this
+  # server alone (see w3 below)
   python3 -I -u -c '
-import functools, http.server, os, sys
+import functools, http.server, os, re, select, socket, ssl, sys
 root = os.path.realpath(sys.argv[3])
+here = "%s:%s" % (sys.argv[1], sys.argv[2])
+# /w3/blob/N: N bytes (at most 16 MiB), byte i being i % 251, with Range (bytes=A- or A-B: 206
+# and its Content-Range; past the end 416); /w3/to-https/REST and /w3/to-http/REST: a 302 to
+# /w3/REST on this server over that scheme (GitHub hands a release asset on this way; the app
+# follows https only); /w3/proxy.pac: a PAC file sending this server through the proxy at this
+# server, whose CONNECT tunnels to this server only (never anywhere else); all in http.log
+W3_MAX = 1 << 24
+PAT = bytes(range(251))
+def blob(a, n):
+    k = a % 251
+    return (PAT * ((n + k) // 251 + 1))[k:k + n]
+ctx = None
+if sys.argv[4]:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(sys.argv[4], sys.argv[5])
+# the Windows TEST app asks for a release file as GitHub serves it (win/c/update.h update_url):
+# <base>/latest/download/NAME or <base>/download/vTAG/NAME, each NAME in the served folder, or in
+# its folder DIR when <base> ends in /DIR (build.sh --win-test https://HOST:PORT/DIR, as for the
+# update suite: current/). The published bootstrap lap uses the /releases/ prefix from GitHub.
+release = re.compile(r"^/(?:releases/)?((?:[^/?#]+/)*?)(?:latest/download|download/v[0-9]+(?:\.[0-9]+)*)/(?=[^/?#]+(?:[?#]|$))")
 class Handler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path.startswith("/w3/"):
+            return self.w3(True)
+        return super().do_GET()
+    def do_HEAD(self):
+        if self.path.startswith("/w3/"):
+            return self.w3(False)
+        return super().do_HEAD()
+    def w3(self, body):
+        p = self.path.split("?", 1)[0]
+        m = re.fullmatch(r"/w3/blob/([0-9]{1,8})", p)
+        if m and int(m.group(1)) <= W3_MAX:
+            n = int(m.group(1))
+            a, b, code = 0, n - 1, 200
+            r = self.headers.get("Range")
+            if r is not None:
+                rm = re.fullmatch(r"bytes=([0-9]+)-([0-9]*)", r.strip())
+                if not rm or int(rm.group(1)) >= n or (rm.group(2) and int(rm.group(2)) < int(rm.group(1))):
+                    self.send_response(416)
+                    self.send_header("Content-Range", "bytes */%d" % n)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                a = int(rm.group(1))
+                b = min(int(rm.group(2)), n - 1) if rm.group(2) else n - 1
+                code = 206
+            self.send_response(code)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", str(b - a + 1))
+            if code == 206:
+                self.send_header("Content-Range", "bytes %d-%d/%d" % (a, b, n))
+            self.end_headers()
+            if body:
+                self.wfile.write(blob(a, b - a + 1))
+            return
+        m = re.fullmatch(r"/w3/to-(https?)/(.+)", p)
+        if m:
+            self.send_response(302)
+            self.send_header("Location", "%s://%s/w3/%s" % (m.group(1), here, m.group(2)))
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if p == "/w3/proxy.pac":
+            pac = ("function FindProxyForURL(url, host) { if (host == \"%s\") return \"PROXY %s\"; return \"DIRECT\"; }\n" % (sys.argv[1], here)).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ns-proxy-autoconfig")
+            self.send_header("Content-Length", str(len(pac)))
+            self.end_headers()
+            if body:
+                self.wfile.write(pac)
+            return
+        self.send_error(404, "no such /w3/ path")
+    def do_CONNECT(self):
+        # the PAC case: a tunnel to this server alone
+        if self.path != here:
+            self.send_error(403, "a tunnel to %s only" % here)
+            return
+        try:
+            up = socket.create_connection((sys.argv[1], int(sys.argv[2])), timeout=10)
+        except OSError as e:
+            self.send_error(502, "no tunnel: %s" % e)
+            return
+        self.send_response(200, "Connection established")
+        self.end_headers()
+        self.close_connection = True
+        c = self.connection
+        try:
+            up.settimeout(None)
+            c.settimeout(None)
+            while True:
+                rd, _, bad = select.select([c, up], [], [c, up], 120)
+                if bad or not rd:
+                    break
+                for s in rd:
+                    d = s.recv(65536)
+                    if not d:
+                        raise EOFError
+                    (up if s is c else c).sendall(d)
+        except (OSError, EOFError):
+            pass
+        finally:
+            up.close()
+    def translate_path(self, path):
+        return super().translate_path(release.sub(r"/\1", path, count=1))
     def send_head(self):
         p = self.translate_path(self.path)
         if os.path.realpath(p) != os.path.normpath(p):
@@ -451,18 +846,42 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     self.send_error(404, "not served: a link")
                     return None
         return super().send_head()
-srv = http.server.ThreadingHTTPServer((sys.argv[1], int(sys.argv[2])), functools.partial(Handler, directory=root))
-print("Serving HTTP on %s port %s (%s)" % (sys.argv[1], sys.argv[2], root), flush=True)
-srv.serve_forever()' "$BIND" "$PORT" "$1" > "$RESULTS/http.log" 2>&1 &
+class Server(http.server.ThreadingHTTPServer):
+    def get_request(self):
+        s, a = self.socket.accept()
+        if ctx:
+            s.settimeout(10)
+            try:
+                b = s.recv(1, socket.MSG_PEEK)
+            except OSError:
+                b = b""
+            s.settimeout(None)
+            if b == b"\x16":
+                s = ctx.wrap_socket(s, server_side=True, do_handshake_on_connect=False)
+        return s, a
+    def finish_request(self, request, client_address):
+        if isinstance(request, ssl.SSLSocket):
+            request.settimeout(30)
+            try:
+                request.do_handshake()
+            except (OSError, ssl.SSLError) as e:
+                sys.stderr.write("TLS handshake from %s failed: %s\n" % (client_address[0], e))
+                return
+            request.settimeout(None)
+        super().finish_request(request, client_address)
+srv = Server((sys.argv[1], int(sys.argv[2])), functools.partial(Handler, directory=root))
+print("Serving HTTP on %s port %s (%s)%s" % (sys.argv[1], sys.argv[2], root, ", HTTPS too (%s)" % sys.argv[4] if ctx else ""), flush=True)
+srv.serve_forever()' "$BIND" "$PORT" "$1" "$cert" "$key" > "$RESULTS/http.log" 2>&1 8>&- &
   HTTP_PID=$!
   echo "$HTTP_PID" > "$RESULTS/http.pid"
   until grep -q '^Serving HTTP on' "$RESULTS/http.log" 2> /dev/null && kill -0 "$HTTP_PID" 2> /dev/null; do
     kill -0 "$HTTP_PID" 2> /dev/null || stop "the HTTP server didn't start on $BIND:$PORT (see $RESULTS/http.log)"
-    t=$((t + 1)); [ "$t" -lt 60 ] || stop "the HTTP server didn't say it serves $URL within 30 s (see $RESULTS/http.log)"
-    sleep 0.5
+    t=$((t + 1)); [ "$t" -lt "$ready_polls" ] || stop "the HTTP server didn't say it serves $URL within 30 s (see $RESULTS/http.log)"
+    sleep "$ready_poll"
   done
   # an answer of any status (/ may 404: an index page that is a link)
   curl -sS -o /dev/null --max-time 5 "$URL" || stop "the HTTP server doesn't answer on $URL"
+  [ -z "$cert" ] || curl -sSk -o /dev/null --max-time 5 "https://$BIND:$PORT/" || stop "the server doesn't answer HTTPS on https://$BIND:$PORT/ (see $RESULTS/http.log)"
   kill -0 "$HTTP_PID" 2> /dev/null || stop "the HTTP server ended (see $RESULTS/http.log)"
   served_same "$1" || stop "the payload.json served on $URL isn't $1/payload.json"
   [ ! -f "$1/payload.json" ] || SERVED_SHA="$(sha "$1/payload.json")"
@@ -473,27 +892,47 @@ unserve() { [ -z "$HTTP_PID" ] || { kill "$HTTP_PID" 2> /dev/null; wait "$HTTP_P
 
 # ---- one run at a time ------------------------------------------------------------------------
 
-LOCK="$SHARE/.vm-run.lock"
+# the VM's own lock (rb-win-template's keeps the name it always had), the guard all VMs' locks are
+# taken under, and the share's flock: held shared by every run and one-off for its life (on fd 8),
+# alone by stage and check, so neither changes or reads the share while a run on any VM uses it
+if [ "$NAME" = rb-win-template ]; then LOCK="$SHARE/.vm-run.lock"; else LOCK="$SHARE/.vm-run.${NAME//[^A-Za-z0-9._-]/_}.lock"; fi
+GUARD="$SHARE/.vm-run.lock.guard"
+SHARED="$SHARE/.vm-run.share"
 LOCKED=0
 # lock: the share's lock, a folder holding the owner's pid. Taken by renaming a folder that already
 # holds our pid onto the lock (rename(2) fails onto a folder that isn't empty), so a lock never
 # shows an empty pid while taken; a lock whose pid is gone is moved aside (one taker wins the
 # move) and taken; an empty one younger than 10 s is someone taking it the old way: refused.
-# lock() and unlock() run one at a time across processes: under a flock on $LOCK.guard (a file
+# lock() and unlock() run one at a time across processes: under a flock on $GUARD (a file
 # never renamed or removed), held on fd 9 from guard_on to guard_off (or this process's exit)
 guard_on() {
-  exec 9>> "$LOCK.guard" || stop "can't open $LOCK.guard"
+  exec 9>> "$GUARD" || stop "can't open $GUARD"
   perl -e 'use Fcntl ":flock"; open(my $f, ">&=", 9) or exit 2; $SIG{ALRM} = sub { exit 1 }; alarm 30; flock($f, LOCK_EX) or exit 1;' \
-    || stop "the lock's guard $LOCK.guard is held for 30 s: another vm-run.sh hangs while it takes the lock"
+    || stop "the lock's guard $GUARD is held for 30 s: another vm-run.sh hangs while it takes the lock"
+}
+# share_hold sh|ex: the share's flock on fd 8, until this process ends (its children hold it too;
+# the HTTP server is started without it). sh (a run, a one-off): beside the other VMs' runs, waiting
+# at most 30 s for a stage or check; ex (stage, check): alone, at once or refused
+share_hold() {
+  exec 8>> "$SHARED" || stop "can't open $SHARED"
+  if [ "$1" = ex ]; then
+    perl -e 'use Fcntl ":flock"; open(my $f, ">&=", 8) or exit 2; flock($f, LOCK_EX | LOCK_NB) or exit 1;' \
+      || stop "another vm-run.sh reads the share (a run on one of the VMs): $SHARED is held; try again when no run is going"
+  else
+    perl -e 'use Fcntl ":flock"; open(my $f, ">&=", 8) or exit 2; $SIG{ALRM} = sub { exit 1 }; alarm 30; flock($f, LOCK_SH) or exit 1;' \
+      || stop "a stage or check holds the share ($SHARED) for 30 s: try again"
+  fi
 }
 guard_off() { perl -e 'use Fcntl ":flock"; open(my $f, ">&=", 9) or exit 0; flock($f, LOCK_UN);' 9>&9; exec 9>&-; }
 # alive PID: whether PID runs; EPERM (another user's, or a sandboxed caller's view of an
 # unsandboxed process) counts as running, never as gone (VX6); a pid that isn't a positive number
 # isn't one (perl's kill 0 on 0 or text would signal our own group)
 alive() { [[ "$1" =~ ^[1-9][0-9]*$ ]] && perl -e 'exit(kill(0, $ARGV[0]) || $!{EPERM} ? 0 : 1)' "$1"; }
+# lock [ex]: the share's flock (shared, or alone with ex), then this VM's lock
 lock() {
   local p try mt new="$LOCK.new.$$" old="$LOCK.old.$$"
   mkdir -p "$SHARE" || stop "no share $SHARE"
+  share_hold "${1:-sh}"
   guard_on
   rm -rf "$new"; mkdir "$new" && echo $$ > "$new/pid" || stop "can't make $new"
   for try in 1 2 3; do
@@ -529,10 +968,12 @@ cleanup() {
   if [ -n "$FROZEN" ] && [ -z "$REVERT_ID" ]; then rm -rf "$FROZEN"; rmdir "$RESULTS" 2> /dev/null; FROZEN=""; fi
   if [ -n "$REVERT_ID" ] && [ "$KEEP" = 0 ] && [ "$RESTORED" = 0 ]; then
     RESTORED=1
-    echo "vm-run.sh: the run ended early: the VM is stopped and reverted to $REVERT_ID" >&2
-    ( halt && bounded "$LIMIT" "$PRLCTL" snapshot-switch "$UUID" -i "$REVERT_ID" > /dev/null ) \
+    echo "vm-run.sh: the run ended early: stopping the VM and reverting it to $REVERT_ID" >&2
+    ( restore "$REVERT_ID" ) && echo "vm-run.sh: the VM is stopped and reverted to $REVERT_ID" >&2 \
       || echo "vm-run.sh: the VM couldn't be stopped and reverted: do it by hand (prlctl stop/snapshot-switch $UUID)" >&2
   fi
+  usb_del
+  hidden_report
   unlock
 }
 
@@ -563,6 +1004,16 @@ served_list() {
     c="$(pjson "$SHARE/$p" commit 2> /dev/null)"
     echo "served $p $(sha "$SHARE/$p" 2> /dev/null) ${c:--}"
   done <<< "$CANDIDATES$FIXTURES"
+}
+# new_release_rules DIR: an update suite's new/ uses the served release byte for byte.
+new_release_rules() {
+  local d="$1" p=dist-test/new/payload.json
+  grep -Fxq "$p" <<< "$CANDIDATES" || return 0
+  cmp -s "$SHARE/$p" "$d/payload.json" || { echo "$p differs from the served payload.json"; return 1; }
+  if [ -e "$SHARE/$p.sig" ] || [ -e "$d/payload.json.sig" ]; then
+    cmp -s "$SHARE/$p.sig" "$d/payload.json.sig" || { echo "$p.sig differs from the served payload.json.sig"; return 1; }
+  fi
+  return 0
 }
 # dist_rules DIR: the served TEST build and the fixture releases made from it are what they must be
 # (says why not, exit 1): DIR's bootstrap.ps1, payload.json.sig and zip byte-equal to the
@@ -644,7 +1095,7 @@ sys.exit(0 if d == b and vd != vb else (5 if d != b else 6))' "$d/payload.json" 
 SRC_ROOT=""; RUNNER="$self"
 sources() {
   local f abs rr; rr="$(cd "${SRC_ROOT:-$root}" && pwd -P)"
-  { echo "$1"; printf '%s' "$INCLUDES"; cut -d' ' -f4- <<< "$STEPS"; echo "$RUNNER"; } | awk 'NF && !seen[$0]++' | while IFS= read -r f; do
+  { echo "$1"; printf '%s' "$INCLUDES"; awk '$1 != "wait"' <<< "$STEPS" | cut -d' ' -f4-; echo "$RUNNER"; } | awk 'NF && !seen[$0]++' | while IFS= read -r f; do
     abs="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")"
     case "$abs" in "$rr"/*) echo "file ${abs#"$rr"/} $(sha "$abs")" ;; *) echo "outside $abs" ;; esac
   done
@@ -660,13 +1111,15 @@ for line in sys.stdin:
     f = line.split("#", 1)[0].split()
     if len(f) == 2 and f[0] == "include":
         out.add(os.path.normpath(base + "/" + f[1]))
-    elif len(f) == 4 and f[0] in ("sys", "user", "user-high", "user-signed"):
+    elif len(f) == 4 and f[0] in ("sys", "user", "user-high", "user-signed", "user-signed-high"):
         out.add(os.path.normpath(base + "/" + f[3]))
 print("\n".join(sorted(out)))' "$2"
 }
 # repo_tree_bad COMMIT: says why the share's repo/ isn't COMMIT's archived tree, exit 0; exit 1
 # when it is: each file's blob id against git ls-tree, the two file lists compared both ways
-REPO_PATHS="scripts tests/win core/texts.def win/c/aumid.h"
+REPO_PATHS="scripts tests/win core/texts.def win/c/aumid.h win/c/afterexit.h
+  win/shell/vm/w13b.ps1 win/shell/vm/w13b-checks.ps1 win/shell/vm/w13b-fixture.ps1 win/shell/vm/prepare-fixture.ps1
+  tests/harness/traces/A/prepare-choose-estimate.jsonl"   # afterexit.h: bootstrap.tests.ps1's AX_INSTALL_LOCK check
 repo_tree_bad() {
   local want got paths first base blobs
   # "PATH BLOB" a line, sorted: COMMIT's (ls-tree) and the share's (hash-object of each file)
@@ -699,6 +1152,7 @@ rec_head() {
   echo "snapshot $id $snapname"
   echo "vm_uuid $UUID"
   echo "arch $arch"
+  if [ "$lane" = x64-prism ]; then echo "lane $lane"; fi
   echo "payload_sha256 $payload"
   echo "stage_commit $saved_stage"
   echo "vm_commit $saved_vmc"
@@ -726,7 +1180,11 @@ rec_bad() {
   local r="$1" c="$2" path want got suite p
   grep -qx "commit $c" "$r" || { echo "it isn't $c's"; return 0; }
   grep -qx "suite $4" "$r" || { echo "it isn't suite $4's"; return 0; }
-  grep -qx "arch $5" "$r" || { echo "it isn't $5's"; return 0; }
+  if [ "$5" = x64-prism ]; then
+    grep -qx 'arch arm64' "$r" && grep -qx 'lane x64-prism' "$r" || { echo "it isn't an x64 run on ARM64 (Prism)"; return 0; }
+  else
+    grep -qx "arch $5" "$r" && ! grep -q '^lane ' "$r" || { echo "it isn't $5's"; return 0; }
+  fi
   # made on rb-win-template itself, never on a VMRUN_UUID's VM (VX8)
   grep -qx "vm_uuid $DEFAULT_UUID" "$r" || { echo "it wasn't made on $NAME ($DEFAULT_UUID)"; return 0; }
   grep -qx "payload_sha256 $3" "$r" || { echo "it was made for another payload.json"; return 0; }
@@ -748,11 +1206,15 @@ rec_bad() {
   done < <(sed -n 's/^file //p' "$r")
   # what COMMIT's suite says: its steps, in order; its candidates bound to COMMIT; its vm/
   suite="$(git -C "$root" show "$c:tests/win/suites/$4.suite" | sed 's/#.*//')"
-  [ "$(awk '$1 ~ /^(sys|user|user-high|user-signed)$/ { print $1, $3 }' <<< "$suite")" = "$(awk '$1 == "step" { print $2, $3 }' "$r")" ] \
+  [ "$(awk '$1 ~ /^(sys|user|user-high|user-signed|user-signed-high|wait)$/ { print $1, $3 }' <<< "$suite")" = "$(awk '$1 == "step" { print $2, $3 }' "$r")" ] \
     || { echo "its steps aren't the suite's, in its order"; return 0; }
   while read -r p; do
     [ -n "$p" ] || continue
-    grep -qE "^served $p [0-9a-f]{64} $c\$" "$r" || { echo "its $p isn't $c's release"; return 0; }
+    if [ "$p" = dist-test/new/payload.json ]; then
+      grep -Fxq "served $p $3 $c" "$r" || { echo "its $p doesn't match the served payload.json"; return 0; }
+    else
+      grep -qE "^served $p [0-9a-f]{64} $c\$" "$r" || { echo "its $p isn't $c's release"; return 0; }
+    fi
   done < <(awk '$1 == "need" && $2 == "candidate" { print $3 }' <<< "$suite")
   if awk '$1 == "need" && $2 == "vm" { f = 1 } END { exit !f }' <<< "$suite"; then
     grep -qx "vm_commit $c" "$r" || { echo "its vm/ wasn't built from $c"; return 0; }
@@ -760,23 +1222,31 @@ rec_bad() {
   return 1
 }
 
-# check COMMIT DIR: 0 when every row (SUITE ARCH SNAPSHOT) of tests/win/suites/release.list as
-# committed in COMMIT has one passing record for COMMIT, DIR/payload.json and COMMIT's scripts, and
-# no failed one; then build/gates/COMMIT/vm-win.ok lists them. Else 1, said, and no vm-win.ok
+# check COMMIT DIR MODE: check COMMIT's release.list against the TEST payload. The release mode
+# uses the PC record for worker and writes a summary of the passing records.
 check() {
-  local c="$1" dir="$2" d="$GATES/$1/vm-win" list psha suite arch snap recs fails why n=0 bad=0 rows=""
+  local c="$1" dir="$2" mode="$3" d="$GATES/$1/vm-win" list psha suite arch snap recs fails why pc_sha n=0 bad=0 rows=""
   [[ "$c" =~ ^[0-9a-f]{40}$ ]] || { echo "vm-run.sh check: \"$c\" isn't a full commit id"; return 1; }
   # under the share's lock (VT1): no --record run writes a record while they are read (a run that
-  # holds it: lock stops, exit 2, saying so)
-  lock
+  # holds it, on any VM: lock stops, exit 2, saying so)
+  lock ex
   trap cleanup EXIT
-  rm -f "$GATES/$c/vm-win.ok"
+  [ "$mode" != check ] || rm -f "$GATES/$c/vm-win.ok"
   [ -f "$dir/payload.json" ] || { echo "vm-run.sh check: no $dir/payload.json"; return 1; }
-  psha="$(sha "$dir/payload.json")"
+  psha="$(sha "$dir/payload.json")" || return 1
   list="$(git -C "$root" show "$c:tests/win/suites/release.list" 2> /dev/null)" || { echo "vm-run.sh check: $c has no tests/win/suites/release.list"; return 1; }
   while read -r suite arch snap; do
     case "$suite" in ''|'#'*) continue ;; esac
     n=$((n + 1))
+    if [ "$suite" = worker ] && [ "$mode" = check ]; then
+      if pc_sha="$(python3 -I "$here/tests/win/gate-record.py" check "$GATES/$c/pc-win.ok" "$c" "$psha" 2>&1)"; then
+        rows+="row $suite $arch $snap: pc-win.ok $pc_sha"$'\n'
+      else
+        echo "vm-run.sh check: worker: $pc_sha"
+        bad=1
+      fi
+      continue
+    fi
     fails="$(rec_for "$d" "$suite" "$arch" "$snap" failed)"
     if [ -n "$fails" ]; then echo "vm-run.sh check: $suite on \"$snap\" ($arch) failed: $(basename "$(head -1 <<< "$fails")")"; bad=1; continue; fi
     recs="$(rec_for "$d" "$suite" "$arch" "$snap" ok)"
@@ -787,6 +1257,10 @@ check() {
   done <<< "$list"
   [ "$n" -gt 0 ] || { echo "vm-run.sh check: $c's release.list has no row"; return 1; }
   [ "$bad" = 0 ] || return 1
+  if [ "$mode" = check-vm ]; then
+    echo "vm-run.sh check: $c passed ($n rows of release.list)"
+    return 0
+  fi
   { echo "commit $c"; echo "payload_sha256 $psha"; printf '%s' "$rows"; echo "result pass"; } > "$GATES/$c/vm-win.ok.tmp" 2> /dev/null \
     && mv "$GATES/$c/vm-win.ok.tmp" "$GATES/$c/vm-win.ok" 2> /dev/null \
     || { echo "vm-run.sh check: can't write $GATES/$c/vm-win.ok"; return 1; }
@@ -795,30 +1269,44 @@ check() {
 
 # ---- commands ---------------------------------------------------------------------------------
 
-cmd_one() {   # sys|user|user-high|user-signed [SECS] < script
-  local mode="$1" secs="${2:-$LIMIT}" body
-  [[ "$secs" =~ ^[0-9]+$ ]] && [ "$secs" -ge 1 ] && [ "$secs" -le "$LIMIT" ] || stop "the timeout must be 1 to $LIMIT seconds"
+cmd_one() {   # sys|user|user-high|user-signed|user-signed-high [SECS] < script
+  local mode="$1" secs="${2:-$LIMIT}" body rc cap="$LIMIT" ONE_RBKIT=false ONE_IDLE=0
+  if [ "${3:-}" = --rbkit ]; then
+    case "$mode" in sys | user-signed) ;; *) stop '--rbkit requires sys or user-signed' ;; esac
+    [[ "$RBKIT_USER" =~ ^[A-Za-z0-9._~-]+$ ]] || stop 'VMRUN_RBKIT_USER: letters, digits, . _ ~ - only'
+    ONE_RBKIT=true; cap=3600; ONE_IDLE="${4:-0}"
+    [[ "$ONE_IDLE" =~ ^(0|[1-9][0-9]{0,3})$ ]] && [ "$ONE_IDLE" -le "$cap" ] &&
+      { [ "$mode" = user-signed ] || [ "$ONE_IDLE" = 0 ]; } || stop 'invalid --rbkit idle timeout'
+  fi
+  [[ "$secs" =~ ^[0-9]+$ ]] && [ "$secs" -ge 1 ] && [ "$secs" -le "$cap" ] || stop "the timeout must be 1 to $cap seconds"
   vm_guard
   # one at a time with the runs (a run's user step and this would share the VM's session)
   lock
   trap cleanup EXIT
-  RUN="one-$(date +%Y%m%d-%H%M%S)-$$"; URL="http://$BIND:$PORT/"
+  RUN="one-$(date +%Y%m%d-%H%M%S)$VMTAG-$$"; URL="http://$BIND:$PORT/"
   body="$(mktemp "${TMPDIR:-/tmp}/vm-run.XXXXXX")" || stop "no temp file"
   cat > "$body"
   step "$mode" "$secs" "$mode" "$body" 1 > "$body.out" 2>&1
-  verdict "$body.out" "$?" 1
+  rc=$?
+  if [ "$ONE_RBKIT" = true ] && [ "$mode" = user-signed ] && [ "$ONE_IDLE" != 0 ] &&
+     [ "$rc" = 142 ] && grep -Fxq "RB-KIT: no output for $ONE_IDLE s" "$body.out"; then
+    CODE=142
+  else verdict "$body.out" "$rc" 1; fi
   cat "$body.out"
   rm -f "$body" "$body.out" "$SHARE/job/$RUN/1-$mode.ps1" "$SHARE/job/$RUN/1-$mode.wrap.ps1" "$SHARE/job/$RUN/1-$mode.launch.ps1"; rmdir "$SHARE/job/$RUN" 2> /dev/null
   return "$CODE"
 }
 
 cmd_run() {
-  local snap="" suite="" served="$SHARE/dist-test" record=0 keep=0
-  [ $# -ge 2 ] || stop "usage: vm-run.sh run SNAPSHOT SUITE [--serve DIR] [--record] [--keep]"
+  local snap="" suite="" served="$SHARE/dist-test" record=0 keep=0 selected="" test_arch=""
+  [ $# -ge 2 ] || stop "usage: vm-run.sh run SNAPSHOT SUITE [--serve DIR] [--arch arm64|x64|x64-prism] [--record] [--keep]"
   snap="$1"; suite="$2"; shift 2
   while [ $# -gt 0 ]; do
     case "$1" in
       --serve) [ $# -ge 2 ] || stop "--serve needs a folder"; served="$2"; shift 2 ;;
+      --arch)
+        [ -z "$selected" ] || stop "--arch may only be given once"
+        case "${2:-}" in arm64|x64|x64-prism) selected="$2"; shift 2 ;; *) stop "--arch needs arm64, x64 or x64-prism" ;; esac ;;
       --record) record=1; shift ;;
       --keep) keep=1; shift ;;
       *) stop "unknown option $1" ;;
@@ -828,7 +1316,7 @@ cmd_run() {
   [ -f "$suite" ] || stop "no suite $suite"
   # the run's id goes into paths the VM's command lines carry unquoted: [A-Za-z0-9._-] only
   local sn; sn="$(basename "$suite" .suite)"; sn="${sn//[^A-Za-z0-9._-]/_}"
-  RUN="$(date +%Y%m%d-%H%M%S)-$sn-$$"
+  RUN="$(date +%Y%m%d-%H%M%S)-$sn$VMTAG-$$"
   RESULTS="$SHARE/results/$RUN"
   local commit="" rr rel
   if [ "$record" = 1 ]; then
@@ -837,8 +1325,8 @@ cmd_run() {
     [ "$self" = "$rr/tests/win/vm-run.sh" ] || stop "--record: this vm-run.sh ($self) isn't the checkout's $root/tests/win/vm-run.sh"
     # a record is rb-win-template's, in build/gates: another prlctl or VM only with a gates folder
     # of its own (VX8)
-    [ -z "${VMRUN_PRLCTL:-}${VMRUN_UUID:-}" ] || [ -n "${VMRUN_GATES:-}" ] \
-      || stop "--record: VMRUN_PRLCTL or VMRUN_UUID is set (a test variable) without VMRUN_GATES: unset it, or give the records a folder of their own"
+    [ -z "${VMRUN_PRLCTL:-}${VMRUN_UUID:-}${VMRUN_VM:-}" ] || [ -n "${VMRUN_GATES:-}" ] \
+      || stop "--record: VMRUN_PRLCTL, VMRUN_UUID or VMRUN_VM is set without VMRUN_GATES: unset it, or give the records a folder of their own"
     # the commit, then its suites and this runner frozen, before the suite is read: the run parses,
     # hashes and runs those bytes, whatever the checkout does meanwhile (VX3, VX4)
     [ -z "$(git -C "$root" status --porcelain)" ] || stop "--record needs a clean checkout ($root)"
@@ -893,6 +1381,7 @@ cmd_run() {
       pc="$(pjson "$SHARE/$p" commit 2> /dev/null)"
       [ "$pc" = "$commit" ] || stop "--record: $p (a candidate) was built from \"$pc\", not HEAD $commit"
     done <<< "$CANDIDATES"
+    why="$(new_release_rules "$served")" || stop "--record: $why"
     why="$(dist_rules "$served")" || stop "--record: $why"
     srcs="$(sources "$suite")"
     ! grep -q '^outside ' <<< "$srcs" || stop "--record: the suite's scripts must be in the checkout's tests/win/suites ($root): $(sed -n 's/^outside //p' <<< "$srcs" | head -1)"
@@ -917,33 +1406,64 @@ cmd_run() {
   KEEP="$keep"
   mkdir -p "$RESULTS" || stop "can't make $RESULTS"
   say "run $RUN: $(basename "$suite") from \"$snapname\" $id"
+  if [ "$NEED_USB" = 1 ]; then
+    USB_WANT="$(conf_usb)" || exit 2
+    [ -n "$USB_WANT" ] || say "no USB stick is assigned to $NAME ($CONF): the steps that need one SKIP"
+  fi
+  if [ "$NEED_USB_READER" = 1 ]; then
+    USB_READER_WANT="$(conf_usb usb-reader)" || exit 2
+    [ -n "$USB_READER_WANT" ] || say "no empty card reader is assigned to $NAME ($CONF): the reader step SKIPs"
+    [ -z "$USB_READER_WANT" ] || [ "$USB_READER_WANT" != "$USB_WANT" ] || stop "$CONF: USB stick and empty reader have the same device id"
+  fi
+  HIDDEN_BEFORE="$(hidden_vols)"; HIDDEN_CHECK=1   # cleanup warns of a new [C] $NAME*.hidden
   REVERT_ID="$id"   # from here on, any exit stops and reverts the VM (cleanup)
   revert "$id"
   # hidden.exe isn't in the snapshots
   local prep="$SHARE/job/$RUN/0-prepare.ps1"
   mkdir -p "$SHARE/job/$RUN"
+  # the host facts the steps read (the header): the stick assigned, GitHub allowed
+  [ -z "$USB_WANT" ] || echo "$USB_WANT" > "$SHARE/job/$RUN/usb.assigned" || stop "can't write $SHARE/job/$RUN/usb.assigned"
+  [ -z "$USB_READER_WANT" ] || echo "$USB_READER_WANT" > "$SHARE/job/$RUN/usb-reader.assigned" || stop "can't write $SHARE/job/$RUN/usb-reader.assigned"
+  ! conf_github || echo allowed > "$SHARE/job/$RUN/github.allowed" || stop "can't write $SHARE/job/$RUN/github.allowed"
+  # the TEST build's CA (build.sh's test-ca.pem, name-constrained to the server's host), for the
+  # VM to trust the HTTPS server's certificate until the revert
+  # only for a suite that says "need http": a snapshot taken after another (sac.suite --keep) keeps none
+  if [ "$NEED_HTTP" = 1 ] && [ -n "$served" ] && [ -f "$served/test-ca.pem" ]; then cp "$served/test-ca.pem" "$SHARE/job/$RUN/test-ca.cer" || stop "can't copy $served/test-ca.pem"; fi
   { prelude prepare 120; cat <<'EOF'
 New-Item -ItemType Directory -Force 'C:\rbtest', "C:\rbtest\job\$($VmRun.Run)" | Out-Null
 if (Test-Path '\\Mac\win\probe\hidden.exe') { Copy-Item '\\Mac\win\probe\hidden.exe' 'C:\rbtest\hidden.exe' -Force }
+$ca = "\\Mac\win\job\$($VmRun.Run)\test-ca.cer"
+if (Test-Path -LiteralPath $ca) { $c = Import-Certificate -FilePath $ca -CertStoreLocation 'Cert:\LocalMachine\Root'; "trusted: the TEST server's CA $($c.Thumbprint)" }
 $arch = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment').PROCESSOR_ARCHITECTURE
 "prepared: hidden.exe $(Test-Path 'C:\rbtest\hidden.exe') arch $arch"
 EOF
   } > "$prep"
+  share_seen "\\\\Mac\\win\\job\\$RUN\\0-prepare.ps1"
   exec_sys "\\\\Mac\\win\\job\\$RUN\\0-prepare.ps1" 120 > "$RESULTS/0-prepare.log" 2>&1 || stop "the VM couldn't be prepared (see $RESULTS/0-prepare.log)"
   # its own last line, not prlctl's status alone (a script powershell.exe can't read exits 0 here)
   tr -d '\r' < "$RESULTS/0-prepare.log" | grep -q '^prepared: ' || stop "the VM's prepare step said nothing (see $RESULTS/0-prepare.log)"
   # the VM's own architecture (the record's): ARM64 or AMD64
-  local arch
+  local arch lane
   case "$(tr -d '\r' < "$RESULTS/0-prepare.log" | sed -n 's/^prepared: .* arch \([A-Za-z0-9_]*\)$/\1/p' | tail -1)" in
     ARM64) arch=arm64 ;; AMD64) arch=x64 ;; *) arch="" ;;
   esac
   [ -n "$arch" ] || [ "$record" = 0 ] || stop "--record: the VM's architecture is unknown (see $RESULTS/0-prepare.log)"
   say "the VM is ${arch:-of an unknown architecture}"
+  lane="$arch"
+  if [ -n "$selected" ]; then
+    case "$selected:$arch" in
+      arm64:arm64|x64:x64) test_arch="$arch" ;;
+      x64-prism:arm64) test_arch=x64 ;;
+      *) stop "--arch $selected cannot run on this VM (${arch:-unknown architecture})" ;;
+    esac
+    lane="$selected"
+    say "the run selects $test_arch test inputs ($lane)"
+  fi
   # from here a --record run always leaves its record: first an incomplete one (a failure, for a
   # run that is interrupted or stops), replaced at the end; vm-win.ok is check's, made again
   local d="" key="" sname r=""
   if [ "$record" = 1 ]; then
-    sname="$(basename "$suite" .suite)"; d="$GATES/$commit/vm-win"; key="$(rec_key "$sname" "$id" "$arch")"
+    sname="$(basename "$suite" .suite)"; d="$GATES/$commit/vm-win"; key="$(rec_key "$sname" "$id" "$lane")"
     mkdir -p "$d" || stop "can't make $d"
     rm -f "$d/$key.ok" "$d/$key.failed" "$GATES/$commit/vm-win.ok"
     { rec_head; echo "result incomplete"; } > "$d/$key.failed.tmp" && mv "$d/$key.failed.tmp" "$d/$key.failed" || stop "can't write $d/$key.failed"
@@ -956,7 +1476,8 @@ EOF
     n=$((n + 1))
     say "step $n: $name ($mode, at most $secs s)"
     t0=$(date +%s)
-    step "$mode" "$secs" "$name" "$script" "$n" > "$RESULTS/$n-$name.log" 2>&1 < /dev/null
+    if [ "$mode" = wait ]; then wait_logon "$secs" "$n" "$name" > "$RESULTS/$n-$name.log" 2>&1 < /dev/null
+    else step "$mode" "$secs" "$name" "$script" "$n" > "$RESULTS/$n-$name.log" 2>&1 < /dev/null; fi
     rc=$?
     secs_taken=$(( $(date +%s) - t0 ))
     verdict "$RESULTS/$n-$name.log" "$rc" "$n"
@@ -965,7 +1486,7 @@ EOF
     echo "step $mode $name $V $CODE ${secs_taken}s" >> "$RESULTS/results.txt"
     say "  $V ($CODE, ${secs_taken}s)"
     # a timed-out step lives on in the VM (only our prlctl was stopped): ended before the next
-    if [ "$V" = TIMEOUT ] && ! killjob "$n" < /dev/null; then
+    if [ "$V" = TIMEOUT ] && [ "$mode" != wait ] && ! killjob "$n" < /dev/null; then
       echo "note step $n's processes couldn't be ended in the VM: the run stopped" >> "$RESULTS/results.txt"
       say "step $n timed out and its processes couldn't be ended in the VM (see $RESULTS/$n-kill.log): the run stops"
       failed=2; break
@@ -985,13 +1506,13 @@ EOF
   unserve
   if [ "$keep" = 0 ]; then
     say "stop and revert"
-    halt || failed=2
-    bounded "$LIMIT" "$PRLCTL" snapshot-switch "$UUID" -i "$id" > /dev/null || { echo "vm-run.sh: the revert after the run failed" >&2; failed=2; }
+    restore "$id" || { echo "vm-run.sh: the stop and revert after the run failed" >&2; failed=2; }
     RESTORED=1
   else
     RESTORED=1
     say "--keep: the VM is left running"
   fi
+  usb_del || failed=2
   if [ "$record" = 1 ]; then
     # what the record names is still what ran: the checkout, its HEAD, the payload, the scripts,
     # the staged repo/ and vm/ (their files, not their own lists), the candidates and fixtures
@@ -1004,6 +1525,7 @@ EOF
     f="$(cat "$SHARE/vm/.commit" 2> /dev/null)"
     [ "${f:--}" = "$saved_vmc" ] && [ "$(vm_shas)" = "$saved_vm" ] || again+=" the share's vm/ changed;"
     [ "$(served_list)" = "$saved_served" ] || again+=" a candidate or fixture release changed;"
+    why="$(new_release_rules "$served")" || again+=" $why;"
     why="$(dist_rules "$served")" || again+=" $why;"
     if [ -n "$again" ]; then
       echo "note during the run:$again no pass" >> "$RESULTS/results.txt"
@@ -1032,22 +1554,29 @@ EOF
 }
 
 # stage: what the suites read from the share, from this checkout (committed files only: HEAD's),
-# replaced whole: repo/ (scripts, tests/win, core/texts.def, win/c/aumid.h, by git archive) and
+# replaced whole: repo/ (scripts, tests/win, core/texts.def, win/c/aumid.h, win/c/afterexit.h, by git archive) and
 # vm/<arch>/ (the test exes this checkout has built, each when it is there: win/c/tests/run.sh's
-# winc-wintest, winc-app-wintest and rbsp-watch-test, common/tests/win.sh's plat-win-test and
-# checked.dll, location-win-test; the core DLL's test-hooks build). With --build it builds them
+# winc-wintest, winc-app-wintest, winc-update-wintest (update_win.c's NT path match) and
+# rbsp-watch-test, common/tests/win.sh's plat-win-test and checked.dll, location-win-test; the core
+# DLL's test-hooks build; tests/win/uia/build.sh's sysdesk.exe, and its rbui/ into vm/uia/rbui/;
+# win/shell/build.sh --x64's forced shell into vm/x64/forced-shell.exe).
+# With --build it builds them
 # first, both architectures (the x64 ones run under Prism on an ARM64 VM). When the share holds a
 # signed TEST build in dist-test/, its fixture releases too (stage-dist.sh: the faults,
 # bad-version/). Prints what it staged and what is still missing (the steps that need it SKIP).
-VM_FILES="build/winc/win-ARCH/winc-wintest.exe build/winc/win-ARCH/winc-app-wintest.exe build/winc/watch-ARCH/rbsp-watch-test-ARCH.exe
+VM_FILES="build/winc/win-ARCH/winc-wintest.exe build/winc/win-ARCH/winc-app-wintest.exe build/winc/win-ARCH/winc-update-wintest.exe
+  build/winc/win-ARCH/memo-stamp-wintest.exe build/winc/win-ARCH/winc-location-wintest.exe build/winc/watch-ARCH/rbsp-watch-test-ARCH.exe
   build/common-win/ARCH/plat-win-test.exe build/common-win/ARCH/checked.dll build/common-win/ARCH/location-win-test.exe
-  build/core-dll/testhooks/ARCH/rbsp-core.dll"
+  build/core-dll/testhooks/ARCH/rbsp-core.dll build/uia/ARCH/sysdesk.exe"
+# the UI driver (tests/win/uia/build.sh): rbui.exe and the files beside it, into vm/uia/rbui/
+UIA_FILES="rbui.exe rbui.exe.config FlaUI.Core.dll FlaUI.UIA3.dll Interop.UIAutomationClient.dll
+  LICENSE-flaui-core.txt LICENSE-flaui-uia3.txt LICENSE-interop-uiautomationclient.txt"
 # build_inputs: the builders of what stage copies, in this checkout, each into its build/ folder
 # and its log in build/vm-inputs/; stops on the first that fails (nothing in the share touched)
 build_inputs() {
   local logs="$root/build/vm-inputs" b name
   mkdir -p "$logs" || stop "can't make $logs"
-  for b in "common/tests/win.sh build/common-win" "win/c/tests/run.sh build/winc" "core/build.sh dll build/core-dll --test-hooks"; do
+  for b in "common/tests/win.sh build/common-win" "win/c/tests/run.sh build/winc" "core/build.sh dll build/core-dll --test-hooks" "tests/win/uia/build.sh build/uia" "win/shell/build.sh --x64 --no-test --test-app build/vm-shell"; do
     name="$(basename "${b%% *}" .sh)-$(basename "$(dirname "${b%% *}")")"
     say "build: $b"
     # shellcheck disable=SC2086
@@ -1055,8 +1584,21 @@ build_inputs() {
   done
 }
 cmd_stage() {
-  local build=0 built=""
-  case "${1:-}" in --build) build=1 ;; "") ;; *) stop "usage: vm-run.sh stage [--build]" ;; esac
+  local build=0 built="" serve=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --build) build=1; shift ;;
+      --serve) [ $# -ge 2 ] || stop "--serve needs a folder"; serve="$2"; shift 2 ;;
+      *) stop "usage: vm-run.sh stage [--build] [--serve DIR]" ;;
+    esac
+  done
+  if [ -n "$serve" ]; then
+    # the folder a later run --serve DIR serves: inside the share, a signed TEST build
+    local share_abs; share_abs="$(cd "$SHARE" 2> /dev/null && pwd -P)" || stop "no share $SHARE"
+    serve="$(cd "$serve" 2> /dev/null && pwd -P)" || stop "--serve: no folder $serve"
+    case "$serve/" in "$share_abs"/*) ;; *) stop "--serve must be inside the share ($SHARE): $serve" ;; esac
+    [ -f "$serve/payload.json.sig" ] || stop "--serve: no signed TEST build in $serve"
+  fi
   if [ "$build" = 1 ]; then
     # vm/.commit (what --record asks of a suite that runs vm/) only for exes built here, now, from
     # a clean HEAD that didn't move while they were built
@@ -1067,8 +1609,8 @@ cmd_stage() {
     [ -n "$built" ] || echo "the checkout isn't clean (or HEAD moved): vm/ gets no .commit, so --record refuses the suites that run it"
   fi
   [ -d "$SHARE" ] || mkdir -p "$SHARE" || stop "no share $SHARE"
-  # never while a run reads the share
-  lock
+  # never while a run on any VM reads the share
+  lock ex
   trap cleanup EXIT
   # HEAD read once (VT3): the commit archived is the commit repo/.commit names, whatever HEAD does
   # meanwhile; vm/.commit only when it is also the commit the exes were built from
@@ -1092,19 +1634,54 @@ cmd_stage() {
       else missing+="vm/$a/$(basename "$f") ($f)"$'\n'; fi
     done
   done
+  local forced="$root/build/vm-shell/app-x64/RB Stems Plus.exe"
+  if [ -f "$forced" ]; then
+    cp "$forced" "$SHARE/vm/x64/forced-shell.exe" || stop "can't stage the forced-x64 shell"
+    n=$((n + 1)); echo "staged vm/x64/forced-shell.exe"
+  else missing+="vm/x64/forced-shell.exe ($forced)"$'\n'
+  fi
+  mkdir -p "$SHARE/vm/shell"
+  for a in app-test app-x64-test; do
+    local shell_app="$root/build/vm-shell/$a"
+    if [ -f "$shell_app/RB Stems Plus.exe" ]; then
+      cp -R "$shell_app" "$SHARE/vm/shell/" || stop "can't stage $a"
+      n=$((n + 1)); echo "staged vm/shell/$a"
+    else missing+="vm/shell/$a (win/shell/build.sh --test-app --x64)"$'\n'
+    fi
+  done
+  mkdir -p "$SHARE/vm/uia/rbui"
+  for f in $UIA_FILES; do
+    if [ -f "$root/build/uia/rbui/$f" ]; then cp "$root/build/uia/rbui/$f" "$SHARE/vm/uia/rbui/" && n=$((n + 1)) && echo "staged vm/uia/rbui/$f"
+    else missing+="vm/uia/rbui/$f (build/uia/rbui/$f: tests/win/uia/build.sh)"$'\n'; fi
+  done
   if [ -f "$root/build/winc/fixtures.txt" ]; then cp "$root/build/winc/fixtures.txt" "$SHARE/vm/" && echo "staged vm/fixtures.txt"
   else missing+="vm/fixtures.txt (build/winc/fixtures.txt: win/c/tests/run.sh)"$'\n'; fi
   # what --record names, and checks is still there
   vm_shas > "$SHARE/vm/shas.txt.tmp" && mv "$SHARE/vm/shas.txt.tmp" "$SHARE/vm/shas.txt" || stop "can't write $SHARE/vm/shas.txt"
   if [ -n "$built" ]; then echo "$built" > "$SHARE/vm/.commit" && echo "vm/ built from $built (vm/.commit)"; fi
   # the TEST build's fixture releases (their key: this checkout's build/test-keys, or the main
-  # checkout's; never a release key, stage-dist.sh refuses one)
+  # checkout's, or the gate archive's: a TEST build in a plan's shape is signed with the pair in
+  # its tag-*/test-keys/, never build/test-keys/ (build.sh); never a release key, stage-dist.sh
+  # refuses one; a key that didn't sign the TEST build is passed over)
+  local akeys=() ak mainco
+  mainco="$(cd "$(git -C "$here" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)"
+  for ak in "${GATES_ARCHIVE:-$root/gates-archive}"/tag-*/test-keys "$mainco"/gates-archive/tag-*/test-keys; do
+    [ -f "$ak/test-key.pem" ] && [ -f "$ak/test.pub.pem" ] && { akeys=(--key "$ak"); break; }
+  done
   if [ -f "$SHARE/dist-test/payload.json.sig" ]; then
     local keys=(--key "$root/build/test-keys")
-    [ "$root" != "$here" ] || keys+=(--key "$(cd "$(git -C "$here" rev-parse --path-format=absolute --git-common-dir)/.." && pwd)/build/test-keys")
+    [ "$root" != "$here" ] || keys+=(--key "$mainco/build/test-keys")
+    keys+=(${akeys[@]+"${akeys[@]}"})
     "$here/tests/win/suites/stage-dist.sh" "$SHARE" "${keys[@]}" || stop "stage-dist.sh couldn't make the TEST build's fixture releases"
   else
     missing+="dist-test/ fault-*/ and bad-version/ (no signed TEST build in $SHARE/dist-test yet)"$'\n'
+  fi
+  # and in the folder a run will serve instead (run --serve DIR): its suites fetch them from there
+  if [ -n "$serve" ]; then
+    local skeys=(--key "$root/build/test-keys")
+    [ "$root" != "$here" ] || skeys+=(--key "$mainco/build/test-keys")
+    skeys+=(${akeys[@]+"${akeys[@]}"})
+    "$here/tests/win/suites/stage-dist.sh" "$SHARE" "${skeys[@]}" --dist "$serve" || stop "stage-dist.sh couldn't make the fixture releases in $serve"
   fi
   [ "$n" -gt 0 ] || echo "no test exe built here (vm-run.sh stage --build builds them)"
   if [ -n "$missing" ]; then
@@ -1113,11 +1690,49 @@ cmd_stage() {
   fi
 }
 
+# snapshot NAME: a snapshot of the VM as it is now, under the VM's lock; refused when one of that
+# name is there (snap_id needs one per name)
+cmd_snapshot() {
+  local list id info
+  [ $# = 1 ] && [ -n "$1" ] || stop "usage: vm-run.sh snapshot NAME"
+  vm_guard
+  lock
+  trap cleanup EXIT
+  list="$(bounded 60 "$PRLCTL" snapshot-list "$UUID" 2> /dev/null)" || stop "prlctl snapshot-list failed"
+  for id in $(grep -o '{[0-9A-Fa-f-]*}' <<< "$list" | sort -u); do
+    # an unreadable one could bear the name: refused, never a second of it
+    info="$(bounded 60 "$PRLCTL" snapshot-list "$UUID" -i "$id" 2> /dev/null)" || stop "prlctl snapshot-list -i $id failed"
+    [ "$(vm_field Name "$info")" != "$1" ] || stop "$NAME has a snapshot named \"$1\" already ($id)"
+  done
+  say "snapshot \"$1\" of $NAME ($(vm_state))"
+  bounded "$LIMIT" "$PRLCTL" snapshot "$UUID" -n "$1" > /dev/null || stop "prlctl snapshot $UUID -n \"$1\" failed"
+  id="$(snap_id "$1")" || exit 2
+  say "snapshot ${id%% *} \"$1\" taken"
+}
+
+# usb attach|detach: vm-run.conf's stick for this VM assigned to it, or taken back; exit 77 when
+# none is assigned there. attach leaves it assigned (usb detach, or a run's end, takes it back)
+cmd_usb() {
+  local id
+  case "${1:-}" in attach|detach) ;; *) stop "usage: vm-run.sh usb attach|detach" ;; esac
+  [ $# = 1 ] || stop "usage: vm-run.sh usb attach|detach"
+  vm_guard
+  id="$(conf_usb)" || exit 2
+  [ -n "$id" ] || { echo "vm-run.sh: no USB stick is assigned to $NAME in $CONF (a line \"usb $NAME DEVICE-ID\")"; exit 77; }
+  lock
+  trap cleanup EXIT
+  if [ "$1" = attach ]; then usb_set "$id"; USB_ON=()
+  else USB_ON=("$id"); usb_del || exit 1; fi
+}
+
 case "${1:-}" in
   run) shift; cmd_run "$@" ;;
+  snapshot) shift; cmd_snapshot "$@" ;;
+  usb) shift; cmd_usb "$@" ;;
   stage) shift; cmd_stage "$@" ;;
-  check) [ $# -ge 2 ] || stop "usage: vm-run.sh check COMMIT [DIR]"; check "$2" "${3:-$root/dist-test}" ;;
-  sys|user|user-high|user-signed) cmd_one "$@" ;;
+  check|check-vm) [ $# -ge 2 ] || stop "usage: vm-run.sh $1 COMMIT [DIR]"; check "$2" "${3:-$root/dist-test}" "$1" ;;
+  server-address) printf '%s:%s\n' "$BIND" "$PORT" ;;
+  sys|user|user-high|user-signed|user-signed-high) cmd_one "$@" ;;
   selftest) exec "$here/tests/win/vm-run-test.sh" ;;
   *) awk 'NR > 1 && /^#/ { print; next } NR > 1 { exit }' "$0"; exit 2 ;;
 esac

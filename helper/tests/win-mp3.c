@@ -104,7 +104,16 @@ static const char NOMAP[] = "MP3 the frame scanner rejects: rekordbox finds no f
 static int dec(const char *lib, const char *path, const char *out, size_t *n_out, char *why, size_t whyn) {
     float *s;
     size_t n;
+#ifdef RBSP_WIN_DECODE
+    plat_file file;
+    int rate;
+    if (plat_file_open_path(path, &file)) { printf("dec\trefused\topen failed\n"); return 1; }
+    int rc = rb_mp3_file(file, lib, &s, &n, &rate, why, whyn);
+    plat_file_close(file);
+    if (rc) { printf("dec\trefused\t%s\n", why); return 1; }
+#else
     if (rb_mp3(path, lib, &s, &n, why, whyn)) { printf("dec\trefused\t%s\n", why); return 1; }
+#endif
     FILE *f = fopen(out, "wb");
     if (!f || fwrite(s, sizeof(float), 2 * n, f) != 2 * n) { perror(out); exit(2); }
     fclose(f);
@@ -139,6 +148,13 @@ int main(int argc, char **argv) {
         double us = 0;
         int prc = run_probe(path, &p, pwhy, sizeof pwhy, &us);
         if (prc == 2) { check(0, "probe", pwhy); return 1; }
+        const char *name = strrchr(path, '/');
+        name = name ? name + 1 : path;
+        if (!strcmp(name, "vbr-v2.mp3") || !strcmp(name, "vbri-vbr.mp3") || !strcmp(name, "cbr128.mp3")) {
+            char io[100];
+            snprintf(io, sizeof io, "%lld bytes read, at most %d expected", (long long)g_bytes, P_WIN + 128);
+            check(!prc && !p.approx && p.frames == m.nf * m.spf && g_bytes <= P_WIN + 128, "probe-tag-read-budget", io);
+        }
         check(!g_past, "probe-bounds", "no read past the size");
         int mapped = m.nf > 0;
         if (prc) printf("probe\trefused\t%s\n", pwhy);
@@ -161,6 +177,11 @@ int main(int argc, char **argv) {
                      p.approx ? " approx" : "");
             check(p.seconds - s <= tol(s) && s - p.seconds <= tol(s), "probe-seconds", w);
             check(p.kind == PCM_MP3, "probe-kind", "PCM_MP3");
+            if (!p.approx) {
+                snprintf(w, sizeof w, "%llu PCM frames, frame map gives %zu",
+                         (unsigned long long)p.frames, m.nf * m.spf);
+                check(p.frames == m.nf * m.spf, "probe-exact-length", w);
+            }
         }
         return fails ? 1 : 0;
     }

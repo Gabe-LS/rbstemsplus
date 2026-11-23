@@ -62,6 +62,8 @@ typedef struct vt {
     int rb_running;
     int ort_listed;          /* Windows: FACT_ORT_LISTED */
     int lib_unchecked;       /* Windows: FACT_LIB_UNCHECKED */
+    const char *win_rows;
+    int64_t r1_state;        /* Windows: CORE_SLOW_R1's FACT_R1_STATE (review CW2) */
     const char *config;      /* the start config, NULL: CONFIG */
     /* the dialogs, as the flow thread asked them (under mu), and the buttons pressed, in order (0 by default) */
     struct { char title[256], msg[1024], buttons[512]; } dlg[8];
@@ -93,6 +95,9 @@ typedef struct vt {
     int nheld_walk;
     int64_t set_size_kind;     /* SETTINGS' FACT_SET_SIZE_KIND (4: the core's), FACT_SET_SIZE 7 GiB */
     int64_t set_clear, set_location;   /* SETTINGS' FACT_SET_CLEAR (3: the drive "B") and FACT_SET_LOCATION */
+#ifdef CORE_WIN_POLICY
+    const char *settings_in_use;
+#endif
     int date_asks, date_on_main;   /* DATE_TEXT: asked; asked inside a callback on main */
     /* SQ1: the queued actions' steps. REQUEST's age + 1 (0: none); the next REKORDBOX checks that
      * fail, find rekordbox open, still closing (Windows) or updating, each used up as answered;
@@ -114,17 +119,22 @@ static void vpush(vt *t, core_job *j) {
     pthread_mutex_unlock(&t->mu);
 }
 
+static vitem *vpop(vt *t) {
+    pthread_mutex_lock(&t->mu);
+    vitem *it = t->head;
+    if (it) {
+        t->head = it->next;
+        if (!t->head) t->tail = NULL;
+    }
+    pthread_mutex_unlock(&t->mu);
+    return it;
+}
+
 /* every queued job, until none is left (jobs post jobs); returns how many ran */
 static int pump(vt *t) {
     int n = 0;
     for (;;) {
-        pthread_mutex_lock(&t->mu);
-        vitem *it = t->head;
-        if (it) {
-            t->head = it->next;
-            if (!t->head) t->tail = NULL;
-        }
-        pthread_mutex_unlock(&t->mu);
+        vitem *it = vpop(t);
         if (!it) {
             if (!n) return 0;
             /* a flow on its own thread may still post: give it a moment, once */
@@ -200,6 +210,7 @@ static void h_facts(void *ctx, core_facts *o) {
 #ifdef CORE_WIN_POLICY
     core_fact_flag(o, FACT_ORT_LISTED, t->ort_listed);
     if (t->lib_unchecked) core_fact_flag(o, FACT_LIB_UNCHECKED, 1);
+    if (t->win_rows) core_fact_str(o, FACT_WIN_RB_ROWS, t->win_rows, CORE_NTS);
 #endif
     core_fact_flag(o, FACT_CONFIG_ENABLED, t->enabled);
     core_fact_flag(o, FACT_CONFIG_RB_MODEL, t->rb_model);
@@ -207,6 +218,7 @@ static void h_facts(void *ctx, core_facts *o) {
     core_fact_str(o, FACT_CONFIG_MAX_GB, t->max_gb, CORE_NTS);
     pthread_mutex_unlock(&t->mu);
     core_fact_i64(o, FACT_CONFIG_LOCATION, t->cfg_location);
+    if (t->cfg_location == 1) core_fact_str(o, FACT_CONFIG_DIR, "E:\\rbstemsplus", CORE_NTS);
     if (!t->no_loc_sheet) {
         core_fact_flag(o, FACT_LOC_MEASURED, t->measured);
         core_fact_i64(o, FACT_LOC_KIND, t->loc_kind);
@@ -335,6 +347,12 @@ static int32_t h_slow(void *ctx, core_slow kind, const char *key, size_t n, core
         return 0;
     }
     t->slow_calls++;
+#ifdef CORE_WIN_POLICY
+    if (kind == CORE_SLOW_R1) {
+        core_fact_i64(out, FACT_R1_STATE, t->r1_state);
+        return 0;
+    }
+#endif
     if (kind != CORE_SLOW_MODEL_SHA || !t->model_sha) return 1;
     core_fact_str(out, FACT_SHA256, t->model_sha, CORE_NTS);
     return 0;
@@ -442,6 +460,14 @@ static int32_t h_step(void *ctx, core_step kind, const char *const *args, int32_
         core_fact_str(out, FACT_STEP_PATH, "/RB/hdemucs.onnx", CORE_NTS);
         return 0;
     }
+#ifdef CORE_WIN_POLICY
+    if (kind == CORE_STEP_WIN_SCOPE) {
+        core_fact_i64(out, FACT_STEP_CODE, 0);
+        core_fact_str(out, FACT_WIN_SCOPE, "7.2.10:1111111111111111", CORE_NTS);
+        core_fact_str(out, FACT_WIN_SCOPE_VERSIONS, "7.2.10\n", CORE_NTS);
+        return 0;
+    }
+#endif
     if (kind == CORE_STEP_BLOCKED) {   /* nothing blocks */
         core_fact_str(out, FACT_ENGINE, "1.0.0", CORE_NTS);
         core_fact_flag(out, FACT_ENGINE_SUPPORTED, 1);
@@ -472,6 +498,9 @@ static int32_t h_step(void *ctx, core_step kind, const char *const *args, int32_
         core_fact_i64(out, FACT_SET_SIZE, 7ll << 30);
         core_fact_i64(out, FACT_SET_CLEAR, t->set_clear);
         core_fact_i64(out, FACT_SET_LOCATION, t->set_location);
+#ifdef CORE_WIN_POLICY
+        if (t->settings_in_use) core_fact_str(out, FACT_LOC_IN_USE, t->settings_in_use, CORE_NTS);
+#endif
         if (t->set_clear == 3) {
             core_fact_str(out, FACT_LOC_DIR, "/Volumes/B/rbstemsplus", CORE_NTS);
             core_fact_str(out, FACT_LOC_GATE_ID, "id1", CORE_NTS);
@@ -2488,7 +2517,7 @@ static void t_flow_end_busy(void) {
 }
 
 /* CF2: busy(nil)'s reservation fails while EF_BUSY goes through, and busy(nil)'s own post fails at
- * the end: the flow's end turns busy off */
+ * the end. The flow's end restores the rendered view through the main queue. */
 static void t_busy_unreserved(void) {
     vt t;
     vt_init(&t);
@@ -2499,6 +2528,7 @@ static void t_busy_unreserved(void) {
     mark_rec m = {0, 0, 0, "", &t, pthread_self()};
     CHECK(core_test_set_mark(t.c, rec_mark, &m) == CORE_OK);
     t.hold_step = CORE_STEP_BUSY_MARKER + 1;
+    CHECK(t.snap && core_flag(t.snap, F_SETTINGS_ENABLED) == 1);
     t.answer[0] = 1;   /* "Report saved": Done */
     ev(&t, "{\"ev\":\"menu\",\"id\":\"create_report\"}");
     CHECK(step_wait(&t));
@@ -2517,13 +2547,17 @@ static void t_busy_unreserved(void) {
     CHECK(at_zip);
     wait_ms(&t, 20);
     CHECK(atomic_load(&t.c->life->fail_after) < 0);   /* the failure was used */
-    CHECK(t.c->action_running && FL(&t, F_SPINNER) == 1 && !strcmp(S(&t, F_STATUS_LINE), "Creating a report…"));
+    CHECK(t.c->action_running && t.snap && core_flag(t.snap, F_SPINNER) == 1 &&
+          !strcmp(core_str(t.snap, F_STATUS_LINE, NULL), "Creating a report…") &&
+          core_flag(t.snap, F_SETTINGS_ENABLED) == 0);
     CHECK(core_test_fail_allocs(t.c, 1) == CORE_OK);   /* busy(nil)'s own post, with no reservation */
     step_go(&t);
     vt_settle(&t);
-    core_test_fail_allocs(t.c, 0);
-    core_commit(t.c);
-    CHECK(!t.c->flow_running && !t.c->action_running && FL(&t, F_SPINNER) == 0 && strcmp(S(&t, F_STATUS_LINE), "Creating a report…") != 0);
+    CHECK(atomic_load(&t.c->life->fail_allocs) == 0);
+    CHECK(!t.c->flow_running && !t.c->action_running);
+    CHECK(t.snap && core_flag(t.snap, F_SPINNER) == 0 &&
+          strcmp(core_str(t.snap, F_STATUS_LINE, NULL), "Creating a report…") != 0 &&
+          core_flag(t.snap, F_SETTINGS_ENABLED) == 1);
     CHECK(m.n == 1);
     vt_end(&t);
     LEAKCHECK();
@@ -3388,6 +3422,141 @@ static void t_win_ort_listed(void) {
     vt_end(&t);
 }
 
+static void t_win_version_rows(void) {
+    vt t;
+    vt_init(&t);
+    t.config = "{\"version\":\"1.4.0\",\"os\":\"win\"}";
+    t.plus = t.cache = t.chosen_cache = t.traces = t.ort_listed = 1;
+    t.win_rows = "7.2.20\t2\t1\t0\t0\t0\t7.2.20.0354\n"
+                 "7.2.19\t0\t0\t0\t0\t0\t7.2.19.0342\n";
+    CHECK(vt_core(&t) != NULL);
+    ev(&t, "{\"ev\":\"start\"}");
+    CHECK(FL(&t, F_WIN_RB_ROWS_SHOWN) && ROWS(&t, T_WIN_RB_VERSIONS) == 2);
+    CHECK(!strcmp(S(&t, F_WIN_CACHE_SUMMARY), "Stems Cache on in 1 of 2 versions"));
+    CHECK(I(&t, F_LIGHT_CACHE_LOOK) == LOOK_LIMITED);
+    CHECK(!strcmp(CELL(&t, C_WIN_RB_TEXT, 0), "7.2.20 · Unsupported"));
+    CHECK(!strcmp(CELL(&t, C_WIN_RB_TEXT, 1), "7.2.19 · On"));
+    CHECK(CELLI(&t, C_WIN_RB_LOOK, 0) == LOOK_OFF && CELLI(&t, C_WIN_RB_LOOK, 1) == LOOK_ON);
+    CHECK(!FL(&t, F_INSTALL_CACHE_ENABLED) && FL(&t, F_UNINSTALL_CACHE_ENABLED));
+    CHECK(strstr(S(&t, F_STATUS_LINE), "Stems Cache doesn't support rekordbox 7.2.20 yet.") != NULL);
+    CHECK(strstr(S(&t, F_LIGHT_CACHE_TIP), "7.2.20.0354 · Unsupported\n7.2.19.0342 · On") != NULL);
+    uint64_t gen = GEN(&t, T_WIN_RB_VERSIONS);
+    t.win_rows = "7.2.20\t2\t1\t0\t0\t0\t7.2.20.0354\n"
+                 "7.2.19\t0\t0\t1\t0\t0\t7.2.19.0342\n";
+    ev(&t, "{\"ev\":\"facts_warm\"}");
+    CHECK(GEN(&t, T_WIN_RB_VERSIONS) == gen);
+    CHECK(!strcmp(CELL(&t, C_WIN_RB_TEXT, 1), "7.2.19 · On · Running"));
+    t.win_rows = "7.2.21\t1\t0\t0\t0\t0\t7.2.21.1\n"
+                 "7.2.20\t3\t5\t0\t1\t0\t7.2.20.0354\n"
+                 "7.2.19\t0\t0\t1\t0\t0\t7.2.19.0342\n";
+    ev(&t, "{\"ev\":\"facts_warm\"}");
+    CHECK(ROWS(&t, T_WIN_RB_VERSIONS) == 3 && I(&t, F_LIGHT_CACHE_LOOK) == LOOK_LIMITED);
+    CHECK(!strcmp(CELL(&t, C_WIN_RB_TEXT, 2), "7.2.19 · On · Running"));
+    CHECK(FL(&t, F_WIN_RESTORE_VISIBLE) && FL(&t, F_INSTALL_CACHE_ENABLED));
+    t.lib_unchecked = 1;
+    ev(&t, "{\"ev\":\"facts_warm\"}");
+    CHECK(ROWS(&t, T_WIN_RB_VERSIONS) == 3 && !FL(&t, F_INSTALL_CACHE_ENABLED));
+    CHECK(strstr(S(&t, F_STATUS_LINE), "couldn't check") != NULL);
+    t.lib_unchecked = 0;
+    t.win_rows = "7.2.19\t0\t0\t0\t0\t0\t7.2.19.0342\n";
+    ev(&t, "{\"ev\":\"facts_warm\"}");
+    CHECK(!FL(&t, F_WIN_RB_ROWS_SHOWN) && !ROWS(&t, T_WIN_RB_VERSIONS) && !*S(&t, F_WIN_CACHE_SUMMARY));
+    vt_end(&t);
+}
+
+static void t_win_install_disabled_for_only_repair(void) {
+    static const char unrecorded[] = "7.2.10\t3\t11\t0\t2\t0\t7.2.10.0342\n";
+    static const char delisted[] = "7.2.10\t3\t8\t0\t2\t0\t7.2.10.0342\n";
+    static const struct {
+        const char *name, *row;
+        int chosen_cache, chosen_model;
+    } cases[] = {
+        {"unrecorded", unrecorded, 0, 0},
+        {"unrecorded, cache chosen", unrecorded, 1, 0},
+        {"unrecorded, cache and Plus chosen", unrecorded, 1, 1},
+        {"delisted", delisted, 0, 0},
+        {"delisted, cache chosen", delisted, 1, 0},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        vt t;
+        vt_init(&t);
+        t.config = "{\"version\":\"1.4.0\",\"os\":\"win\"}";
+        t.cache = t.traces = t.ort_listed = 1;
+        t.chosen_cache = cases[i].chosen_cache;
+        t.plus = t.chosen_model = cases[i].chosen_model;
+        t.r1_state = R1_LIVE_FOREIGN;
+        t.win_rows = cases[i].row;
+        CHECK(vt_core(&t) != NULL);
+        ev(&t, "{\"ev\":\"start\"}");
+        CHECKS(!FL(&t, F_INSTALL_CACHE_ENABLED), cases[i].name);
+        CHECKS(!FL(&t, F_REINSTALL_CACHE_ENABLED), cases[i].name);
+        CHECKS(FL(&t, F_REINSTALL_ENABLED) == cases[i].chosen_model, cases[i].name);
+        CHECKS(FL(&t, F_WIN_RESTORE_ENABLED), cases[i].name);
+        if (t.chosen_model)
+            CHECKS(!strcmp(S(&t, F_REINSTALL_TITLE), "Reinstall Demucs v4"), S(&t, F_REINSTALL_TITLE));
+        vt_end(&t);
+    }
+}
+
+static void t_win_repair_notice_uses_bridge_identity(void) {
+    static const struct { const char *row, *notice; } cases[] = {
+        {"7.2.10\t3\t11\t0\t2\t0\t7.2.10.0342\n",
+         "Stems Cache wasn't fully installed in rekordbox 7.2.10. Click Put Back Pioneer's File."},
+        {"7.2.10\t3\t8\t0\t2\t0\t7.2.10.0342\n",
+         "Stems Cache doesn't support rekordbox 7.2.10 any more. Click Put Back Pioneer's File."},
+        {"7.2.10\t3\t6\t0\t2\t0\t7.2.10.0342\n",
+         "rekordbox's onnxruntime.dll isn't Pioneer's or RB Stems Plus's, so rekordbox may not separate stems. Click Put Back Pioneer's File."},
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof *cases; i++) {
+        vt t;
+        vt_init(&t);
+        t.config = "{\"version\":\"1.4.0\",\"os\":\"win\"}";
+        t.cache = t.traces = 1;
+        t.r1_state = R1_LIVE_FOREIGN;
+        t.win_rows = cases[i].row;
+        CHECK(vt_core(&t) != NULL);
+        ev(&t, "{\"ev\":\"start\"}");
+        CHECKS(!strcmp(S(&t, F_WIN_R1_LINE), cases[i].notice), S(&t, F_WIN_R1_LINE));
+        CHECKS(!strcmp(S(&t, F_LIGHT_CACHE_TIP), cases[i].notice), S(&t, F_LIGHT_CACHE_TIP));
+        CHECK(FL(&t, F_WIN_RESTORE_ENABLED));
+        vt_end(&t);
+    }
+}
+
+static void win_ready_versions(vt *t, int admin) {
+    vt_init(t);
+    t->config = "{\"version\":\"1.4.0\",\"os\":\"win\"}";
+    t->admin = admin;
+    t->cache = t->chosen_cache = t->traces = 0;
+    t->ort_listed = 1;
+    t->win_rows = "7.2.20\t1\t0\t0\t0\t0\t7.2.20.0354\n"
+                  "7.2.19\t1\t0\t0\t0\t0\t7.2.19.0342\n";
+    CHECK(vt_core(t) != NULL);
+    ev(t, "{\"ev\":\"start\"}");
+    CHECK(!strcmp(S(t, F_WIN_CACHE_SUMMARY), "Stems Cache on in 0 of 2 versions"));
+}
+
+static void t_win_ready_versions_standard(void) {
+    vt t;
+    win_ready_versions(&t, 0);
+    CHECK(!FL(&t, F_INSTALL_CACHE_ENABLED));
+    const char *status = S(&t, F_STATUS_LINE);
+    CHECKS(!strstr(status, "Click Install Stems Cache"), status);
+    CHECKS(strstr(status, "Stems Cache needs an administrator account.") != NULL, status);
+    CHECK(!strcmp(CELL(&t, C_WIN_RB_TIP, 0), "Stems Cache needs an administrator account."));
+    CHECK(!strcmp(CELL(&t, C_WIN_RB_TIP, 1), "Stems Cache needs an administrator account."));
+    vt_end(&t);
+}
+
+static void t_win_ready_versions_admin(void) {
+    vt t;
+    win_ready_versions(&t, 1);
+    CHECK(FL(&t, F_INSTALL_CACHE_ENABLED));
+    const char *status = S(&t, F_STATUS_LINE);
+    CHECKS(!strcmp(status, "Click Install Stems Cache to add it to rekordbox 7.2.20 and 7.2.19."), status);
+    vt_end(&t);
+}
+
 /* HF7: Windows' cheap sheet says Pioneer's ORT couldn't be checked: the status line says so (not
  * "can't find it, reinstall rekordbox", not "checks again") and Stems Cache can't be installed */
 static void t_win_lib_unchecked(void) {
@@ -3542,18 +3711,81 @@ static void t_win_loc_decline(vt *t, int32_t rc) {
     pthread_mutex_unlock(&t->mu);
 }
 static const char paused_tip[] = "Stems Cache stopped saving stems: \"GLS\" has less than 5 GB free.";
-static void t_win_loc_not_now(void) {
-    /* a good measure, then not now: everything stays */
+static void t_win_loc_first_timeout(void) {
     vt t;
     t_win_loc_init(&t);
+    t.config = "{\"version\":\"1.4.0\",\"os\":\"win\",\"prepare_tabs\":true,\"paths\":{\"home\":\"C:\\\\Users\\\\x\","
+               "\"support\":\"/Users/x/S\",\"cache_default\":\"/Users/x/S/cache\",\"kept\":\"/Users/x/S/kept\"}}";
+    t.cfg_location = 1;
+    t_win_loc_decline(&t, CORE_SLOW_NOT_NOW);
+    CHECK(vt_core(&t) != NULL && t.c->os == CORE_OS_WIN);
+    ev(&t, "{\"ev\":\"start\"}");
+    vt_settle(&t);
+    CHECK(!t.c->v.loc.known && t.c->v.loc.retry);
+    CHECKS(I(&t, F_LIGHT_CACHE_LOOK) == LOOK_LIMITED &&
+           !strcmp(S(&t, F_LIGHT_CACHE_TIP), "Checking where stems are saved…"), S(&t, F_LIGHT_CACHE_TIP));
+
+    ev(&t, "{\"ev\":\"shown\"}");
+    t.front = FRONT(CORE_TAB_PREPARE);
+    ev(&t, "{\"ev\":\"tab\",\"tab\":1}");
+    give_library(&t, 4);
+    select_outline(&t, 1);
+    give_tracks(&t, 3);
+    CHECKS(!strcmp(S(&t, F_PREP_INFO), "Checking where stems are saved…"), S(&t, F_PREP_INFO));
+    CHECK(!run_with(&t, "--estimate") && !FL(&t, F_PREP_PREPARE_ENABLED));
+    vt_end(&t);
+    LEAKCHECK();
+}
+
+static void t_win_settings_fresh_size(void) {
+    vt t;
+    t_win_loc_init(&t);
+    t.set_size_kind = 4;
+    t.set_clear = 1;
+    CHECK(vt_core(&t) != NULL && t.c->os == CORE_OS_WIN);
+    ev(&t, "{\"ev\":\"start\"}");
+    vt_settle(&t);
+    CHECK(loc_now(&t).size_kind == 1 && loc_now(&t).size_bytes == (3ll << 30));
+
+    t.settings_in_use = "F:\\other";
+    t.answer[0] = 2;
+    ev(&t, "{\"ev\":\"menu\",\"id\":\"settings\"}");
+    vt_settle(&t);
+    CHECKS(t.ndlg == 1 && strstr(t.dlg[0].buttons, "(measuring"), t.dlg[0].buttons);
+
+    t.ndlg = 0;
+    t.settings_in_use = t.in_use;
+    ev(&t, "{\"ev\":\"menu\",\"id\":\"settings\"}");
+    vt_settle(&t);
+    CHECKS(t.ndlg == 1 && strstr(t.dlg[0].buttons, "about 3.0 GB"), t.dlg[0].buttons);
+
+    t_win_loc_decline(&t, CORE_SLOW_NOT_NOW);
+    ev(&t, "{\"ev\":\"activated\"}");
+    vt_settle(&t);
+    CHECK(loc_now(&t).known == VIEW_LOC_STALE && loc_now(&t).size_bytes == (3ll << 30));
+    t.ndlg = 0;
+    ev(&t, "{\"ev\":\"menu\",\"id\":\"settings\"}");
+    vt_settle(&t);
+    CHECKS(t.ndlg == 1 && strstr(t.dlg[0].buttons, "(measuring"), t.dlg[0].buttons);
+    vt_end(&t);
+    LEAKCHECK();
+}
+
+static void t_win_loc_not_now(void) {
+    /* D2 (Lane C): keep the drive and size through a timeout, then show a fresh answer */
+    vt t;
+    t_win_loc_init(&t);
+    t.cfg_location = 1;
+    t.loc_kind = LOC_CHOSEN;
+    t.paused_floor = -1;
     CHECK(vt_core(&t) != NULL && t.c->os == CORE_OS_WIN);
     ev(&t, "{\"ev\":\"start\"}");
     vt_settle(&t);
     ev(&t, "{\"ev\":\"activated\"}");
     vt_settle(&t);
     view_loc_memo *m = &t.c->v.loc;
-    int look = I(&t, F_LIGHT_CACHE_LOOK), measures = t.loc_measures;
-    CHECKS(m->known && m->every && look == LOOK_LIMITED && !strcmp(S(&t, F_LIGHT_CACHE_TIP), paused_tip), S(&t, F_LIGHT_CACHE_TIP));
+    int measures = t.loc_measures;
+    CHECK(m->known && m->every && I(&t, F_LIGHT_CACHE_LOOK) == LOOK_ON);
     CHECK(loc_now(&t).size_kind == 1 && loc_now(&t).size_bytes == (3ll << 30));
     plat_timer *every = m->every;
     uint64_t size_gen = m->size_gen, status_gen = t.c->gen[DOM_STATUS];
@@ -3561,9 +3793,15 @@ static void t_win_loc_not_now(void) {
     ev(&t, "{\"ev\":\"activated\"}");
     vt_settle(&t);
     CHECK(t.loc_measures == measures && !m->working);
-    CHECKS(m->known && I(&t, F_LIGHT_CACHE_LOOK) == look && !strcmp(S(&t, F_LIGHT_CACHE_TIP), paused_tip), S(&t, F_LIGHT_CACHE_TIP));
-    CHECK(loc_now(&t).size_kind == 1 && loc_now(&t).size_bytes == (3ll << 30) && m->size_folder);
-    CHECK(m->every == every && m->size_gen == size_gen && t.c->gen[DOM_STATUS] == status_gen);
+    CHECKS(m->known && I(&t, F_LIGHT_CACHE_LOOK) == LOOK_LIMITED &&
+           !strcmp(S(&t, F_LIGHT_CACHE_TIP), "Checking where stems are saved…"), S(&t, F_LIGHT_CACHE_TIP));
+    CHECK(loc_now(&t).size_kind == 1 && loc_now(&t).size_bytes == (3ll << 30) &&
+          !strcmp(loc_now(&t).drive, "GLS"));
+    CHECK(m->every == every && m->size_gen == size_gen && t.c->gen[DOM_STATUS] > status_gen);
+    t.slow_location = 1;
+    ev(&t, "{\"ev\":\"activated\"}");
+    vt_settle(&t);
+    CHECK(I(&t, F_LIGHT_CACHE_LOOK) == LOOK_ON && !m->retry);
     vt_end(&t);
     LEAKCHECK();
 
@@ -3855,16 +4093,15 @@ static void t_win_traces_gate(void) {
     }
 }
 
-/* the start config's "prepare_tabs" (I10, I86): absent or false, the first Windows release's menus
- * have no View > Status, View > Prepare or Prepare menu (hidden, not enabled: no shortcut and no
- * menu event); true, the Prepare release's, they are as the Mac's. The Mac's column ignores it. */
+/* The 1.5.0 Windows shell sends "prepare_tabs":true. A Manage-only host can omit it or send false.
+ * Check both layouts, and the Mac's always-visible tabs in the same core build. */
 static void t_win_prepare_tabs(void) {
     static const int32_t rows[] = {M_VIEW_STATUS, M_VIEW_PREPARE, M_PREPARE, M_PREP_PLAYLIST,
                                    M_PREP_CHECK, M_PREP_SEP, M_PREP_PAUSE, M_PREP_STOP};
     static const char *const configs[] = {
         "{\"version\":\"1.4.0\",\"os\":\"win\",\"paths\":{\"home\":\"C:\\\\Users\\\\x\"}}",
         "{\"version\":\"1.4.0\",\"os\":\"win\",\"prepare_tabs\":false,\"paths\":{\"home\":\"C:\\\\Users\\\\x\"}}",
-        "{\"version\":\"1.4.0\",\"prepare_tabs\":true,\"os\":\"win\",\"paths\":{\"home\":\"C:\\\\Users\\\\x\"}}",
+        "{\"version\":\"1.5.0\",\"os\":\"win\",\"paths\":{\"home\":\"C:\\\\Users\\\\x\"},\"prepare_tabs\":true}",
         NULL,   /* the Mac's config */
     };
     for (int k = 0; k < 4; k++) {
@@ -3874,8 +4111,13 @@ static void t_win_prepare_tabs(void) {
         t.config = configs[k];
         CHECKS(vt_core(&t) != NULL, configs[k] ? configs[k] : "mac");
         ev(&t, "{\"ev\":\"start\"}");
-        /* PM2: Stems Cache in, so the start tab is Status, except in the first release (no Status tab) */
+        /* With Stems Cache installed, start on Status when the shell shows it. */
         CHECKS(I(&t, F_TAB) == (shown ? CORE_TAB_STATUS : CORE_TAB_MANAGE), "the start tab");
+        if (k == 2) {
+            CHECKS(core_menu_state(t.c, M_VIEW_STATUS, NULL, NULL) == CORE_MENU_ENABLED
+                && core_menu_state(t.c, M_VIEW_PREPARE, NULL, NULL) == CORE_MENU_ENABLED,
+                "1.5.0 Windows release: View > Status and View > Prepare are enabled at startup");
+        }
         t.c->preparing = 1;   /* Pause and Stop are on while a run is going */
         for (size_t i = 0; i < sizeof rows / sizeof *rows; i++) {
             uint32_t on = rows[i] == M_PREP_CHECK ? 0u : CORE_MENU_ENABLED;   /* Check Again: off while preparing */
@@ -3887,7 +4129,7 @@ static void t_win_prepare_tabs(void) {
         CHECK(core_menu_state(t.c, M_APP_UPDATE, NULL, NULL) == (CORE_MENU_ENABLED | CORE_MENU_HIDDEN));
         ev(&t, "{\"ev\":\"menu\",\"id\":\"tab_manage\"}");
         CHECK(I(&t, F_TAB) == CORE_TAB_MANAGE);
-        ev(&t, "{\"ev\":\"menu\",\"id\":\"tab_prepare\"}");   /* Ctrl+2: nothing in the first release */
+        ev(&t, "{\"ev\":\"menu\",\"id\":\"tab_prepare\"}");   /* Ctrl+2 */
         CHECK(I(&t, F_TAB) == (shown ? CORE_TAB_PREPARE : CORE_TAB_MANAGE));
         ev(&t, "{\"ev\":\"menu\",\"id\":\"tab_status\"}");
         CHECK(I(&t, F_TAB) == (shown ? CORE_TAB_STATUS : CORE_TAB_MANAGE));
@@ -4047,7 +4289,11 @@ static int count_logged(vt *t, const char *line) {
     return n;
 }
 static void t_watcher_activation(void) {
+#ifdef CORE_WIN_POLICY
+    static const char *const off_line = "watcher: installed but not running (turned off in Startup apps, or not started): reinstall reminders are off";
+#else
     static const char *const off_line = "watcher: installed but not running (turned off in Login Items, or not loaded): reinstall reminders are off";
+#endif
     vt t;
     vt_init(&t);
     vt_core(&t);
@@ -4071,6 +4317,79 @@ static void t_watcher_activation(void) {
     vt_end(&t);
     LEAKCHECK();
 }
+#ifdef CORE_WIN_POLICY
+/* every helper run still open answered as Friday's library, tracks and estimate say, until none is
+ * left (a check started by another: the newest of each kind wins) */
+static void answer_open_runs(vt *t) {
+    static const char *const trk[] = {"{\"file\":\"/Music/a.mp3\"}", "{\"file\":\"/Music/b.mp3\"}", "{\"file\":\"/Music/c.mp3\"}"};
+    static const char *const est[] = {EST_A, EST_B, EST_C, EST_END};
+    for (int round = 0; round < 32; round++) {
+        vrun *r = NULL;
+        for (int i = 0; i < t->nruns && i < 128 && !r; i++)
+            if (!t->runs[i].ended) r = &t->runs[i];
+        if (!r) return;
+        if (strstr(r->argv, "--playlists")) for (int i = 0; i < 4; i++) line(t, r, LIB[i]);
+        else if (strstr(r->argv, "--tracks")) for (int i = 0; i < 3; i++) line(t, r, trk[i]);
+        else if (strstr(r->argv, "--estimate")) for (int i = 0; i < 4; i++) line(t, r, est[i]);
+        end_run(t, r, 0, "");
+        vt_settle(t);
+    }
+}
+
+/* review CW2: with Prepare (prepare:true), an R1 answer that changes the state checks the Prepare
+ * tab again, quietly, so its problems follow it both ways: missing, then put back */
+static void t_win_r1_prepare(void) {
+    vt t;
+    vt_init(&t);
+    t.config = "{\"version\":\"1.4.0\",\"os\":\"win\",\"prepare_tabs\":true,\"paths\":{\"home\":\"C:\\\\Users\\\\x\",\"support\":\"/Users/x/S\","
+               "\"cache_default\":\"/Users/x/S/cache\",\"model\":\"/RB/hdemucs.onnx\",\"root_ort\":\"/L/ort.dll\","
+               "\"rekordbox\":\"C:\\\\Program Files\\\\rekordbox\\\\rekordbox 7.2.4\",\"kept\":\"/Users/x/S/kept\"}}";
+    t.ort_listed = 1;
+    CHECK(vt_core(&t) != NULL && t.c->os == CORE_OS_WIN);
+    to_friday_estimated(&t);
+    vt_settle(&t);
+    CHECK(t.c->p.nproblems == 0 && FL(&t, F_PREP_PREPARE_ENABLED) == 1);
+    /* missing: the answer lands after activation's own re-check, and checks again */
+    t.r1_state = R1_LIVE_MISSING;
+    ev(&t, "{\"ev\":\"activated\"}");
+    vt_settle(&t);
+    answer_open_runs(&t);
+    CHECK(t.c->v.win_r1 == R1_LIVE_MISSING && t.c->p.nproblems > 0 && t.c->p.problems && strstr(t.c->p.problems, "onnxruntime.dll is missing"));
+    CHECK(FL(&t, F_PREP_PREPARE_ENABLED) == 0);
+    /* put back: the next answer clears it, and Prepare checks again with no R1 problem */
+    t.r1_state = R1_OK;
+    ev(&t, "{\"ev\":\"check_request\"}");
+    vt_settle(&t);
+    answer_open_runs(&t);
+    CHECK(t.c->v.win_r1 == R1_OK && (!t.c->p.problems || !strstr(t.c->p.problems, "onnxruntime.dll")));
+    CHECK(t.c->p.nproblems == 0 && FL(&t, F_PREP_PREPARE_ENABLED) == 1);
+    vt_end(&t);
+}
+
+/* PF4: the version vanished after the estimate, while Prepare was still enabled. The click
+ * refreshes the track list and refuses the run before the native helper guard is reached. */
+static void t_win_prepare_version_moved(void) {
+    vt t;
+    vt_init(&t);
+    t.config = "{\"version\":\"1.4.0\",\"os\":\"win\",\"prepare_tabs\":true,\"paths\":{\"home\":\"C:\\\\Users\\\\x\","
+               "\"support\":\"/Users/x/S\",\"cache_default\":\"/Users/x/S/cache\",\"model\":\"/RB/hdemucs.onnx\","
+               "\"root_ort\":\"/L/ort.dll\",\"kept\":\"/Users/x/S/kept\"}}";
+    t.ort_listed = 1;
+    CHECK(vt_core(&t) != NULL && t.c->os == CORE_OS_WIN);
+    to_friday_estimated(&t);
+    vt_settle(&t);
+    CHECK(FL(&t, F_PREP_PREPARE_ENABLED) == 1);
+    int tracks = runs_with(&t, "--tracks");
+    int estimates = runs_with(&t, "--estimate");
+    t.rb_installed = 0;
+    ev(&t, "{\"ev\":\"click\",\"id\":\"prepare\"}");
+    CHECK(logged(&t, "prepare: no verified current rekordbox, the run isn't started"));
+    CHECK(runs_with(&t, "--keep") == 0 && runs_with(&t, "--tracks") == tracks + 1 && runs_with(&t, "--estimate") == estimates);
+    CHECK(FL(&t, F_PREP_PREPARE_ENABLED) == 0);
+    vt_end(&t);
+    LEAKCHECK();
+}
+#endif
 
 /* review MR5: each Settings flow that changes where or how stems are kept (Save, Clear on this
  * Mac, Clear on a drive, a new location, Use This Mac) checks the tab in front again (prepareChanged):
@@ -4113,6 +4432,124 @@ static void t_settings_checks(void) {
 /* each scenario through a volatile pointer: not inlined into view_tests, so their fake hosts
  * (a few KB each) don't add up in one stack frame */
 #define RUN_V(t) do { void (*volatile t_)(void) = t; t_(); } while (0)
+
+#ifdef CORE_WIN_POLICY
+/* Lane C */
+static void t_win_loc_remeasure_frees_result(void) {
+    vt t;
+    t_win_loc_init(&t);
+    t.slow_drive = "Old drive";
+    CHECK(vt_core(&t) != NULL);
+    view_location_measure(t.c);
+    vitem *work = vpop(&t);
+    CHECK(work != NULL);
+    if (work) {
+        core_run(work->job);
+        free(work);
+    }
+    t.slow_drive = "New drive";
+    view_location_remeasure(t.c);
+    vt_settle(&t);
+    CHECKS(!strcmp(loc_now(&t).drive, "New drive"), "publish the replacement measurement");
+    vt_end(&t);
+#ifdef CORE_DEBUG
+    CHECKS(core_debug_live_objects() == 0, "free the superseded measurement's result strings");
+#endif
+}
+
+static void t_win_loc_remeasure_unchecked(void) {
+    vt t;
+    t_win_loc_init(&t);
+    t.config = "{\"version\":\"1.4.0\",\"os\":\"win\",\"prepare_tabs\":true,\"paths\":{\"home\":\"C:\\\\Users\\\\x\","
+               "\"support\":\"/Users/x/S\",\"cache_default\":\"/Users/x/S/cache\",\"kept\":\"/Users/x/S/kept\"}}";
+    t.cfg_location = 1;
+    t.loc_kind = LOC_CHOSEN;
+    t.paused_floor = -1;
+    CHECK(vt_core(&t) != NULL);
+    ev(&t, "{\"ev\":\"start\"}");
+    vt_settle(&t);
+    CHECK(I(&t, F_LIGHT_CACHE_LOOK) == LOOK_ON && loc_now(&t).size_kind == 1);
+
+    ev(&t, "{\"ev\":\"shown\"}");
+    t.front = FRONT(CORE_TAB_PREPARE);
+    ev(&t, "{\"ev\":\"tab\",\"tab\":1}");
+    give_library(&t, 4);
+    select_outline(&t, 1);
+    give_tracks(&t, 3);
+    CHECK(runs_with(&t, "--estimate") == 1);
+    give_estimate(&t);
+    CHECK(FL(&t, F_PREP_PREPARE_ENABLED));
+
+    t.slow_drive = "Outdated";
+    view_location_measure(t.c);
+    vitem *work = vpop(&t);
+    CHECK(work != NULL);
+    if (work) {
+        core_run(work->job);   /* an old measurement has answered, but its result is still queued */
+        free(work);
+    }
+    t_win_loc_decline(&t, CORE_SLOW_NOT_NOW);
+    view_location_remeasure(t.c);
+    CHECKS(I(&t, F_LIGHT_CACHE_LOOK) == LOOK_LIMITED, S(&t, F_LIGHT_CACHE_TIP));
+    CHECK(!FL(&t, F_PREP_PREPARE_ENABLED));
+    const char *argv[14];
+    int32_t problems;
+    prep_base_args_now(t.c, argv, &problems);
+    CHECK(problems && !strcmp(argv[2], "--cache") && !*argv[3]);
+    vt_settle(&t);
+    CHECKS(I(&t, F_LIGHT_CACHE_LOOK) == LOOK_LIMITED, S(&t, F_LIGHT_CACHE_TIP));
+    CHECKS(!strcmp(S(&t, F_PREP_INFO), "Checking where stems are saved…"), S(&t, F_PREP_INFO));
+    CHECKS(!strcmp(loc_now(&t).drive, "GLS") && loc_now(&t).size_kind == 1 &&
+           loc_now(&t).size_bytes == (3ll << 30), "keep the last published drive and size");
+    vt_end(&t);
+    LEAKCHECK();
+}
+
+static void t_win_loc_bad_config_unchecked(void) {
+    vt t;
+    t_win_loc_init(&t);
+    t.cfg_location = 2;
+    t_win_loc_decline(&t, CORE_SLOW_NOT_NOW);
+    CHECK(vt_core(&t) != NULL);
+    ev(&t, "{\"ev\":\"start\"}");
+    vt_settle(&t);
+    CHECKS(I(&t, F_LIGHT_CACHE_LOOK) == LOOK_LIMITED &&
+           !strcmp(S(&t, F_LIGHT_CACHE_TIP), "Checking where stems are saved…"), S(&t, F_LIGHT_CACHE_TIP));
+    vt_end(&t);
+    LEAKCHECK();
+}
+
+static void t_win_version_rows_unchecked_location(void) {
+    vt t;
+    t_win_loc_init(&t);
+    t.cfg_location = 1;
+    t.loc_kind = LOC_CHOSEN;
+    t.paused_floor = -1;
+    t.win_rows = "7.2.20\t0\t0\t0\t0\t0\t7.2.20.0354\n"
+                 "7.2.19\t0\t0\t0\t0\t0\t7.2.19.0342\n";
+    CHECK(vt_core(&t) != NULL);
+    ev(&t, "{\"ev\":\"start\"}");
+    vt_settle(&t);
+    CHECK(I(&t, F_LIGHT_CACHE_LOOK) == LOOK_ON && CELLI(&t, C_WIN_RB_LOOK, 0) == LOOK_ON &&
+          CELLI(&t, C_WIN_RB_LOOK, 1) == LOOK_ON);
+
+    t_win_loc_decline(&t, CORE_SLOW_NOT_NOW);
+    view_location_remeasure(t.c);
+    vt_settle(&t);
+    CHECK(I(&t, F_LIGHT_CACHE_LOOK) == LOOK_LIMITED && CELLI(&t, C_WIN_RB_LOOK, 0) == LOOK_LIMITED &&
+          CELLI(&t, C_WIN_RB_LOOK, 1) == LOOK_LIMITED);
+    CHECK(!strcmp(CELL(&t, C_WIN_RB_TIP, 0), "Checking where stems are saved…"));
+    CHECK(!strcmp(S(&t, F_WIN_CACHE_SUMMARY), "Stems Cache on in 2 of 2 versions"));
+
+    t.slow_location = 1;
+    view_location_measure(t.c);
+    vt_settle(&t);
+    CHECK(I(&t, F_LIGHT_CACHE_LOOK) == LOOK_ON && CELLI(&t, C_WIN_RB_LOOK, 0) == LOOK_ON &&
+          CELLI(&t, C_WIN_RB_LOOK, 1) == LOOK_ON);
+    vt_end(&t);
+    LEAKCHECK();
+}
+#endif
 
 void view_tests(int *passed, int *failed) {
     g_passed = passed;
@@ -4180,15 +4617,28 @@ void view_tests(int *passed, int *failed) {
     RUN_V(t_watcher_activation);
 #ifdef CORE_WIN_POLICY
     RUN_V(t_win_ort_listed);
+    RUN_V(t_win_version_rows);
+    RUN_V(t_win_install_disabled_for_only_repair);
+    RUN_V(t_win_repair_notice_uses_bridge_identity);
+    RUN_V(t_win_ready_versions_standard);
+    RUN_V(t_win_ready_versions_admin);
     RUN_V(t_win_nameless_light);
     RUN_V(t_win_install_note_drive);
     RUN_V(t_win_traces_gate);
     RUN_V(t_win_lib_unchecked);
     RUN_V(t_win_prepare_tabs);
     RUN_V(t_win_facts_warm);
+    RUN_V(t_win_loc_first_timeout);
+    RUN_V(t_win_settings_fresh_size);
     RUN_V(t_win_loc_not_now);
     RUN_V(t_win_loc_retry);
     RUN_V(t_win_loc_every_late);
     RUN_V(t_win_loc_retry_late);
+    RUN_V(t_win_r1_prepare);
+    RUN_V(t_win_prepare_version_moved);
+    RUN_V(t_win_loc_remeasure_frees_result);
+    RUN_V(t_win_loc_remeasure_unchecked);
+    RUN_V(t_win_loc_bad_config_unchecked);
+    RUN_V(t_win_version_rows_unchecked_location);
 #endif
 }

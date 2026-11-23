@@ -7,6 +7,7 @@
 #include "../../c/admin.h"
 #include "../../c/helper_proc.h"
 #include "../../c/native_admin.h"
+#include "../../c/tests/sig_mac.h"
 
 #include <CommonCrypto/CommonDigest.h>
 #include <errno.h>
@@ -60,9 +61,13 @@ static void put_worker(const char *bytes) {
     spits(P("%s/bin/%s/RB Stems Plus.exe", ROOT, d12), bytes);
 }
 
-static const char W1[] = "MZ one rbsp-admin worker: proto=1 minimum=1.5.0\n";
-static const char W1B[] = "MZ one-b rbsp-admin worker: proto=1 minimum=1.6.0\n";
-static const char W2[] = "MZ two rbsp-admin worker: proto=2 minimum=1.7.0\n";
+/* W1 and W1B speak this app's protocol (ADMIN_PROTO 2), W2 a newer one */
+static const char W1[] = "MZ one rbsp-admin worker: proto=2 minimum=1.5.0\n";
+static const char W1B[] = "MZ one-b rbsp-admin worker: proto=2 minimum=1.6.0\n";
+static const char W2[] = "MZ two rbsp-admin worker: proto=3 minimum=1.7.0\n";
+/* the scope the core checked (FACT_WIN_SCOPE) and the copied payload.json's sha256 */
+static const char TGT[] = "7.2.19:0123456789abcdef";
+static const char MANIFEST[] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 static const char WX[] = "MZ no marker";
 
 /* the fake elevation: what each start did, and a script of answers */
@@ -77,6 +82,7 @@ typedef struct {
     int declined_from;        /* > 0: the starts from this one (1-based) are declined */
     int no_started;           /* an elevation that never calls started: run_one releases after it */
     int held_at_started;      /* how many times the hold was still in place when started was called */
+    void (*before_lines)(void);
 } fake_el;
 static fake_el E;
 static char logged[4096];
@@ -132,6 +138,7 @@ static int fake_elevate(void *ctx, const char *exe, const char *params, const ch
     int k = E.n++;
     snprintf(E.exe[k], sizeof E.exe[k], "%s", exe);
     snprintf(E.params[k], sizeof E.params[k], "%s", params);
+    if (E.before_lines) E.before_lines();
     if (E.lines[k]) {
         admin_lines l;
         admin_lines_init(&l);
@@ -157,7 +164,7 @@ static admin_client client(const char *own) {
     logged[0] = order[0] = 0;
     distrust = holds = releases = held_now = bad_releases = 0;
     distrust_sub = rewrites = NULL;
-    admin_client c = {ROOT, P("%s/app/admin/RB Stems Plus.exe", S), P("%s/source", S), own, fake_elevate, NULL, fake_log, fake_random, NULL, NULL};
+    admin_client c = {ROOT, P("%s/app/admin/RB Stems Plus.exe", S), P("%s/source", S), own, MANIFEST, fake_elevate, NULL, fake_log, fake_random, NULL, NULL};
     return c;
 }
 /* the same with the hold's fake */
@@ -210,8 +217,8 @@ static void t_list(void) {
     int n = admin_list_bin(ROOT, w, 8, &present);
     int p1 = 0, p2 = 0, none = 0;
     for (int i = 0; i < n; i++) {
-        if (w[i].proto == 1 && !strcmp(w[i].minimum, "1.5.0")) p1++;
-        if (w[i].proto == 2) p2++;
+        if (w[i].proto == 2 && !strcmp(w[i].minimum, "1.5.0")) p1++;
+        if (w[i].proto == 3) p2++;
         if (w[i].proto == -1) none++;
     }
     CHECK(n == 3 && p1 == 1 && p2 == 1 && none == 1, "three workers: their bytes are their folder's name; protocols from the markers (%d)", n);
@@ -228,53 +235,72 @@ static void t_no_fallback(void) {
     sh(P("rm -rf '%s' && mkdir -p '%s/bin/0123456789ab'", ROOT, ROOT));
     spits(P("%s/bin/0123456789ab/RB Stems Plus.exe", ROOT), "MZ damaged");
     c = client(sha_of(W1));
-    x = admin_client_run(&c, ADMIN_UNINSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_UNINSTALL, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_CHECK_FAILED && E.n == 0 && strstr(logged, "couldn't check the installed worker"), "a damaged worker: refused, nothing elevated (%d)", x);
     /* a worker folder someone keeps from being looked into */
     sh(P("rm -rf '%s/bin' && mkdir -p '%s/bin'", ROOT, ROOT));
     put_worker(W1);
     chmod(P("%s/bin/%.12s", ROOT, sha_of(W1)), 0);
     c = client(sha_of(W1));
-    x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
     chmod(P("%s/bin/%.12s", ROOT, sha_of(W1)), 0755);
     CHECK(x == ADMIN_EXIT_CHECK_FAILED && E.n == 0, "a worker folder that can't be opened: refused (%d)", x);
     /* the worker's file that can't be read */
     chmod(P("%s/bin/%.12s/RB Stems Plus.exe", ROOT, sha_of(W1)), 0);
     c = client(sha_of(W1));
-    x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
     chmod(P("%s/bin/%.12s/RB Stems Plus.exe", ROOT, sha_of(W1)), 0644);
     CHECK(x == ADMIN_EXIT_CHECK_FAILED && E.n == 0, "a worker that can't be read: refused (%d)", x);
     /* bin\ that can't be listed */
     chmod(P("%s/bin", ROOT), 0);
     c = client(sha_of(W1));
-    x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
     chmod(P("%s/bin", ROOT), 0755);
     CHECK(x == ADMIN_EXIT_CHECK_FAILED && E.n == 0, "bin\\ that can't be listed: refused (%d)", x);
     /* only a renamed *.del: no worker at all, the app folder's copy (J7) */
     sh(P("rm -rf '%s/bin' && mkdir -p '%s/bin/0123456789ab'", ROOT, ROOT));
     spits(P("%s/bin/0123456789ab/RB Stems Plus.exe.1234.del", ROOT), "old");
     c = client(sha_of(W1));
-    x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
     CHECK(x == 0 && E.n == 1 && strstr(E.exe[0], "/app/admin/"), "only a *.del: the first install from the app folder (%d)", x);
     /* the app folder's copy isn't the app's own worker */
     spits(P("%s/app/admin/RB Stems Plus.exe", S), "MZ replaced");
     c = client(sha_of(W1));
-    x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
     spits(P("%s/app/admin/RB Stems Plus.exe", S), W1);
     CHECK(x == ADMIN_EXIT_CHECK_FAILED && E.n == 0, "a replaced app folder's copy: never elevated (%d)", x);
+
+    /* audit b-a1b-F5, admin.c's half only: with no source, Restore can use the bin\ worker
+     * even when the app folder's worker is gone (AV). */
+    sh(P("rm -rf '%s/bin'", ROOT));
+    put_worker(W1);
+    sh(P("mv '%s/app/admin/RB Stems Plus.exe' '%s/app/admin/gone.exe'", S, S));
+    c = client(sha_of(W1));
+    c.source = "";
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
+    sh(P("mv '%s/app/admin/gone.exe' '%s/app/admin/RB Stems Plus.exe'", S, S));
+    CHECK(x == 0 && E.n == 1 && strstr(E.exe[0], "/bin/") && strstr(E.params[0], "\"restore\"") && !res.update_first,
+          "no app-folder worker, no source: Restore runs the bin\\ worker (%d, %d)", x, E.n);
+
+    /* AF9: installing through an older bin worker needs a source before elevation. */
+    c = client(sha_of(W1B));
+    c.source = "";
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
+    CHECK(x == ADMIN_EXIT_PROTOCOL && res.no_source == 1 && E.n == 0 && res.elevations == 0,
+          "an older bin worker needs install-worker, but there's no source: reported before elevation (%d)", x);
 
     /* A10: uninstall that needs install-worker (only another protocol's worker), with no source */
     sh(P("rm -rf '%s/bin'", ROOT));
     put_worker(W2);
     c = client(sha_of(W1B));
     c.source = "";
-    x = admin_client_run(&c, ADMIN_UNINSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_UNINSTALL, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_PROTOCOL && res.update_first && E.n == 0, "install-worker needed, no source: update first, nothing elevated (%d)", x);
     /* with the source prepared: install-worker, then its own runs the uninstall */
     c = client(sha_of(W1B));
     E.codes[0] = ADMIN_EXIT_RUN_AGAIN;
     E.installs = W1B;
-    x = admin_client_run(&c, ADMIN_UNINSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_UNINSTALL, TGT, 0, &res);
     CHECK(x == 0 && E.n == 2 && strstr(E.params[0], "\"install-worker\"") && strstr(E.params[1], "\"uninstall\"") && strstr(E.params[1], "\"--source\" \"\""),
           "uninstall through install-worker with its source (%d)", x);
     /* NA4: install-worker's runner is a bin\\ worker too: refused, 4, nothing elevated */
@@ -282,7 +308,7 @@ static void t_no_fallback(void) {
     put_worker(W2);
     c = held_client(sha_of(W1B));
     distrust = 1;
-    x = admin_client_run(&c, ADMIN_UNINSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_UNINSTALL, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_CHECK_FAILED && E.n == 0 && holds == 1 && releases == 0 && !res.update_first,
           "an install-worker runner that can't be held: 4, not elevated (%d)", x);
 }
@@ -308,75 +334,161 @@ static void t_source(void) {
           "the source again");
 }
 
+/* review finding 6: the manifest the worker gets is the digest of exactly the bytes the app
+ * verified (native_admin_record), and a copy of other bytes (the record replaced between the
+ * check and the copy by a second valid one) never passes for them */
+static const char *record_json(const char *bridge_sha) {
+    return P("{\"payload_version\": \"1.5.0\", "
+             "\"app\": {\"version\": \"1.0.0\", \"zip\": \"a.zip\", \"sha256\": \"%064d\"}, "
+             "\"bridge\": {\"file\": \"b.dylib\", \"sha256\": \"%064d\"}, "
+             "\"compatible\": {\"rekordbox\": [], \"ort_version_prefix\": \"1.18.\", \"stems_engine\": []}, "
+             "\"model\": {\"file\": \"m.onnx\", \"sha256\": \"%064d\", \"size\": 9}, "
+             "\"windows\": {\"app\": {\"version\": \"1.5.0\", \"zip\": \"w.zip\", \"sha256\": \"%064d\", \"admin_sha256\": \"%064d\", "
+             "\"stub_sha256\": {\"x64\": \"%064d\", \"arm64\": \"%064d\"}}, "
+             "\"bridge\": {\"file\": \"rbstemsplus-bridge-win-x64.dll\", \"sha256\": \"%s\"}, "
+             "\"compatible\": {\"rekordbox\": [\"7.2.19\"], \"ort_sha256\": [\"%064d\"], \"stems_engine\": [\"0002\"]}}}",
+             1, 2, 3, 4, 5, 6, 7, bridge_sha, 8);
+}
+static void write_record(const test_key *k, const char *dir, const char *json) {
+    sh(P("mkdir -p '%s'", dir));
+    spits(P("%s/payload.json", dir), json);
+    unsigned char sig[SIG_DER_MAX];
+    size_t sn = test_sign(k, json, strlen(json), sig);
+    FILE *f = fopen(P("%s/payload.json.sig", dir), "wb");
+    if (!f || fwrite(sig, 1, sn, f) != sn) abort();
+    fclose(f);
+}
+static void t_record_digest(void) {
+    test_key k;
+    if (test_key_new(&k)) abort();
+    sig_pubkey key = {.name = "release"};
+    memcpy(key.xy, k.xy, 64);
+    char *dir = strdup(P("%s/record/installed-release", S));
+    char one[4096];
+    snprintf(one, sizeof one, "%s", record_json(sha_of("bridge one")));
+    write_record(&k, dir, one);
+    payload_manifest *m = calloc(1, sizeof *m);
+    char sha[65] = "";
+    CHECK(native_admin_record(dir, &key, 1, "1.5.0", m, sha) == 0 && !strcmp(sha, sha_of(one)) && !strcmp(m->win_bridge.sha256, sha_of("bridge one")),
+          "the record verified once: its manifest and the digest of those very bytes");
+    char other[65] = "";
+    CHECK(native_admin_record(dir, &key, 1, "1.5.1", m, other) == -1 && !other[0], "a record that doesn't name this app: none");
+    spits(P("%s/payload.json", dir), "{}");
+    CHECK(native_admin_record(dir, &key, 1, "1.5.0", m, other) == -1, "a record that doesn't verify: none");
+    /* the record replaced by a second valid one after the check: the copy isn't the bytes checked */
+    write_record(&k, dir, one);
+    char *src = strdup(P("%s/record/source", S));
+    CHECK(!admin_source_prepare(src, dir, NULL, NULL, NULL), "copied");
+    CHECK(native_admin_copy_is(P("%s/payload.json", src), sha) == 1, "the same bytes again: they pass");
+    char two[4096];
+    snprintf(two, sizeof two, "%s", record_json(sha_of("bridge two")));
+    write_record(&k, dir, two);
+    CHECK(!admin_source_prepare(src, dir, NULL, NULL, NULL), "copied again");
+    CHECK(native_admin_copy_is(P("%s/payload.json", src), sha) == 0, "a second valid manifest copied in: never the one checked");
+    CHECK(native_admin_copy_is(P("%s/nothing", src), sha) == 0 && native_admin_copy_is(P("%s/payload.json", src), "") == 0, "unreadable, or no digest: no");
+    free(src);
+    free(dir);
+    free(m);
+    test_key_free(&k);
+}
+
 static void t_run(void) {
     admin_result res;
     /* the first install: bin\ empty, the app folder's copy */
     sh(P("rm -rf '%s' && mkdir -p '%s'", ROOT, ROOT));
     admin_client c = client(sha_of(W1));
     E.lines[0] = "rekordbox 7.2.19 checked\n@floor 1.5.0\n@bridge 1111111111111111111111111111111111111111111111111111111111111111\n@new-record x\n";
-    int x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19", 0, &res);
-    CHECK(x == 0 && E.n == 1 && strstr(E.exe[0], "/app/admin/RB Stems Plus.exe") && strstr(E.params[0], "\"install\" \"--proto\" \"1\""),
+    int x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
+    CHECK(x == 0 && E.n == 1 && strstr(E.exe[0], "/app/admin/RB Stems Plus.exe") && strstr(E.params[0], "\"install\" \"--proto\" \"2\" \"--targets\" \"7.2.19:0123456789abcdef\""),
           "first install from the app folder's copy (%d, %s)", x, E.params[0]);
     CHECK(strstr(E.params[0], P("\"--source\" \"%s/source\"", S)) != NULL, "--source passed to install");
     CHECK(!strcmp(res.floor, "1.5.0") && res.bridge[0] == '1' && !strcmp(logged, "rekordbox 7.2.19 checked|"), "records taken, text logged, unknown records ignored");
     /* its own worker in bin\ */
     put_worker(W1);
     c = client(sha_of(W1));
-    x = admin_client_run(&c, ADMIN_UNINSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_UNINSTALL, TGT, 0, &res);
     CHECK(x == 0 && E.n == 1 && strstr(E.exe[0], P("/bin/%.12s/RB Stems Plus.exe", sha_of(W1))) && strstr(E.params[0], "\"--source\" \"\""),
           "its own bin\\ worker; no --source for uninstall");
     /* the app's own worker missing (an update changed it): install-worker, then its own: two prompts */
     c = client(sha_of(W1B));
     E.codes[0] = ADMIN_EXIT_RUN_AGAIN;
     E.installs = W1B;
-    x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
     CHECK(x == 0 && E.n == 2 && res.elevations == 2 && strstr(E.params[0], "\"install-worker\"") && strstr(E.exe[1], P("/bin/%.12s/", sha_of(W1B))),
           "install-worker through a bin\\ worker, then the app's own (I75: %d prompts)", res.elevations);
     /* the floor refuses an older app's payload: update first */
     c = client(sha_of("MZ older"));
     E.codes[0] = ADMIN_EXIT_OLDER;
-    x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_OLDER && res.update_first && E.n == 1, "the floor refuses its payload: the update-first offer (J23)");
     /* install-worker said run again but its own still isn't there */
     c = client(sha_of("MZ never"));
     E.codes[0] = ADMIN_EXIT_RUN_AGAIN;
-    x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_PROTOCOL && res.update_first && E.n == 1, "its own still missing after run-again: no loop, update first");
     /* a worker of another protocol answers 12 */
     sh(P("rm -rf '%s/bin'", ROOT));
     put_worker(W2);
     c = client("");
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_PROTOCOL && res.update_first && E.n == 0, "only another protocol's worker and no record: update first, nothing elevated");
     /* UAC declined */
     c = client(sha_of(W2));
     E.declined = 1;
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_USER_STOPPED && !res.update_first, "UAC declined: the user stopped (1223)");
     /* the worker couldn't be started (NA3): -1 and no line, which native admin returns as 1 */
     c = client(sha_of(W2));
     E.no_start = 1;
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == -1 && res.code == -1 && !res.update_first && native_admin_code(&res) == ADMIN_EXIT_FAILED, "not started: 1, never a silent stop (%d)", x);
 
     /* NA4: a bin\ worker is elevated only when it is admin-only; refused, 4, nothing elevated,
      * never the app folder's copy instead */
     c = held_client(sha_of(W2));
     distrust = 1;
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_CHECK_FAILED && E.n == 0 && holds == 1 && releases == 0 && strstr(held_last, "/bin/") && strstr(logged, "isn't admin-only"),
           "a bin\\ worker that can't be held: 4, not elevated, nothing to release (%d, %d asks)", x, holds);
     CHECK(!strstr(logged, "/app/admin/"), "and the app folder's copy never tried");
     /* held: it runs, after one ask, released once */
     c = held_client(sha_of(W2));
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == 0 && E.n == 1 && holds == 1 && releases == 1 && !bad_releases && !strcmp(E.exe[0], held_last),
           "a held bin\\ worker: asked once, elevated, released once (%d)", x);
     /* the records of an uninstall's reboot branch, and the linger */
     c = client(sha_of(W2));
     E.lines[0] = "@still-closing\nrekordbox is still closing: waiting for it\n@restart\n";
-    x = admin_client_run(&c, ADMIN_UNINSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_UNINSTALL, TGT, 0, &res);
     CHECK(x == 0 && res.still_closing && res.restart_pending, "@still-closing and @restart reach the result");
+    /* protocol 2: the core's scope token goes through as --targets, the manifest as --manifest;
+     * a token that isn't one (the VM's 4-part version row of 2026-11-16) isn't elevated */
+    c = client(sha_of(W2));
+    x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19.0342", 0, &res);
+    CHECK(x == -1 && E.n == 0 && strstr(logged, "the scope to change isn't valid"), "a 4-part version: refused by the client, not elevated (%d)", x);
+    c = client(sha_of(W2));
+    x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19:0123456789abcdef,7.2.20:fedcba9876543210", 0, &res);
+    CHECK(x == 0 && E.n == 1 && strstr(E.params[0], "\"--targets\" \"7.2.19:0123456789abcdef,7.2.20:fedcba9876543210\" \"--manifest\" \"0123456789abcdef")
+              && strstr(E.params[0], "\"--source\" \""),
+          "two targets and the manifest (%d, %s)", x, E.params[0]);
+    c = client(sha_of(W2));
+    x = admin_client_run(&c, ADMIN_UNINSTALL, "7.2.19.0342", 0, &res);
+    CHECK(x == 0 && E.n == 1 && strstr(E.params[0], "\"--targets\" \"*\" \"--manifest\" \"-\""), "uninstall sweeps: *, whatever the token (%s)", E.params[0]);
+    c = client(sha_of(W2));
+    c.manifest = "";
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
+    CHECK(x == ADMIN_EXIT_PROTOCOL && res.no_source && E.n == 0, "install with no manifest: as with no source, not elevated (%d)", x);
+    /* the records: @target in order, @root-kept; a malformed @target ignored */
+    c = client(sha_of(W2));
+    E.lines[0] = "@target 7.2.19 0 installed\n@target 7.2.20 6 installed\n@target 7.2.21 - not-started\n@target bogus\n@root-kept bridge-remains\n";
+    E.codes[0] = ADMIN_EXIT_PARTIAL;
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
+    CHECK(x == ADMIN_EXIT_PARTIAL && res.ntargets == 3 && !strcmp(res.targets[0].version, "7.2.19") && res.targets[0].code == 0
+              && res.targets[1].code == 6 && res.targets[2].code == -1 && !strcmp(res.targets[2].what, "not-started") && res.root_kept,
+          "the @target and @root-kept records reach the result (%d, %d)", x, res.ntargets);
+    CHECK(native_admin_code(&res) == 16, "16 to the core as it is (ROOT_WIN_PARTIAL)");
+    res.code = ADMIN_EXIT_SCOPE_CHANGED;
+    CHECK(native_admin_code(&res) == 15, "15 to the core as it is (ROOT_WIN_SCOPE_CHANGED)");
 }
 
 /* NT1, NT2: a bin\ worker held from its check through ShellExecuteExW, hashed again under the
@@ -390,29 +502,29 @@ static void t_hold(void) {
     put_worker(W2);
     c = held_client(sha_of(W2));
     E.lines[0] = "restored\n";
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == 0 && E.n == 1 && !strcmp(order, "HSRL") && E.held_at_started == 1 && holds == 1 && releases == 1 && !held_now && !bad_releases,
           "held through the start, released at started, before the lines (%s)", order);
     /* the elevation couldn't start the worker (-1): released once */
     c = held_client(sha_of(W2));
     E.no_start = 1;
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == -1 && !strcmp(order, "HSR") && releases == 1 && !held_now && !bad_releases, "not started: released once (%s)", order);
     /* UAC declined: released once */
     c = held_client(sha_of(W2));
     E.declined = 1;
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_USER_STOPPED && !strcmp(order, "HSR") && releases == 1 && !held_now && !bad_releases, "UAC declined: released once (%s)", order);
     /* an elevation that never calls started: released once, after it */
     c = held_client(sha_of(W2));
     E.no_started = 1;
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == 0 && !strcmp(order, "HR") && releases == 1 && !held_now && !bad_releases, "no started: released on the way out (%s)", order);
     /* the worker rewritten after the listing hashed it (by the time it is held): 4, nothing
      * elevated, released once, never the app folder's copy */
     c = held_client(sha_of(W2));
     rewrites = "MZ two rbsp-admin worker: proto=2 minimum=1.7.0 but not the bytes picked\n";
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_CHECK_FAILED && E.n == 0 && holds == 1 && releases == 1 && !held_now && strstr(logged, "changed after it was checked")
               && strstr(logged, P("/bin/%.12s/", sha_of(W2))) && !strstr(logged, "/app/admin/"),
           "rewritten under the hold: 4, not elevated, released once (%d, %s)", x, order);
@@ -422,7 +534,7 @@ static void t_hold(void) {
     c = held_client(sha_of(W1B));
     E.codes[0] = ADMIN_EXIT_RUN_AGAIN;
     E.installs = W1B;
-    x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
     CHECK(x == 0 && E.n == 2 && holds == 2 && releases == 2 && !strcmp(order, "HSRHSR") && E.held_at_started == 2,
           "install-worker, then its own: each held and released (%s)", order);
     /* NT2: the second round refuses only the just-installed own worker: 4, install-worker ran */
@@ -435,7 +547,7 @@ static void t_hold(void) {
     snprintf(own_sub, sizeof own_sub, "/bin/%.12s/", sha_of(W1B));
     distrust = 1;
     distrust_sub = own_sub;
-    x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_CHECK_FAILED && E.n == 1 && strstr(E.params[0], "\"install-worker\"") && holds == 2 && releases == 1
               && strstr(logged, P("isn't admin-only: %s/bin/%.12s/", ROOT, sha_of(W1B))),
           "its own worker refused after install-worker: 4, its path logged (%d, %d asks)", x, holds);
@@ -444,13 +556,13 @@ static void t_hold(void) {
     put_worker(W1);
     c = held_client(sha_of(W1B));
     distrust = 1;
-    x = admin_client_run(&c, ADMIN_UNINSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_UNINSTALL, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_CHECK_FAILED && E.n == 0 && holds == 1 && strstr(held_last, P("/bin/%.12s/", sha_of(W1))), "a matching worker refused: 4 (%d)", x);
     /* NT2: bin\ empty, a hold that refuses everything: the app folder's copy, never held */
     sh(P("rm -rf '%s/bin'", ROOT));
     c = held_client(sha_of(W1));
     distrust = 1;
-    x = admin_client_run(&c, ADMIN_INSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_INSTALL, TGT, 0, &res);
     CHECK(x == 0 && E.n == 1 && strstr(E.exe[0], "/app/admin/") && holds == 0 && releases == 0, "the app folder's copy is never held (%d, %d asks)", x, holds);
 }
 
@@ -659,6 +771,37 @@ static void t_native_admin(void) {
     CHECK(native_admin_needs_bridge(ADMIN_INSTALL) && !native_admin_needs_bridge(ADMIN_UNINSTALL) && !native_admin_needs_bridge(ADMIN_RESTORE)
               && !native_admin_needs_bridge(ADMIN_REMOVE_ROOT_FOLDER),
           "only the install needs the flow's bridge");
+    {
+        /* the worker's --targets from the core's scope token (protocol 2): install and restore
+         * take a list, written back in its one form; the other verbs sweep ("*") */
+        char v[ADMIN_TARGETS_ARG_MAX], man[65];
+        /* install's token carries the digest of the payload.json its scope came from (re-review
+         * finding 6): "<targets>@<sha256>" */
+        CHECK(!native_admin_targets(ADMIN_INSTALL, P("7.2.19:0123456789abcdef,7.2.20:fedcba9876543210@%s", MANIFEST), v, sizeof v, man)
+                  && !strcmp(v, "7.2.19:0123456789abcdef,7.2.20:fedcba9876543210") && !strcmp(man, MANIFEST),
+              "install: the targets as they are, the scope's payload.json digest (%s)", v);
+        CHECK(!native_admin_targets(ADMIN_RESTORE, "7.2.20:fedcba9876543210", v, sizeof v, man) && !strcmp(v, "7.2.20:fedcba9876543210") && !man[0],
+              "restore: its token, no digest");
+        CHECK(native_admin_targets(ADMIN_RESTORE, P("7.2.20:fedcba9876543210@%s", MANIFEST), v, sizeof v, man) == -1, "restore: never a digest");
+        static const char *const bad[] = {"", "*", "7.2.19.0342", "7.2.19", "7.2.20:fedcba9876543210,7.2.19:0123456789abcdef", "7.2.19:0123456789ABCDEF",
+                                          "7.2.19:0123456789abcdef", "7.2.19:0123456789abcdef@", "7.2.19:0123456789abcdef@0123",
+                                          "7.2.19:0123456789abcdef@0123456789ABCDEF0123456789abcdef0123456789abcdef0123456789abcdef"};
+        for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++)
+            CHECK(native_admin_targets(ADMIN_INSTALL, bad[i], v, sizeof v, man) == -1 && !v[0] && !man[0], "not an install scope: refused (%s)", bad[i]);
+        CHECK(native_admin_targets(ADMIN_RESTORE, NULL, v, sizeof v, man) == -1, "NULL: refused");
+        CHECK(!native_admin_targets(ADMIN_UNINSTALL, "7.2.19.0342", v, sizeof v, man) && !strcmp(v, "*") && !native_admin_targets(ADMIN_REMOVE_ROOT_FOLDER, "", v, sizeof v, man)
+                  && !strcmp(v, "*"),
+              "uninstall, remove-root-folder: *");
+        CHECK(native_admin_targets(ADMIN_INSTALL, P("7.2.19:0123456789abcdef@%s", MANIFEST), v, 8, man) == -1 && !v[0], "too small: refused");
+        /* --manifest: the copied payload.json (this app's release's) must be the bytes the scope
+         * came from, else "update first" (12) before any UAC; the other verbs take the copy's */
+        static const char OTHER[] = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
+        CHECK(native_admin_manifest(ADMIN_INSTALL, MANIFEST, MANIFEST, man) == ADMIN_EXIT_OK && !strcmp(man, MANIFEST), "install: the scope's payload.json copied: its digest");
+        CHECK(native_admin_manifest(ADMIN_INSTALL, MANIFEST, OTHER, man) == ADMIN_EXIT_PROTOCOL && !man[0], "another payload.json copied: 12, not run");
+        CHECK(native_admin_manifest(ADMIN_INSTALL, MANIFEST, "", man) == ADMIN_EXIT_PROTOCOL && native_admin_manifest(ADMIN_INSTALL, "", MANIFEST, man) == ADMIN_EXIT_PROTOCOL,
+              "install: either digest missing: 12");
+        CHECK(native_admin_manifest(ADMIN_INSTALL_WORKER, "", OTHER, man) == ADMIN_EXIT_OK && !strcmp(man, OTHER), "install-worker: the copy's");
+    }
     admin_result r;
     memset(&r, 0, sizeof r);
     r.code = 0;
@@ -704,8 +847,13 @@ static void t_native_admin(void) {
     m->has_windows = 0;
     CHECK(!native_admin_bridge_ok(m, sha, "onnxruntime.dll"), "a record without the windows block: update first");
     free(m);
-    CHECK(native_admin_source_failed(1) == ADMIN_EXIT_CHECK_FAILED && native_admin_source_failed(0) == -1,
-          "a failed source folder: 4 with a verified record, the client's update-first without one");
+    CHECK(native_admin_source_failed(1, ADMIN_INSTALL) == ADMIN_EXIT_CHECK_FAILED && native_admin_source_failed(0, ADMIN_INSTALL) == -1,
+          "a failed source folder for the install: 4 with a verified record, the client's update-first without one");
+    /* audit b-a1b-F5: the verbs that don't stage the source go on without it (the app's
+     * own admin\ worker missing, quarantined), record or not */
+    for (int v = 0; v < ADMIN_VERB_COUNT; v++)
+        if (v != ADMIN_INSTALL)
+            CHECK(native_admin_source_failed(1, v) == -1 && native_admin_source_failed(0, v) == -1, "a failed source folder for verb %d: run on without it", v);
 
     native_admin_track t;
     native_admin_track_init(&t);
@@ -774,25 +922,21 @@ static void crit_tell(void *ctx, unsigned what) {
     if (what & NA_ATTEMPT) crit_at_attempt = crit_level;
     glue_tell(ctx, what);
 }
-/* CriticalWork's admission: open or closed (the quit decided) */
-static int admits;
-static int glue_open(void *ctx) {
+/* CriticalWork's admission: open until the fake decides to quit. */
+static int admits, admission_closed;
+static int glue_admit(void *ctx) {
     (void)ctx;
     admits++;
-    return 1;
+    return !admission_closed;
 }
-static int glue_closed(void *ctx) {
-    (void)ctx;
-    admits++;
-    return 0;
-}
+static void glue_close(void) { admission_closed = 1; }
 static admin_client crit_client(native_admin_run *nr, const char *own) {
     admin_client c = client(own);
     native_admin_run_init(nr, fake_elevate, NULL, crit_tell, glue_not_started, NULL);
     nr->critical = glue_critical;
     c.elevate = native_admin_elevate;
     c.ctx = nr;
-    admits = 0;
+    admits = admission_closed = 0;
     crit_level = crit_begins = crit_bad = 0;
     crit_at_attempt = -1;
     ntold = not_starts = 0;
@@ -807,7 +951,7 @@ static void t_native_critical(void) {
     /* a run with lines: counted from the first line (before it reaches the log) to the end */
     admin_client c = crit_client(&nr, sha_of(W2));
     E.lines[0] = "restored\n";
-    int x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    int x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == 0 && crit_begins == 1 && crit_level == 0 && !crit_bad && crit_at_attempt == 1 && !nr.in_critical,
           "a worker's run: one step, running at its first line, ended with it (%d, %d, %d)", crit_begins, crit_level, crit_at_attempt);
     CHECK(strchr(order, 'C') && strchr(order, 'c') && strchr(order, 'C') < strchr(order, 'L') && strchr(order, 'L') < strrchr(order, 'c'),
@@ -815,17 +959,17 @@ static void t_native_critical(void) {
     /* UAC declined: never counted */
     c = crit_client(&nr, sha_of(W2));
     E.declined = 1;
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_USER_STOPPED && crit_begins == 0 && crit_level == 0, "UAC declined: nothing counted (the prompt never is)");
     /* not started: never counted */
     c = crit_client(&nr, sha_of(W2));
     E.no_start = 1;
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == -1 && crit_begins == 0 && crit_level == 0, "not started: nothing counted");
     /* a worker that ended before any line (it changed nothing): not counted */
     c = crit_client(&nr, sha_of(W2));
     E.codes[0] = ADMIN_EXIT_CHECK_FAILED;
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(crit_begins == 0 && crit_level == 0, "no line: nothing counted (%d)", x);
     /* install-worker, then the action: each elevation its own step, back to 0 */
     sh(P("rm -rf '%s/bin'", ROOT));
@@ -835,7 +979,7 @@ static void t_native_critical(void) {
     E.installs = W1B;
     E.lines[0] = "installed\n";
     E.lines[1] = "uninstalled\n";
-    x = admin_client_run(&c, ADMIN_UNINSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_UNINSTALL, TGT, 0, &res);
     CHECK(res.elevations == 2 && crit_begins == 2 && crit_level == 0 && !crit_bad, "two elevations: two steps, none left (%d, %d, %d)", x, crit_begins, crit_level);
     /* the second prompt declined: the first step ended, none left */
     sh(P("rm -rf '%s/bin'", ROOT));
@@ -845,23 +989,39 @@ static void t_native_critical(void) {
     E.installs = W1B;
     E.lines[0] = "installed\n";
     E.declined_from = 2;
-    x = admin_client_run(&c, ADMIN_UNINSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_UNINSTALL, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_USER_STOPPED && crit_begins == 1 && crit_level == 0 && !crit_bad, "the second prompt declined: one step, ended (%d)", crit_begins);
     /* the quit decided (CriticalWork closed, WC1): no elevation tried, no prompt, "stopped" */
     sh(P("rm -rf '%s/bin'", ROOT));
     put_worker(W2);
     c = crit_client(&nr, sha_of(W2));
-    nr.admit = glue_closed;
+    nr.admit = glue_admit;
+    glue_close();
     E.lines[0] = "restored\n";
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_USER_STOPPED && E.n == 0 && crit_begins == 0 && crit_level == 0 && admits == 1,
           "closed: stopped, the worker never started, nothing counted (%d, %d elevations)", x, E.n);
     /* still open: elevated as before */
     c = crit_client(&nr, sha_of(W2));
-    nr.admit = glue_open;
+    nr.admit = glue_admit;
     E.lines[0] = "restored\n";
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == 0 && E.n == 1 && crit_begins == 1 && admits == 1, "open: the worker ran, counted (%d)", x);
+
+    /* The prompt was accepted before quitting. Its worker counts at the first line even though
+     * admission is now closed. The install-worker retry must refuse the next elevation. */
+    sh(P("rm -rf '%s/bin'", ROOT));
+    put_worker(W2);
+    c = crit_client(&nr, sha_of(W1B));
+    nr.admit = glue_admit;
+    E.before_lines = glue_close;
+    E.codes[0] = ADMIN_EXIT_RUN_AGAIN;
+    E.installs = W1B;
+    E.lines[0] = "installed\n";
+    E.lines[1] = "uninstalled\n";
+    x = admin_client_run(&c, ADMIN_UNINSTALL, TGT, 0, &res);
+    CHECK(x == ADMIN_EXIT_USER_STOPPED && E.n == 1 && admits == 2 && crit_begins == 1 && crit_at_attempt == 1 && crit_level == 0 && !crit_bad,
+          "wc1: the first worker counts after close, the next elevation stops before the prompt (%d, %d elevations)", x, E.n);
 }
 
 static void t_native_glue(void) {
@@ -878,7 +1038,7 @@ static void t_native_glue(void) {
     ntold = not_starts = 0;
     E.lines[0] = "@still-closing\nrekordbox is still closing: waiting for it\nrekordbox is open: nothing changed\n";
     E.codes[0] = ADMIN_EXIT_REKORDBOX_OPEN;
-    int x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    int x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_REKORDBOX_OPEN && ntold == 2 && told[0] == (NA_ATTEMPT | NA_CLOSING) && told[1] == NA_CLOSED && res.still_closing,
           "exit 5 after @still-closing: attempt and closing, then closed at the end (%d told)", ntold);
     CHECK(strstr(logged, "rekordbox is still closing") != NULL, "its lines still reach the log");
@@ -889,7 +1049,7 @@ static void t_native_glue(void) {
     c.ctx = &nr;
     ntold = 0;
     E.lines[0] = "@still-closing\nrekordbox is still closing: waiting for it\n@closed\nput back\n@restart\n";
-    x = admin_client_run(&c, ADMIN_UNINSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_UNINSTALL, TGT, 0, &res);
     CHECK(x == 0 && ntold == 3 && told[0] == (NA_ATTEMPT | NA_CLOSING) && told[1] == NA_CLOSED && told[2] == NA_RESTART && res.restart_pending,
           "@closed, then @restart (%d told)", ntold);
     /* I75: install-worker, then the second prompt declined: one attempt, no line left up, 1223 */
@@ -903,7 +1063,7 @@ static void t_native_glue(void) {
     E.codes[0] = ADMIN_EXIT_RUN_AGAIN;
     E.installs = W1B;
     E.declined_from = 2;
-    x = admin_client_run(&c, ADMIN_UNINSTALL, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_UNINSTALL, TGT, 0, &res);
     CHECK(x == ADMIN_EXIT_USER_STOPPED && E.n == 1 && res.elevations == 2 && ntold == 1 && told[0] == NA_ATTEMPT && native_admin_code(&res) == 1223,
           "two prompts, the second declined: one attempt told, the user stopped (%d, %d told)", x, ntold);
     /* a worker that couldn't be started: not_started, no attempt, 1 */
@@ -913,7 +1073,7 @@ static void t_native_glue(void) {
     c.ctx = &nr;
     ntold = not_starts = 0;
     E.no_start = 1;
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == -1 && not_starts == 1 && ntold == 0 && native_admin_code(&res) == ADMIN_EXIT_FAILED, "not started: logged, nothing told, 1");
     /* NT1: the glue passes started through to the real elevation */
     c = held_client(sha_of(W2));
@@ -921,7 +1081,7 @@ static void t_native_glue(void) {
     c.elevate = native_admin_elevate;
     c.ctx = &nr;
     E.lines[0] = "restored\n";
-    x = admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    x = admin_client_run(&c, ADMIN_RESTORE, TGT, 0, &res);
     CHECK(x == 0 && !strcmp(order, "HSRL") && E.held_at_started == 1 && releases == 1 && !held_now, "through the glue: released at started (%s)", order);
 }
 
@@ -931,6 +1091,7 @@ void test_client(const char *scratch) {
     t_choose();
     t_list();
     t_source();
+    t_record_digest();
     t_run();
     t_no_fallback();
     t_hold();

@@ -1,0 +1,24 @@
+# The platform cases that need the owner's one-time setup (the by-hand automation plan's W3), each
+# SKIPping until it is there; not a release.list row (a SKIP is never a pass). From "clean Windows":
+#   tests/win/vm-run.sh stage --build
+#   tests/win/vm-run.sh run "clean Windows" platform-owner
+# - app.md section 7's external drive (row 4): a USB stick left in a Mac port, its id in
+#   .orchestration/vm-run.conf ("usb VM DEVICE-ID", prlsrvctl usb list's): "need usb" assigns it
+#   before the VM starts (prlsrvctl usb set) and takes it back at the end; usb-external finds its
+#   letter (C:\rbtest\usb.letter), then winc-app-wintest's --external case unelevated and elevated
+# - T3c case 3: a card reader with no media, assigned separately with "usb-reader VM DEVICE-ID";
+#   its single empty removable drive letter is checked by location-win-test.
+# - app.md 5.4 against GitHub (row 8): "github allowed" in vm-run.conf once Little Snitch lets
+#   Parallels reach github.com, release-assets.githubusercontent.com (GitHub's 302 today) and
+#   objects.githubusercontent.com; then winhttp-github
+include lib/vmlib.ps1
+include volumes/vlib.ps1
+need vm
+need usb
+need usb-reader
+# MODE       SECS NAME                    SCRIPT
+sys          180  usb-external            platform/usb.ps1
+user         300  usb-wintests            platform/usb-wintests.ps1
+user-high    300  usb-wintests-elevated   platform/usb-wintests.ps1
+user         300  empty-reader            platform/empty-reader.ps1
+user         300  winhttp-github          platform/winhttp-github.ps1

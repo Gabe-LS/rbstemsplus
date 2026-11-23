@@ -22,7 +22,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="ShellTests.cs" />
-    <Compile Include="../Native.cs;../Snap.cs;../Host.cs;../ManageModel.cs;../DialogForm.cs;../LogBuffer.cs;../Presenter.cs;../Activation.cs;../MenuKeys.cs;../WindowPlace.cs;../Startup.cs;../CloseGate.cs;../OneCopy.cs;../LaunchArgs.cs;../ProbeCore.cs;../PrepareModel.cs;../StatusModel.cs" />
+    <Compile Include="../Native.cs;../Snap.cs;../Host.cs;../ManageModel.cs;../DialogForm.cs;../LogBuffer.cs;../Presenter.cs;../Activation.cs;../MenuKeys.cs;../WindowPlace.cs;../Startup.cs;../CloseGate.cs;../OneCopy.cs;../LaunchArgs.cs;../ProbeCore.cs;../PrepareModel.cs;../StatusModel.cs;../Repaint.cs;../UiWatch.cs" />
     <Compile Include="$(ShellIds)/CoreIds.cs" Link="CoreIds.cs" />
     <None Include="../../../tests/harness/fields.tsv" Link="fields.tsv" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../tests/harness/scenarios-win.tsv" Link="scenarios-win.tsv" CopyToOutputDirectory="PreserveNewest" />

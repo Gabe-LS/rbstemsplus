@@ -1,8 +1,8 @@
 #!/bin/bash
 # tests/win/vm-run.sh's offline tests (T16): every command against a fake prlctl (no VM, no
 # network but 127.0.0.1). The fake keeps the VM's name, state and snapshots in files, logs every
-# call, and plays a step's script by its "#fake:" lines (out TEXT, rc N, sleep N, prljob-once,
-# http, mode).
+# call, and plays a step's script by its "#fake:" lines (out TEXT, rc N, sleep N, hold NAME,
+# prljob-once, http, mode).
 #   tests/win/vm-run-test.sh          exit 0 when every check passed
 set -uo pipefail
 here="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -12,81 +12,198 @@ trap 'rm -rf "$T"' EXIT
 pass=0; fail=0
 ok() { if eval "$1"; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL $2"; fi; }
 
+# stage and --record hash each file in a separate process. Use the native SHA-256
+# utility when available to avoid starting Perl for each file in this harness.
+if VMRUN_TEST_SHA256SUM=$(type -P sha256sum) && VMRUN_TEST_SHASUM=$(type -P shasum); then
+  mkdir "$T/hash-bin"
+  cat > "$T/hash-bin/shasum" <<'EOF'
+#!/bin/sh
+if [ "$1" = -a ] && [ "$2" = 256 ]; then
+  shift 2
+  exec "$VMRUN_TEST_SHA256SUM" "$@"
+fi
+exec "$VMRUN_TEST_SHASUM" "$@"
+EOF
+  chmod +x "$T/hash-bin/shasum"
+  export VMRUN_TEST_SHA256SUM VMRUN_TEST_SHASUM PATH="$T/hash-bin:$PATH"
+fi
+
+wait_for() {
+  local deadline=$((SECONDS + 20))
+  until "$@"; do
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 0.05
+  done
+}
+
+# VT4 needs to run past the old 60 s cleanup limit. Overlap it with the rest of the
+# suite using only its own logs, and capture streaming while the child is still live.
+first_run_cleanup_case() (
+  eval "$(sed -n '/^bounded() {/,/^}/p' "$here/tests/win/first-run.sh")"
+  local t0=$SECONDS bp rc
+  bounded 2 bash -c 'trap "echo cleanup-start; sleep 70; echo cleanup-done; exit 3" TERM; echo started; while :; do sleep 1; done' > "$T/cleanup.out" 2>&1 & bp=$!
+  if wait_for grep -qx cleanup-start "$T/cleanup.out" 2> /dev/null && kill -0 "$bp" 2> /dev/null; then
+    touch "$T/cleanup.streaming"
+  fi
+  wait "$bp"; rc=$?
+  printf '%s %s\n' "$rc" "$((SECONDS - t0))" > "$T/cleanup.result"
+)
+first_run_cleanup_case & cleanup_case=$!
+
+# run parses before it checks the share. An absent share stops it before any VM or HTTP work.
+parse_suite() {
+  VMRUN_SHARE="$T/no-share" VMRUN_CONF="$T/no-conf" VMRUN_PRLCTL=false VMRUN_PRLSRVCTL=false \
+    "$VR" run 'clean Windows' "$1" 2>&1
+}
+for suite in "$here"/tests/win/suites/*.suite; do
+  suite_out="$(parse_suite "$suite")"; rc=$?
+  ok '[ "$rc" = 2 ] && [ "$suite_out" = "vm-run.sh: no share $T/no-share" ]' \
+    "parse ${suite##*/} (exit $rc: $suite_out)"
+done
+printf '%s\n' 'sys 60 missing missing-step.ps1' > "$T/missing-step.suite"
+suite_out="$(parse_suite "$T/missing-step.suite")"; rc=$?
+ok '[ "$rc" = 2 ] && [ "$suite_out" = "vm-run.sh: $T/missing-step.suite:1: no script $(cd "$T" && pwd)/missing-step.ps1" ]' \
+  "parse missing-step.suite rejects its missing script (exit $rc: $suite_out)"
+
 F="$T/fake"; mkdir -p "$F" "$T/bin" "$T/share/probe" "$T/share/dist-test" "$T/gates" "$T/suites/s"
 echo rb-win-template > "$F/name"
 echo running > "$F/state"
 printf '%s\n' '{11111111-aaaa-bbbb-cccc-000000000001} clean Windows' \
-              '{22222222-aaaa-bbbb-cccc-000000000002} rekordbox 7.2.19 logged in' > "$F/snaps"
+              '{22222222-aaaa-bbbb-cccc-000000000002} rekordbox 7.2.19 installed' > "$F/snaps"
 echo 0 > "$F/bootfails"
+# the VM's host sharing (shares: NAME|+ or -|PATH; shf: on/off; defined: prlctl's "Host defined
+# sharing"), and what a revert brings back (snapshares, snapdefined: "clean Windows" shares nothing)
+printf 'win|+|%s\n' "$T/share" > "$F/shares"; echo on > "$F/shf"; echo Unknown > "$F/defined"
+: > "$F/snapshares"; echo Off > "$F/snapdefined"
 echo hidden > "$T/share/probe/hidden.exe"
 cat > "$T/bin/prlctl" <<'EOF'
 #!/bin/bash
 F="$FAKE_DIR"; SHARE="$FAKE_SHARE"
+fake_sleep() {
+  local sleeper
+  sleep "$1" & sleeper=$!
+  echo "$sleeper" > "$F/sleep.pid"
+  wait "$sleeper"
+}
 echo "$*" >> "$F/calls"
 cmd="$1"; shift
 case "$cmd" in
-  list) printf 'ID: {%s}\nName: %s\nState: %s\n' "$2" "$(cat "$F/name")" "$(cat "$F/state")" ;;
+  list) printf 'ID: {%s}\nName: %s\nState: %s\n' "$2" "$(< "$F/name")" "$(< "$F/state")"
+    printf 'Host Shared Folders: (%s)\n' "$([ "$(< "$F/shf")" = on ] && echo + || echo -)"
+    while IFS='|' read -r n e p; do printf "  %s (%s) path='%s' mode='rw'\n" "$n" "$e" "$p"; done < "$F/shares"
+    printf 'Host defined sharing: %s\nGuest Shared Folders: (+)\n' "$(< "$F/defined")" ;;
   snapshot-list)
     if [ "${2:-}" = -i ]; then grep -F "$3" "$F/snaps" | sed 's/^\([^ ]*\) \(.*\)$/ID: \1\nName: \2/'
     else echo 'PARENT_SNAPSHOT_ID                      SNAPSHOT_ID'; awk '{print "                                        " $1}' "$F/snaps"; fi ;;
-  snapshot-switch) [ -e "$F/switch-fails" ] && exit 1; echo stopped > "$F/state" ;;
-  set) [ "$2 $3" = "--pause-idle off" ] || exit 1 ;;
+  snapshot-switch) [ -e "$F/switch-fails" ] && exit 1
+    cp "$F/snapshares" "$F/shares"; echo off > "$F/shf"; cp "$F/snapdefined" "$F/defined"; rm -f "$F/shf-pending"
+    # as Parallels: Guest Shared Folders come back with the snapshot (leaves-hidden: a revert leaves
+    # an empty "[C] <vm> N.hidden" folder in the Mac's volumes)
+    echo on > "$F/shfguest"
+    if [ -e "$F/leaves-hidden" ]; then n=$(grep -c '^snapshot-switch' "$F/calls")
+      mkdir -p "$FAKE_VOLUMES/[C] $(< "$F/name") $n.hidden" "$FAKE_VOLUMES/[C] other $n.hidden" "$FAKE_VOLUMES/C $(< "$F/name") $n.hidden"; fi
+    # a snapshot taken while the VM ran comes back running
+    if [ -e "$F/switch-running" ]; then echo running; else echo stopped; fi > "$F/state" ;;
+  set)
+    case "$2" in
+      --pause-idle) [ "$3" = off ] || exit 1 ;;
+      --shf-guest) [ "$3" = off ] || exit 1; echo off > "$F/shfguest" ;;
+      # as Parallels: switched on while the VM runs, host sharing takes effect at its next stop
+      # (shf-lags: as Parallels 27 on a stopped VM, the switch shows only after the VM has run)
+      --shf-host) if [ "$(< "$F/state")" = running ] || [ -e "$F/shf-lags" ]; then echo "$3" > "$F/shf-pending"; else echo "$3" > "$F/shf"; fi ;;
+      --shf-host-add) [ "$4 $6 $7" = "--path --mode rw" ] || exit 1; printf '%s|+|%s\n' "$3" "$5" >> "$F/shares" ;;
+      --shf-host-del) grep -v "^$3|" "$F/shares" > "$F/shares.new"; mv "$F/shares.new" "$F/shares" ;;
+      --shf-host-set) [ "$4" = --enable ] || exit 1; sed "s/^$3|-|/$3|+|/" "$F/shares" > "$F/shares.new"; mv "$F/shares.new" "$F/shares" ;;
+      *) exit 1 ;;
+    esac ;;
   start|resume) echo running > "$F/state" ;;
-  stop) echo stopped > "$F/state" ;;
+  snapshot) [ "$2" = -n ] && [ -n "$3" ] || exit 1; [ -e "$F/snapshot-fails" ] && exit 1
+    printf '{33333333-aaaa-bbbb-cccc-%012d} %s\n' "$(( $(wc -l < "$F/snaps") + 1 ))" "$3" >> "$F/snaps" ;;
+  stop) echo stopped > "$F/state"; [ ! -e "$F/shf-pending" ] || mv "$F/shf-pending" "$F/shf" ;;
   exec)
-    [ "$(cat "$F/state")" = running ] || exit 255
+    [ "$(< "$F/state")" = running ] || exit 255
     shift
+    map() { local p="${1//\\//}"; f="$SHARE/${p#//Mac/win/}"; }
+    if [ "$1 $2 $3" = "cmd /c dir" ]; then   # the guest looks for a file on \\Mac\win
+      if [ -e "$F/share-unseen" ]; then
+        n=$(< "$F/share-unseen")
+        if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$F/share-unseen"; exit 1; fi
+      fi
+      map "${@: -1}"
+      grep -q '^win|+|' "$F/shares" && [ -e "$f" ]; exit $?
+    fi
     if [ "$1" = cmd ]; then
-      n=$(cat "$F/bootfails"); if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$F/bootfails"; exit 255; fi
+      n=$(< "$F/bootfails"); if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$F/bootfails"; exit 255; fi
       echo 'Microsoft Windows [Version 10.0.26200.1000]'; exit 0
     fi
     file=""; while [ $# -gt 0 ]; do [ "$1" = -File ] && file="$2"; shift; done
-    map() { local p="${1//\\//}"; echo "$SHARE/${p#//Mac/win/}"; }
-    f="$(map "$file")"
+    grep -q '^win|+|' "$F/shares" || { echo "The argument '$file' to the -File parameter does not exist."; exit 1; }
+    map "$file"
     [ -f "$f" ] || { echo "fake: no $f"; exit 1; }
-    if grep -q 'vm-run-kill' "$f"; then   # the end of a timed-out step's processes
+    body=$(< "$f")
+    if [[ "$body" = *vm-run-wait* ]]; then   # the wait step's sign-in probe (wait-left: "not yet" that many times)
+      [ -e "$F/wait-nomark" ] && { echo 'vm-run-wait: no C:\rbtest\signout.mark'; exit 3; }
+      n=0; [ ! -e "$F/wait-left" ] || n=$(< "$F/wait-left")
+      if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$F/wait-left"; echo 'vm-run-wait: not yet'; exit 75; fi
+      [ -e "$F/wait-down" ] && { rm -f "$F/wait-down"; echo 'fake: the VM is restarting'; exit 255; }
+      echo 'vm-run-wait: rb signed in'; exit 0
+    fi
+    if [[ "$body" = *vm-run-kill* ]]; then   # the end of a timed-out step's processes
       if [ -e "$F/kill-fails" ]; then echo 'still running: 1234 powershell.exe'; echo 'vm-run-kill: 1 left'; exit 1; fi
       echo 'vm-run-kill: 0 left'; exit 0
     fi
-    if grep -q rbstems-run "$f"; then   # a user step's launcher: play its job
-      mode="$(sed -n "s/^\$mode = '\([^']*\)'.*/\1/p" "$f")"
-      job="$(sed -n "s/.*\$job = '\([^']*\)'.*/\1/p" "$f")"
+    if [[ "$body" = *rbstems-run* ]]; then   # a user step's launcher: play its job
+      mode_pattern="[\$]mode = '([^']*)'"; job_pattern="[\$]job = '([^']*)'"
+      [[ "$body" =~ $mode_pattern ]]; mode="${BASH_REMATCH[1]}"
+      [[ "$body" =~ $job_pattern ]]; job="${BASH_REMATCH[1]}"
       echo "fake: launched as $mode"
-      f="$(map "$job")"
+      map "$job"
+      body=$(< "$f")
     fi
     marker=""
-    if grep -q 'vm-run-wrap' "$f"; then   # the step's wrapper: play the step, then its exit line
-      marker="$(sed -n "s/.*\$marker = '\([^']*\)'.*/\1/p" "$f")"
-      f="$(map "$(sed -n "s/^\$step = '\([^']*\)'.*/\1/p" "$f")")"
+    if [[ "$body" = *vm-run-wrap* ]]; then   # the step's wrapper: play the step, then its exit line
+      marker_pattern="[\$]marker = '([^']*)'"; step_pattern="[\$]step = '([^']*)'"
+      [[ "$body" =~ $marker_pattern ]]; marker="${BASH_REMATCH[1]}"
+      [[ "$body" =~ $step_pattern ]]; map "${BASH_REMATCH[1]}"
       [ -f "$f" ] || { echo "fake: no step $f"; exit 1; }
+      body=$(< "$f")
     fi
     # prlctl's own failure to start the job: its line alone, nothing run
     if grep -q '^#fake: prljob-once' "$f" && [ ! -e "$F/prljob-done" ]; then
       touch "$F/prljob-done"; echo 'PrlJob_GetResult/GetRetCode: Invalid argument'; exit 255
     fi
-    if grep -q 'prepared:' "$f"; then [ -e "$F/prepare-fails" ] && exit 1; echo "prepared: hidden.exe True arch $(cat "$F/arch")"; fi
-    url="$(sed -n "s/.*Url = '\([^']*\)'.*/\1/p" "$f")"
-    echo "fake: step $(sed -n "s/.*Step = '\([^']*\)'.*/\1/p" "$f")"
+    if [[ "$body" = *prepared:* ]]; then [ -e "$F/prepare-fails" ] && exit 1; echo "prepared: hidden.exe True arch $(< "$F/arch")"; fi
+    run_fields="[\$]VmRun = @[{] Url = '([^']*)'; Run = '([^']*)'; Share = '[^']*'; Results = '[^']*'; Step = '([^']*)';"
+    [[ "$body" =~ $run_fields ]]
+    url="${BASH_REMATCH[1]}"; run="${BASH_REMATCH[2]}"
+    echo "fake: step ${BASH_REMATCH[3]}"
     rc=0
     while read -r tag what arg; do
       [ "$tag" = '#fake:' ] || continue
       case "$what" in
         out) echo "$arg" ;;
         rc) rc="$arg" ;;
-        sleep) sleep "$arg" ;;
+        sleep) fake_sleep "$arg" ;;
+        hold) touch "$F/$arg.ready"; until [ -e "$F/$arg.release" ]; do sleep 0.05; done ;;
         prljob-after-work) echo 'half the work done'; echo 'PrlJob_GetResult/GetRetCode: Invalid argument'; exit 255 ;;
         http) curl -fsS --max-time 5 "${url}payload.json" || rc=7 ;;
+        https) curl -fsSk --max-time 5 "https://${url#http://}payload.json" || rc=7 ;;
         kill-http) kill "$(cat "$(ls -td "$SHARE"/results/*/ | head -1)http.pid")" ;;
         touch-payload) echo ' ' >> "$SHARE/dist-test/payload.json" ;;
         rc-if) [ -e "$F/${arg%% *}" ] && rc="${arg#* }" ;;
         write) echo x >> "$arg" ;;
         swap) cp "$arg" "$arg.orig"; printf '%s\n' '#fake: out SWAPPED' > "$arg" ;;
         unswap) mv "$arg.orig" "$arg" ;;
-        sleep-if) [ -e "$F/${arg%% *}" ] && sleep "${arg#* }" ;;
+        sleep-if) [ -e "$F/${arg%% *}" ] && fake_sleep "${arg#* }" ;;
         run-stage) "$FAKE_VR" stage > "$F/stage-during.out" 2>&1; echo "stage during the run: $?" ;;
         bg-sleep) sleep "$arg" & echo "fake: left a sleep $!" ;;
         get) curl -fsS --max-time 5 "${url}$arg" || echo "GET-REFUSED $arg" ;;
         sha) echo "sha256 $(curl -fsS --max-time 5 "${url}$arg" | shasum -a 256 | cut -c1-64)" ;;
+        jobfile) if [ -e "$SHARE/job/$run/$arg" ]; then echo "JOBFILE $arg: $(cat "$SHARE/job/$run/$arg")"; else echo "NO JOBFILE $arg"; fi ;;
+        range) echo "range ${arg%% *}: $(curl -sS --max-time 5 -o "$F/range.body" -w '%{http_code} %header{content-range}' -H "Range: bytes=${arg%% *}" "${url}${arg#* }") sha256 $(shasum -a 256 < "$F/range.body" | cut -c1-64)" ;;
+        location) echo "location $(curl -sS --max-time 5 -o /dev/null -w '%{http_code} %{redirect_url}' "${url}$arg")" ;;
+        tunnel) echo "tunnel sha256 $(curl -fsSp --noproxy '' --max-time 5 -x "$url" "${url}$arg" | shasum -a 256 | cut -c1-64)" ;;
+        tunnel-to) echo "tunnel-to $arg: $(curl -sSp --noproxy '' --max-time 5 -x "$url" -o /dev/null -w '%{http_connect}' "http://$arg/" 2> /dev/null)" ;;
       esac
     done < "$f"
     if [ -n "$marker" ]; then   # the wrapper's map: none or outside 0..255 is 1
@@ -99,22 +216,40 @@ case "$cmd" in
 esac
 EOF
 chmod +x "$T/bin/prlctl"
+# the fake prlsrvctl: usb set ID VM and usb del ID, logged in the same calls file as "srv ..."
+cat > "$T/bin/prlsrvctl" <<'EOF'
+#!/bin/bash
+echo "srv $*" >> "$FAKE_DIR/calls"
+[ -e "$FAKE_DIR/usb-fails" ] && exit 1
+case "$1 $2" in
+  'usb set') [ $# = 4 ] ;;
+  'usb del') [ $# = 3 ] ;;
+  *) echo "fake prlsrvctl: $*?"; exit 1 ;;
+esac
+EOF
+chmod +x "$T/bin/prlsrvctl"
 
 # a checkout to name in records: what stage archives, and the suites --record runs (committed)
 R="$T/repo"; RS="$R/tests/win/suites"
 mkdir -p "$R/scripts" "$R/tests/win/bootstrap" "$R/core" "$R/win/c" "$RS/s" "$R/tests/win/first-run"
-# the runner is committed in the checkout, as in a real one, and run from it: a record names the
-# vm-run.sh that made it (VT2); first-run.sh and its suites too, and the real suites (first-run's
-# steps run them by name) but for release.list, which is the fake's (written below)
+# The runner is committed in the checkout and run from it (VT2). Only copy the suites
+# needed by first-run.sh when those cases start. The real suites are also run below
+# from the source tree, and the record fixtures have their own release.list.
 cp "$here/tests/win/vm-run.sh" "$here/tests/win/first-run.sh" "$R/tests/win/"
 cp -R "$here/tests/win/first-run/." "$R/tests/win/first-run/"
-(cd "$here/tests/win/suites" && tar -cf - --exclude release.list .) | (cd "$RS" && tar -xf -)
+# The sessions suites also declare two inputs from the staged repo.
+(cd "$here/tests/win/suites" && tar -cf - stage-dist.sh lib/vmlib.ps1 sessions/as-b.ps1) | tar -xf - -C "$RS" || exit 2
+# Keep the fake sleeper longer than the scratch suite's deadline.
+sed -i '' -E 's/^sys[[:space:]]+10[[:space:]]+/sys 1 /' "$R/tests/win/first-run/timeout.suite"
+sed -i '' 's/^#fake: sleep 30$/#fake: sleep 4/' "$R/tests/win/first-run/timeout/sleeper.ps1"
 echo bootstrap > "$R/scripts/bootstrap.ps1"; echo t > "$R/tests/win/bootstrap/bootstrap.tests.ps1"
-echo texts > "$R/core/texts.def"; echo aumid > "$R/win/c/aumid.h"; echo other > "$R/core/other.c"
+echo texts > "$R/core/texts.def"; echo aumid > "$R/win/c/aumid.h"; echo afterexit > "$R/win/c/afterexit.h"; echo other > "$R/core/other.c"
 printf 'build/\ndist-test/\n' > "$R/.gitignore"
 printf '%s\n' '#fake: out hello' > "$RS/s/pass.ps1"
-printf '%s\n' '#fake: rc-if beta-fails 3' '#fake: sleep-if beta-slow 30' > "$RS/s/maybe.ps1"
+printf '%s\n' '#fake: rc-if beta-fails 3' '#fake: sleep-if beta-slow 4' > "$RS/s/maybe.ps1"
 printf '%s\n' 'need http' 'need candidate dist-test/new/payload.json' 'need fixture dist-test/a/payload.json' 'sys 60 one s/pass.ps1' > "$RS/upd.suite"
+printf '%s\n' "#fake: write $T/share/dist-test/new/payload.json.sig" > "$RS/s/tamper-new.ps1"
+printf '%s\n' 'need http' 'need candidate dist-test/new/payload.json' 'sys 60 tamper s/tamper-new.ps1' > "$RS/upd-tamper.suite"
 printf '%s\n' 'need http' 'need vm' 'sys 60 one s/pass.ps1' > "$RS/vmneed.suite"
 printf '%s\n' '#fake: run-stage' > "$RS/s/runstage.ps1"
 printf '%s\n' 'need http' 'sys 60 stage s/runstage.ps1' > "$RS/inter.suite"
@@ -122,8 +257,9 @@ printf '%s\n' "#fake: write $T/share/repo/scripts/bootstrap.ps1" > "$RS/s/tamper
 printf '%s\n' 'need http' 'sys 60 tamper s/tamper.ps1' > "$RS/tamper.suite"
 printf '%s\n' '#fake: out skipped here' '#fake: rc 77' > "$RS/s/skip.ps1"
 printf '%s\n' '#fake: out from the include' > "$RS/inc.ps1"
-printf '%s\n' 'need http' 'include inc.ps1' 'sys 60 one s/pass.ps1' 'user 60 two s/pass.ps1' > "$RS/alpha.suite"
-printf '%s\n' 'need http' 'sys 60 one s/pass.ps1' 'sys 5 maybe s/maybe.ps1' > "$RS/beta.suite"
+printf '%s\n' '#fake: out high' > "$RS/s/high.ps1"
+printf '%s\n' 'need http' 'include inc.ps1' 'sys 60 one s/pass.ps1' 'user-signed-high 60 two s/high.ps1' > "$RS/alpha.suite"
+printf '%s\n' 'need http' 'sys 60 one s/pass.ps1' 'sys 2 maybe s/maybe.ps1' > "$RS/beta.suite"
 printf '%s\n' 'need http' 'sys 60 one s/pass.ps1' > "$RS/gamma.suite"
 printf '%s\n' 'need http' 'sys 60 one s/pass.ps1' 'sys 60 maybe s/skip.ps1' > "$RS/skipper.suite"
 printf '%s\n' "#fake: write $R/stray.txt" > "$RS/s/stray.ps1"
@@ -138,9 +274,20 @@ mkdir -p "$R/common/tests" "$R/win/c/tests"
 printf '%s\n' '#!/bin/sh' '[ "${FAKE_BUILD_FAIL:-}" = common ] && { echo "common broke"; exit 1; }' \
   'for a in x64 arm64; do mkdir -p "$1/$a"; echo "pwt $a" > "$1/$a/plat-win-test.exe"; echo "dll $a" > "$1/$a/checked.dll"; done' > "$R/common/tests/win.sh"
 printf '%s\n' '#!/bin/sh' '[ "${FAKE_BUILD_FAIL:-}" = winc ] && exit 1' \
-  'for a in x64 arm64; do mkdir -p "$1/win-$a"; echo "w $a" > "$1/win-$a/winc-wintest.exe"; echo "app $a" > "$1/win-$a/winc-app-wintest.exe"; done; echo fixtures > "$1/fixtures.txt"' > "$R/win/c/tests/run.sh"
+  'for a in x64 arm64; do mkdir -p "$1/win-$a"; echo "w $a" > "$1/win-$a/winc-wintest.exe"; echo "app $a" > "$1/win-$a/winc-app-wintest.exe"; echo "upd $a" > "$1/win-$a/winc-update-wintest.exe"; echo "nw6 $a" > "$1/win-$a/memo-stamp-wintest.exe"; done; echo fixtures > "$1/fixtures.txt"' > "$R/win/c/tests/run.sh"
 printf '%s\n' '#!/bin/sh' '[ "$1 $3" = "dll --test-hooks" ] || exit 2' 'for a in x64 arm64; do mkdir -p "$2/testhooks/$a"; echo "core $a" > "$2/testhooks/$a/rbsp-core.dll"; done' > "$R/core/build.sh"
-chmod +x "$R/common/tests/win.sh" "$R/win/c/tests/run.sh" "$R/core/build.sh"
+mkdir -p "$R/tests/win/uia"
+printf '%s\n' '#!/bin/sh' '[ "${FAKE_BUILD_FAIL:-}" = uia ] && exit 1' \
+  'for a in x64 arm64; do mkdir -p "$1/$a"; echo "sysdesk $a" > "$1/$a/sysdesk.exe"; done' \
+  'mkdir -p "$1/rbui"; for f in rbui.exe rbui.exe.config FlaUI.Core.dll FlaUI.UIA3.dll Interop.UIAutomationClient.dll LICENSE-flaui-core.txt LICENSE-flaui-uia3.txt LICENSE-interop-uiautomationclient.txt; do echo "$f" > "$1/rbui/$f"; done' > "$R/tests/win/uia/build.sh"
+chmod +x "$R/common/tests/win.sh" "$R/win/c/tests/run.sh" "$R/core/build.sh" "$R/tests/win/uia/build.sh"
+mkdir -p "$R/win/shell/vm" "$R/tests/harness/traces/A"
+cp "$here"/win/shell/vm/{w13b,w13b-checks,w13b-fixture,prepare-fixture}.ps1 "$R/win/shell/vm/"
+cp "$here/tests/harness/traces/A/prepare-choose-estimate.jsonl" "$R/tests/harness/traces/A/"
+printf '%s\n' '#!/bin/sh' '[ "$1 $2 $3" = "--x64 --no-test --test-app" ] || exit 2' \
+  'for app in app-x64 app-test app-x64-test; do mkdir -p "$4/$app"; echo forced > "$4/$app/RB Stems Plus.exe"; done' > "$R/win/shell/build.sh"
+chmod +x "$R/win/shell/build.sh"
+printf '%s\n' 'need http' 'sys 60 one s/pass.ps1' 'wait 30 back logon' 'sys 60 two s/pass.ps1' > "$RS/waiter.suite"
 git -C "$R" init -q && git -C "$R" add -A && git -C "$R" -c user.email=t@t -c user.name=t commit -q -m one
 C="$(git -C "$R" rev-parse HEAD)"
 VR="$R/tests/win/vm-run.sh"   # the checkout's own (VT2)
@@ -150,17 +297,22 @@ cp "$T/share/dist-test/payload.json" "$R/dist-test/payload.json"
 # update.suite's shape: new/ this commit's release (a candidate), a/ an older one (a fixture)
 mkrels() {
   mkdir -p "$T/share/dist-test/new" "$T/share/dist-test/a"
-  printf '{"payload_version": "1.5.1", "commit": "%s"}\n' "$C" > "$T/share/dist-test/new/payload.json"
+  cp "$T/share/dist-test/payload.json" "$T/share/dist-test/new/payload.json"
   printf '{"payload_version": "1.4.0", "commit": "%s"}\n' 1111111111111111111111111111111111111111 > "$T/share/dist-test/a/payload.json"
 }
 mkrels
 echo ARM64 > "$F/arch"
 
-export FAKE_DIR="$F" FAKE_SHARE="$T/share" FAKE_VR="$VR" VMRUN_PRLCTL="$T/bin/prlctl" VMRUN_SHARE="$T/share" VMRUN_GATES="$T/gates" \
-  VMRUN_ROOT="$R" VMRUN_HTTP_BIND=127.0.0.1 VMRUN_HTTP_PORT=$((20000 + $$ % 20000)) VMRUN_POLL=0 VMRUN_BOOT=20
+mkdir -p "$T/volumes"
+export FAKE_DIR="$F" FAKE_SHARE="$T/share" FAKE_VR="$VR" FAKE_VOLUMES="$T/volumes" VMRUN_VOLUMES="$T/volumes" VMRUN_PRLCTL="$T/bin/prlctl" VMRUN_PRLSRVCTL="$T/bin/prlsrvctl" VMRUN_CONF="$T/vm-run.conf" VMRUN_SHARE="$T/share" VMRUN_GATES="$T/gates" \
+  VMRUN_ROOT="$R" VMRUN_HTTP_BIND=127.0.0.1 VMRUN_HTTP_PORT=$((20000 + $$ % 20000)) VMRUN_TEST_FAST_HTTP=1 VMRUN_POLL=0 VMRUN_BOOT=20
 vr() { "$VR" "$@" > "$T/out" 2>&1; }
 calls() { cat "$F/calls" 2> /dev/null; }
-reset() { : > "$F/calls"; echo running > "$F/state"; echo rb-win-template > "$F/name"; rm -f "$F/switch-fails" "$F/prljob-done" "$F/no-marker" "$F/rc-zero"; }
+reset() {
+  : > "$F/calls"; echo running > "$F/state"; echo rb-win-template > "$F/name"; rm -f "$F/switch-fails" "$F/prljob-done" "$F/no-marker" "$F/rc-zero"
+  printf 'win|+|%s\n' "$T/share" > "$F/shares"; echo on > "$F/shf"; echo Unknown > "$F/defined"; : > "$F/snapshares"; echo Off > "$F/snapdefined"
+  rm -f "$F/switch-running" "$F/share-unseen" "$F/shf-pending" "$F/shf-lags"
+}
 last_results() { ls -td "$T/share/results"/*/ 2> /dev/null | head -1; }
 
 printf '%s\n' '#fake: out hello' > "$T/suites/s/pass.ps1"
@@ -170,7 +322,7 @@ printf '%s\n' '#fake: prljob-once' '#fake: out after a retry' > "$T/suites/s/fla
 printf '%s\n' '#fake: http' > "$T/suites/s/http.ps1"
 printf '%s\n' 'need http' 'sys 60 one s/pass.ps1' 'user 60 two s/pass.ps1' 'user-high 60 three s/pass.ps1' \
               'user-signed 60 four s/pass.ps1' 'sys 60 flaky s/flaky.ps1' 'sys 60 http s/http.ps1' > "$T/suites/good.suite"
-printf '%s\n' 'sys 60 one s/pass.ps1' 'sys 60 bad s/fail.ps1' 'sys 2 slow s/slow.ps1' 'sys 60 last s/pass.ps1' > "$T/suites/mixed.suite"
+printf '%s\n' 'sys 60 one s/pass.ps1' 'sys 60 bad s/fail.ps1' 'sys 1 slow s/slow.ps1' 'sys 60 last s/pass.ps1' > "$T/suites/mixed.suite"
 
 # ---- the VM guard
 reset; echo 'Windows 11' > "$F/name"
@@ -179,6 +331,17 @@ ok '[ $rc = 2 ] && grep -q "owner" "$T/out" && ! calls | grep -qE "^(snapshot-sw
 reset; echo 'other' > "$F/name"
 vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
 ok '[ $rc = 2 ] && ! calls | grep -qE "^(snapshot-switch|exec)"' 'a VM of another name refused'
+# VMRUN_VM: another test VM (a clone such as rb-win-hand) by its name, checked to bear it; never
+# the owner's
+reset; echo rb-win-hand > "$F/name"
+VMRUN_VM=rb-win-hand vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
+ok '[ $rc = 0 ] && calls | grep -q "^snapshot-switch rb-win-hand -i " && calls | grep -q "^exec rb-win-hand " && ! calls | grep -q 202a80c8' "VMRUN_VM drives the VM of that name (rc $rc)"
+reset
+VMRUN_VM=rb-win-hand vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
+ok '[ $rc = 2 ] && grep -q "not rb-win-hand" "$T/out" && ! calls | grep -qE "^(snapshot-switch|exec|start|set)"' "VMRUN_VM: a VM by that name that says another name refused"
+reset
+VMRUN_VM='Windows 11' vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
+ok '[ $rc = 2 ] && grep -q "owner" "$T/out" && [ ! -s "$F/calls" ]' "VMRUN_VM=\"Windows 11\" refused before prlctl is called"
 reset
 vr run 'no such snapshot' "$T/suites/good.suite"; rc=$?
 ok '[ $rc = 2 ] && grep -q "no snapshot named" "$T/out" && ! calls | grep -q "^snapshot-switch"' 'an unknown snapshot refused before anything changes'
@@ -202,6 +365,133 @@ mv "$T/share/probe/hidden.exe" "$T/hidden.off"
 vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
 ok '[ $rc = 2 ] && grep -q hidden.exe "$T/out"' 'user steps without hidden.exe on the share: refused'
 mv "$T/hidden.off" "$T/share/probe/hidden.exe"
+
+# ---- HTTPS beside HTTP on the one port (the Windows TEST app's downloads), the CA for the VM
+mkdir -p "$T/tls"
+openssl req -x509 -newkey rsa:2048 -nodes -subj /CN=127.0.0.1 -days 2 -keyout "$T/tls/server-key.pem" -out "$T/tls/server.pem" > /dev/null 2>&1
+cp "$T/tls/server.pem" "$T/share/dist-test/test-ca.pem"
+printf '%s\n' '#fake: https' > "$T/suites/s/https.ps1"
+printf '%s\n' '#fake: get latest/download/payload.json' '#fake: get download/v1.3.0/payload.json' '#fake: get latest/download/sub/payload.json' \
+  '#fake: get cur/latest/download/payload.json' '#fake: get cur/download/v1.3.0/payload.json' '#fake: get cur/latest/download/sub/payload.json' > "$T/suites/s/rel.ps1"
+# a base with a folder (update.suite's current/): its files, as the root's
+mkdir -p "$T/share/dist-test/cur"; printf '{"payload_version": "9.9.9"}\n' > "$T/share/dist-test/cur/payload.json"
+printf '%s\n' 'need http' 'sys 60 http s/http.ps1' 'sys 60 https s/https.ps1' 'sys 60 rel s/rel.ps1' > "$T/suites/tls.suite"
+reset
+VMRUN_TLS="$T/tls" vr run 'clean Windows' "$T/suites/tls.suite"; rc=$?
+res="$(last_results)"; job="$T/share/job/$(basename "$res")"
+ok '[ $rc = 0 ] && grep -q payload_version "$res/1-http.log" && grep -q payload_version "$res/2-https.log" && grep -q "HTTPS too" "$res/http.log"' "with the TLS certificate the server answers HTTP and HTTPS on one port (rc $rc)"
+ok 'cmp -s "$job/test-ca.cer" "$T/share/dist-test/test-ca.pem" && grep -q "Import-Certificate" "$job/0-prepare.ps1"' "the served test-ca.pem goes to the VM's prepare step to be trusted"
+ok '[ "$(grep -c payload_version "$res/3-rel.log")" = 4 ] && [ "$(grep -c "^GET-REFUSED" "$res/3-rel.log")" = 2 ] && grep -q "^GET-REFUSED latest/download/sub/payload.json" "$res/3-rel.log"' "a release file's GitHub paths (latest/download/NAME, download/vTAG/NAME) serve the folder's NAME, nothing deeper"
+ok '[ "$(grep -Fxc "{\"payload_version\": \"9.9.9\"}" "$res/3-rel.log")" = 2 ] && grep -q "^GET-REFUSED cur/latest/download/sub/payload.json" "$res/3-rel.log"' "under a base with a folder (DIR/latest/download/NAME, DIR/download/vTAG/NAME): DIR's NAME, nothing deeper"
+reset
+VMRUN_TLS="$T/no-tls" vr run 'clean Windows' "$T/suites/tls.suite"; rc=$?
+res="$(last_results)"
+ok '[ $rc = 1 ] && grep -q payload_version "$res/1-http.log" && ! grep -q "HTTPS too" "$res/http.log"' "without a certificate: HTTP only (rc $rc)"
+rm -rf "$T/share/dist-test/test-ca.pem" "$T/share/dist-test/cur"
+
+# ---- the server's /w3/ (platform.suite's winhttp): a made-up file with Range, redirects, a PAC
+# file, a CONNECT tunnel to the server alone
+blob() { python3 -I -c 'import hashlib, sys; a, n = int(sys.argv[1]), int(sys.argv[2]); print(hashlib.sha256(bytes(i % 251 for i in range(a, n))).hexdigest())' "$@"; }
+printf '%s\n' '#fake: sha w3/blob/100000' '#fake: range 40000- w3/blob/100000' '#fake: range 99999- w3/blob/100000' '#fake: range 100000- w3/blob/100000' \
+  '#fake: range 10-19 w3/blob/100000' '#fake: location w3/to-https/blob/100000' '#fake: location w3/to-http/blob/100000' \
+  '#fake: get w3/proxy.pac' '#fake: tunnel w3/blob/100000' '#fake: tunnel-to 192.0.2.1:80' '#fake: get w3/blob/16777217' '#fake: get w3/nothing' > "$T/suites/s/w3.ps1"
+printf '%s\n' 'need http' 'sys 60 w3 s/w3.ps1' > "$T/suites/w3.suite"
+reset
+vr run 'clean Windows' "$T/suites/w3.suite"; rc=$?
+res="$(last_results)"; hp="${VMRUN_HTTP_BIND}:${VMRUN_HTTP_PORT}"
+ok '[ $rc = 0 ] && grep -q "^sha256 $(blob 0 100000)$" "$res/1-w3.log"' "/w3/blob/N: N bytes, byte i being i % 251 (rc $rc)"
+ok 'grep -q "^range 40000-: 206 bytes 40000-99999/100000 sha256 $(blob 40000 100000)$" "$res/1-w3.log" && grep -q "^range 99999-: 206 bytes 99999-99999/100000 " "$res/1-w3.log" && grep -q "^range 10-19: 206 bytes 10-19/100000 sha256 $(blob 10 20)$" "$res/1-w3.log"' "/w3/blob: Range A- and A-B answered 206 with their Content-Range and bytes"
+ok 'grep -q "^range 100000-: 416 bytes \*/100000 " "$res/1-w3.log"' "/w3/blob: a Range past the end is 416"
+ok 'grep -q "^location 302 https://$hp/w3/blob/100000$" "$res/1-w3.log" && grep -q "^location 302 http://$hp/w3/blob/100000$" "$res/1-w3.log"' "/w3/to-https/ and /w3/to-http/: a 302 to /w3/ on this server over that scheme"
+ok 'grep -qF "if (host == \"$VMRUN_HTTP_BIND\") return \"PROXY $hp\"; return \"DIRECT\";" "$res/1-w3.log"' "/w3/proxy.pac sends this server through the proxy at this server"
+ok 'grep -q "^tunnel sha256 $(blob 0 100000)$" "$res/1-w3.log" && grep -q "\"CONNECT $hp HTTP" "$res/http.log"' "CONNECT to this server: tunnelled (in http.log)"
+ok 'grep -q "^tunnel-to 192.0.2.1:80: 403$" "$res/1-w3.log" && ! grep -q "\"CONNECT 192.0.2.1:80 HTTP[^\"]*\" 200" "$res/http.log"' "CONNECT anywhere else: 403, never tunnelled"
+ok 'grep -q "^GET-REFUSED w3/blob/16777217$" "$res/1-w3.log" && grep -q "^GET-REFUSED w3/nothing$" "$res/1-w3.log"' "/w3/: more than 16 MiB, or another path: 404"
+
+# ---- snapshot NAME (sac.suite's "SAC On")
+reset; cp "$F/snaps" "$F/snaps.saved"
+vr snapshot 'SAC On'; rc=$?
+ok '[ $rc = 0 ] && calls | grep -qx "snapshot 202a80c8-4bc4-4e95-890e-a31d6bfd5b70 -n SAC On" && grep -q " SAC On$" "$F/snaps" && grep -q "snapshot {33333333-aaaa-bbbb-cccc-[0-9]*} \"SAC On\" taken" "$T/out"' "snapshot NAME takes one of the VM by that name (rc $rc)"
+reset
+vr snapshot 'SAC On'; rc=$?
+ok '[ $rc = 2 ] && grep -q "has a snapshot named \"SAC On\" already" "$T/out" && ! calls | grep -q "^snapshot "' "snapshot NAME refused when one of that name is there"
+reset; echo 'Windows 11' > "$F/name"
+vr snapshot 'x'; rc=$?
+ok '[ $rc = 2 ] && grep -q owner "$T/out" && ! calls | grep -q "^snapshot "' "snapshot: the owner's VM refused"
+reset
+vr snapshot; rc=$?
+ok '[ $rc = 2 ] && ! calls | grep -q "^snapshot "' "snapshot without a name refused"
+reset; touch "$F/snapshot-fails"
+vr snapshot 'Other'; rc=$?
+ok '[ $rc = 2 ] && grep -q "prlctl snapshot .* failed" "$T/out"' "snapshot: prlctl's failure said, exit 2"
+rm -f "$F/snapshot-fails"; mv "$F/snaps.saved" "$F/snaps"
+
+# ---- usb attach|detach, need usb, the host facts (vm-run.conf)
+UID_T=202a80c8-4bc4-4e95-890e-a31d6bfd5b70
+reset; rm -f "$T/vm-run.conf"
+vr usb attach; rc=$?
+ok '[ $rc = 77 ] && grep -q "no USB stick is assigned to rb-win-template" "$T/out" && ! calls | grep -q "^srv"' "usb attach without vm-run.conf: 77, nothing assigned"
+printf '%s\n' '# the sticks' 'usb rb-win-hand 1111:2222|hand' 'usb rb-win-template 0781:5581|abc # in the left port' > "$T/vm-run.conf"
+reset
+vr usb attach; rc=$?
+ok '[ $rc = 0 ] && calls | grep -qx "srv usb set 0781:5581|abc $UID_T" && ! calls | grep -q "^srv usb del"' "usb attach: vm-run.conf's id for this VM assigned to it, and left so (rc $rc)"
+reset
+vr usb detach; rc=$?
+ok '[ $rc = 0 ] && calls | grep -qx "srv usb del 0781:5581|abc" && ! calls | grep -q "^srv usb set"' "usb detach: that id taken back"
+reset; touch "$F/usb-fails"
+vr usb detach; rc=$?
+ok '[ $rc = 1 ] && grep -q "couldn.t be taken back" "$T/out"' "usb detach: prlsrvctl's failure said, exit 1"
+rm -f "$F/usb-fails"
+reset; echo 'Windows 11' > "$F/name"
+VMRUN_VM='Windows 11' vr usb attach; rc=$?
+ok '[ $rc = 2 ] && ! calls | grep -q "^srv"' "usb: the owner's VM refused"
+reset
+vr usb plug; rc=$?
+ok '[ $rc = 2 ] && ! calls | grep -q "^srv"' "usb: only attach or detach"
+printf '%s\n' 'usb rb-win-template -rf' > "$T/vm-run.conf"
+reset
+vr usb attach; rc=$?
+ok '[ $rc = 2 ] && grep -q "starts with -" "$T/out" && ! calls | grep -q "^srv"' "a device id that starts with - refused"
+# a run with need usb: the stick assigned before the VM starts, taken back after the end; the
+# steps told (job/usb.assigned, job/github.allowed)
+printf '%s\n' '#fake: jobfile usb.assigned' '#fake: jobfile github.allowed' > "$T/suites/s/facts.ps1"
+printf '%s\n' 'need usb' 'sys 60 facts s/facts.ps1' > "$T/suites/usb.suite"
+printf '%s\n' 'usb rb-win-template 0781:5581|abc' 'github allowed' > "$T/vm-run.conf"
+reset
+vr run 'clean Windows' "$T/suites/usb.suite"; rc=$?
+res="$(last_results)"
+set_at=$(calls | grep -n '^srv usb set' | head -1 | cut -d: -f1); start=$(calls | grep -n '^start' | head -1 | cut -d: -f1)
+del_at=$(calls | grep -n '^srv usb del' | tail -1 | cut -d: -f1); last_switch=$(calls | grep -n '^snapshot-switch' | tail -1 | cut -d: -f1)
+ok '[ $rc = 0 ] && [ -n "$set_at" ] && [ -n "$start" ] && [ "$set_at" -lt "$start" ] && calls | grep -qx "srv usb set 0781:5581|abc $UID_T"' "need usb: the stick assigned before the VM starts (rc $rc)"
+ok '[ -n "$del_at" ] && [ "$del_at" -gt "$last_switch" ] && calls | grep -qx "srv usb del 0781:5581|abc"' "need usb: taken back after the VM's stop and revert"
+ok 'grep -q "^JOBFILE usb.assigned: 0781:5581|abc$" "$res/1-facts.log" && grep -q "^JOBFILE github.allowed: allowed$" "$res/1-facts.log"' "the steps see the host facts in the job folder"
+reset; touch "$F/prepare-fails"
+vr run 'clean Windows' "$T/suites/usb.suite"; rc=$?
+ok '[ $rc = 2 ] && calls | grep -qx "srv usb del 0781:5581|abc"' "a run that stops early takes the stick back too"
+rm -f "$F/prepare-fails"
+# a snapshot taken running comes back from memory: with need usb, stopped and started cold, the
+# stick assigned before that start (W3R2)
+reset; touch "$F/switch-running"
+vr run 'clean Windows' "$T/suites/usb.suite"; rc=$?
+first_switch=$(calls | grep -n '^snapshot-switch' | head -1 | cut -d: -f1); stop_at=$(calls | grep -n '^stop' | head -1 | cut -d: -f1)
+set_at=$(calls | grep -n '^srv usb set' | head -1 | cut -d: -f1); start=$(calls | grep -n '^start' | head -1 | cut -d: -f1)
+ok '[ $rc = 0 ] && [ -n "$stop_at" ] && [ -n "$set_at" ] && [ -n "$start" ] && [ "$first_switch" -lt "$stop_at" ] && [ "$stop_at" -lt "$set_at" ] && [ "$set_at" -lt "$start" ]' "need usb from a snapshot taken running: stopped, the stick assigned, then a cold start (rc $rc)"
+rm -f "$F/switch-running"
+printf '%s\n' 'usb rb-win-hand 1111:2222|hand' > "$T/vm-run.conf"
+reset
+vr run 'clean Windows' "$T/suites/usb.suite"; rc=$?
+res="$(last_results)"
+ok '[ $rc = 0 ] && ! calls | grep -q "^srv" && grep -q "^NO JOBFILE usb.assigned$" "$res/1-facts.log" && grep -q "^NO JOBFILE github.allowed$" "$res/1-facts.log" && grep -q "no USB stick is assigned to rb-win-template" "$T/out"' "need usb with no stick for this VM: nothing assigned, the steps told none (rc $rc)"
+printf '%s\n' 'sys 60 facts s/facts.ps1' > "$T/suites/nousb.suite"
+printf '%s\n' 'usb rb-win-template 0781:5581|abc' > "$T/vm-run.conf"
+reset
+vr run 'clean Windows' "$T/suites/nousb.suite"; rc=$?
+ok '[ $rc = 0 ] && ! calls | grep -q "^srv"' "a suite without need usb assigns no stick"
+printf '%s\n' 'need usb extra' 'sys 60 facts s/facts.ps1' > "$T/suites/bad.suite"
+reset
+vr run 'clean Windows' "$T/suites/bad.suite"; rc=$?
+ok '[ $rc = 2 ] && ! calls | grep -qE "^(snapshot-switch|srv)"' '"need usb extra" refused'
+rm -f "$T/vm-run.conf"
 
 # ---- a passing run
 reset; echo 2 > "$F/bootfails"
@@ -227,12 +517,55 @@ last_switch=$(calls | grep -n '^snapshot-switch' | tail -1 | cut -d: -f1)
 ok '[ -n "$last_stop" ] && [ "$last_stop" -lt "$last_switch" ] && [ "$(calls | grep -c "^snapshot-switch")" = 2 ]' 'after the steps: stopped, then reverted again'
 ok '[ ! -e "$T/share/.vm-run.lock" ]' 'the lock released'
 ok '! curl -fsS --max-time 2 -o /dev/null "http://127.0.0.1:$VMRUN_HTTP_PORT/" 2> /dev/null' 'the HTTP server stopped'
+ok '! grep -q "appeared during the run" "$T/out"' 'no new [C] hidden folder: no warning'
+
 ok '[ ! -e "$T/gates/$C" ]' 'no record without --record'
+add=$(calls | grep -n -- "--shf-host-add win --path $T/share --mode rw" | head -1 | cut -d: -f1)
+seen=$(calls | grep -n "cmd /c dir /b .*0-prepare.ps1" | head -1 | cut -d: -f1)
+prep=$(calls | grep -n -- "-File .*0-prepare.ps1" | head -1 | cut -d: -f1)
+ok '[ -n "$add" ] && [ "$first_switch" -lt "$add" ] && [ "$add" -lt "$start" ] && [ -n "$seen" ] && [ "$seen" -lt "$prep" ]' 'a snapshot without the share: win added before the start, seen by the guest before prepare'
+ok 'calls | grep -q -- "--shf-host on" && ! calls | grep -q -- "--shf-host-defined"' 'host sharing switched on, never --shf-host-defined (it would switch sharing off)'
+
+# ---- guest sharing off after every revert; a new "[C] <vm>*.hidden" folder warned of, not a failure
+reset; rm -rf "$T/volumes"; mkdir -p "$T/volumes/[C] rb-win-template old.hidden" "$T/volumes/[C] rb-win-template 1.hidden extra.hidden"
+touch "$F/leaves-hidden"
+vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
+rm -f "$F/leaves-hidden"
+guest_ok=1; prev=""
+while IFS= read -r line; do
+  case "$prev" in snapshot-switch*) [ "$line" = "set 202a80c8-4bc4-4e95-890e-a31d6bfd5b70 --shf-guest off" ] || guest_ok=0 ;; esac
+  prev="$line"
+done < "$F/calls"
+ok '[ $rc = 0 ] && [ "$guest_ok" = 1 ] && [ "$(calls | grep -c -- "--shf-guest off")" = 2 ] && [ "$(cat "$F/shfguest")" = off ]' "--shf-guest off right after each of the 2 reverts (rc $rc)"
+ok 'grep -q "warning: $T/volumes/\[C\] rb-win-template 1.hidden appeared" "$T/out" && grep -q "warning: $T/volumes/\[C\] rb-win-template 2.hidden appeared" "$T/out" && [ "$(grep -c "appeared during the run" "$T/out")" = 2 ]' "the run's new [C] hidden folders warned of, the pre-existing ones (one a prefix match) and the run's own other-VM and bracketless names not ($(grep warning "$T/out" | tr '\n' ' '))"
+rm -rf "$T/volumes"; mkdir -p "$T/volumes"
+# a stopped VM whose host sharing still reads off after --shf-host on: the run goes on, the guest
+# seeing the share is what counts
+reset; touch "$F/shf-lags"
+vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
+ok '[ $rc = 0 ] && calls | grep -q -- "--shf-host on" && ! grep -q "still off" "$T/out"' "host sharing that reads off on the stopped VM after --shf-host on: the run goes on (rc $rc)"
+reset; touch "$F/shf-lags"; echo 30 > "$F/share-unseen"
+VMRUN_SHAREWAIT=1 VMRUN_POLL=0.05 vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
+ok '[ $rc = 2 ] && ! calls | grep -q "^exec .*-File"' "... but a guest that never sees the share stops the run before any step (rc $rc)"
+rm -f "$F/shf-lags" "$F/share-unseen"
+
+# ---- the share after a revert: win alone, the guest sees it, nothing wider
+reset; touch "$F/switch-running"; printf '%s\n' 'home|+|/Users' "win|-|$T/share" 'old|+|/tmp' > "$F/snapshares"
+vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
+ok '[ $rc = 0 ] && calls | grep -q -- "--shf-host-del home" && calls | grep -q -- "--shf-host-del old" && calls | grep -q -- "--shf-host-set win --enable" && ! calls | grep -q -- "--shf-host-add"' "other shares removed, a disabled win enabled ($(tail -2 "$T/out" | tr '\n' ' '))"
+last_stop=$(calls | grep -n '^stop' | tail -1 | cut -d: -f1); last_switch=$(calls | grep -n '^snapshot-switch' | tail -1 | cut -d: -f1)
+ok '[ "$(cat "$F/state")" = stopped ] && [ -n "$last_stop" ] && [ "$last_stop" -gt "$last_switch" ] && ! calls | grep -q "^start"' 'a snapshot that comes back running: not started, and stopped again after the final revert'
+reset; echo Home > "$F/snapdefined"
+vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
+ok '[ $rc = 2 ] && grep -q "shares more than build/win" "$T/out" && ! calls | grep -q "^exec" && [ "$(cat "$F/state")" = stopped ] && [ "$(calls | grep -c "^snapshot-switch")" = 2 ]' 'a snapshot sharing the home folder: refused, nothing run, stopped and reverted'
+reset; touch "$F/switch-running"; echo 30 > "$F/share-unseen"
+VMRUN_SHAREWAIT=1 VMRUN_POLL=0.05 vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
+ok '[ $rc = 2 ] && grep -q "doesn.t see .*0-prepare.ps1 within 1 s" "$T/out" && ! calls | grep -q -- "-File" && [ "$(cat "$F/state")" = stopped ] && grep -q "the VM is stopped and reverted" "$T/out"' "a share the guest never sees: bounded, exit 2, no prepare, stopped and reverted ($(tail -2 "$T/out" | tr '\n' ' '))"
 
 # ---- the HTTP server: only ours, alive, serving the share's payload.json (VR2)
 mkdir -p "$T/foreign"; echo '{"payload_version": "0.0.1-OLD"}' > "$T/foreign/payload.json"
 python3 -I -m http.server --bind 127.0.0.1 --directory "$T/foreign" "$VMRUN_HTTP_PORT" > /dev/null 2>&1 & foreign=$!
-for _ in 1 2 3 4 5 6 7 8 9 10; do curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$VMRUN_HTTP_PORT/" && break; sleep 0.5; done
+wait_for curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$VMRUN_HTTP_PORT/"
 reset
 vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
 ok '[ $rc = 2 ] && grep -q "already answers" "$T/out" && ! calls | grep -q "^snapshot-switch"' 'another server on the port: refused before the VM is touched'
@@ -286,7 +619,7 @@ took=$(( $(date +%s) - t0 ))
 res="$(last_results)"
 ok '[ $rc = 1 ]' 'a failing run exits 1'
 ok 'grep -q "^step sys bad FAIL 3 " "$res/results.txt" && grep -q "^step sys slow TIMEOUT 124 " "$res/results.txt" && grep -q "^step sys last PASS " "$res/results.txt"' "FAIL, TIMEOUT and the steps after them ($(tr '\n' ';' < "$res/results.txt"))"
-ok '[ "$took" -lt 25 ]' "the 2 s step stopped at its timeout (the run took ${took}s)"
+ok '[ "$took" -lt 25 ]' "the 1 s step stopped at its timeout (the run took ${took}s)"
 ok 'calls | grep -q "kill-3.ps1" && grep -qx "vm-run-kill: 0 left" "$res/3-kill.log"' "a timed-out step's processes are ended in the VM before the next step (VR29)"
 ok 'grep -qF "\$job = '\''\\job\\$(basename "$res")\\3-'\''" "$T/share/job/$(basename "$res")/kill-3.ps1"' "the kill matches only step 3's own scripts (\\job\\<run>\\3-), never the kill script's parents (VS14)"
 reset; touch "$F/kill-fails"
@@ -337,6 +670,10 @@ vr run 'clean Windows' "$RS/gamma.suite" --record; rc=$?
 ok '[ $rc = 0 ] && [ -f "$G/gamma@$K1-arm64.ok" ]' "a passing --record run: vm-win/<suite>@<snapshot id>-<arch>.ok ($(ls "$G" 2> /dev/null | tr '\n' ' '))"
 vr check "$C" "$DT"; rc=$?
 ok '[ $rc = 1 ] && grep -q "no record of alpha" "$T/out" && [ ! -e "$T/gates/$C/vm-win.ok" ]' "check: a record of a suite release.list doesn't name satisfies nothing"
+reset; echo 1 > "$F/wait-left"
+vr run 'clean Windows' "$RS/waiter.suite" --record; rc=$?
+wrec="$G/waiter@$K1-arm64.ok"
+ok '[ $rc = 0 ] && [ -f "$wrec" ] && grep -q "^step wait back PASS 0 " "$wrec" && ! grep -q "^outside " "$wrec" && [ "$(grep -c "^file " "$wrec")" = 3 ]' "--record of a suite with a wait step: its result recorded, no script named for it ($(grep "^step\|^file\|^outside" "$wrec" 2> /dev/null | tr '\n' ';'))"
 # one frozen snapshot (VX3, VX4): HEAD's suites and runner archived into the run's src/ before the
 # suite is read, and only those bytes parsed, hashed and run: a step script swapped in the checkout
 # during the run and back never runs
@@ -348,10 +685,14 @@ ok '[ $rc = 0 ] && [ -f "$G/swap@$K1-arm64.ok" ] && grep -q "^original" "$res/2-
 # refused before the VM is touched, and nothing lands in the checkout's build/gates
 reset
 env -u VMRUN_GATES "$VR" run 'clean Windows' "$RS/gamma.suite" --record > "$T/out" 2>&1; rc=$?
-ok '[ $rc = 2 ] && grep -q "VMRUN_PRLCTL or VMRUN_UUID is set" "$T/out" && ! calls | grep -q "^snapshot-switch" && [ ! -e "$R/build/gates" ]' "--record refused: VMRUN_PRLCTL without VMRUN_GATES (VX8: rc $rc)"
+ok '[ $rc = 2 ] && grep -q "VMRUN_PRLCTL, VMRUN_UUID or VMRUN_VM is set" "$T/out" && ! calls | grep -q "^snapshot-switch" && [ ! -e "$R/build/gates" ]' "--record refused: VMRUN_PRLCTL without VMRUN_GATES (VX8: rc $rc)"
 rm -rf "$R/build/gates"; reset
 env -u VMRUN_GATES -u VMRUN_PRLCTL PATH="$T/bin:$PATH" VMRUN_UUID=33333333-aaaa-bbbb-cccc-000000000003 "$VR" run 'clean Windows' "$RS/gamma.suite" --record > "$T/out" 2>&1; rc=$?
-ok '[ $rc = 2 ] && grep -q "VMRUN_PRLCTL or VMRUN_UUID is set" "$T/out" && ! calls | grep -q "^snapshot-switch" && [ ! -e "$R/build/gates" ]' "--record refused: VMRUN_UUID without VMRUN_GATES (VX8: rc $rc)"
+ok '[ $rc = 2 ] && grep -q "VMRUN_PRLCTL, VMRUN_UUID or VMRUN_VM is set" "$T/out" && ! calls | grep -q "^snapshot-switch" && [ ! -e "$R/build/gates" ]' "--record refused: VMRUN_UUID without VMRUN_GATES (VX8: rc $rc)"
+rm -rf "$R/build/gates"
+reset
+env -u VMRUN_GATES -u VMRUN_PRLCTL PATH="$T/bin:$PATH" VMRUN_VM=rb-win-hand "$VR" run 'clean Windows' "$RS/gamma.suite" --record > "$T/out" 2>&1; rc=$?
+ok '[ $rc = 2 ] && grep -q "VMRUN_PRLCTL, VMRUN_UUID or VMRUN_VM is set" "$T/out" && ! calls | grep -q "^snapshot-switch" && [ ! -e "$R/build/gates" ]' "--record refused: VMRUN_VM without VMRUN_GATES (rc $rc)"
 rm -rf "$R/build/gates"
 # a missing share under --record: "no share", as without it, and nothing made (BT4)
 reset
@@ -368,25 +709,42 @@ ok 'grep -qx "vm_uuid 202a80c8-4bc4-4e95-890e-a31d6bfd5b70" "$rec"' "the record 
 ok '[ $rc = 2 ] && grep -q "this vm-run.sh ($(cd "$here" && pwd -P)/tests/win/vm-run.sh) isn.t the checkout.s" "$T/out"' "--record by a vm-run.sh outside the checkout: refused (VT2, VX7)"
 ok 'grep -qx "file tests/win/suites/alpha.suite $(shasum -a 256 "$RS/alpha.suite" | cut -c1-64)" "$rec" && grep -q "^file tests/win/suites/inc.ps1 " "$rec" && grep -q "^file tests/win/suites/s/pass.ps1 " "$rec" && grep -q "^assembled 1-one.ps1 [0-9a-f]\{64\}$" "$rec" && [ "$(grep -c "^step .* PASS " "$rec")" = 2 ]' "the record: the suite's and its scripts' shas, the assembled steps', each step"
 touch "$F/beta-fails"; reset
-vr run 'rekordbox 7.2.19 logged in' "$RS/beta.suite" --record; rc=$?
+vr run 'rekordbox 7.2.19 installed' "$RS/beta.suite" --record; rc=$?
 ok '[ $rc = 1 ] && [ -f "$G/beta@$K2-arm64.failed" ] && [ -f "$rec" ]' "a failing --record run: its own .failed, the other suites' records kept"
 reset
 vr run 'clean Windows' "$RS/alpha.suite" --record; rc=$?
 vr check "$C" "$DT"; rc=$?
 ok '[ $rc = 1 ] && grep -q "beta on .* failed" "$T/out" && [ -f "$G/beta@$K2-arm64.failed" ] && [ ! -e "$T/gates/$C/vm-win.ok" ]' "check: a later pass of another suite doesn't erase a failure"
 rm -f "$F/beta-fails"; reset
-vr run 'rekordbox 7.2.19 logged in' "$RS/beta.suite" --record; rc=$?
+vr run 'rekordbox 7.2.19 installed' "$RS/beta.suite" --record; rc=$?
 ok '[ $rc = 0 ] && [ -f "$G/beta@$K2-arm64.ok" ] && [ ! -e "$G/beta@$K2-arm64.failed" ]' "a rerun of the same suite, snapshot and arch replaces its own pair"
-ok 'grep -qx "snapshot {$K2} rekordbox 7.2.19 logged in" "$G/beta@$K2-arm64.ok"' "a snapshot given by {id}: the record names it by id and by its name (VS12)"
+ok 'grep -qx "snapshot {$K2} rekordbox 7.2.19 installed" "$G/beta@$K2-arm64.ok"' "a snapshot given by {id}: the record names it by id and by its name (VS12)"
 # a candidate is this commit's release, a fixture is recorded as it is (VS3)
 printf '{"payload_version": "1.5.1", "commit": "%s"}\n' 0000000000000000000000000000000000000000 > "$DT/new/payload.json"
 reset
 vr run 'clean Windows' "$RS/upd.suite" --record; rc=$?
 ok '[ $rc = 2 ] && grep -q "dist-test/new/payload.json (a candidate) was built from" "$T/out" && ! calls | grep -q "^snapshot-switch"' "--record refused: a candidate release that isn't HEAD's"
+# new/ must be the same release as the root, even when both name HEAD.
+printf '{"payload_version": "1.5.1", "commit": "%s"}\n' "$C" > "$DT/new/payload.json"
+reset
+vr run 'clean Windows' "$RS/upd.suite" --record; rc=$?
+ok '[ $rc = 2 ] && grep -q "dist-test/new/payload.json differs from the served payload.json" "$T/out" && ! calls | grep -q "^snapshot-switch"' "--record refused: same-commit new/ uses version 1.5.1 under a 1.5.0 root"
+mkrels
+printf '%s\n' 'root signature fixture' > "$DT/payload.json.sig"
+cp "$DT/payload.json.sig" "$R/dist-test/payload.json.sig"
+printf '%s\n' 'different signature fixture' > "$DT/new/payload.json.sig"
+reset
+vr run 'clean Windows' "$RS/upd.suite" --record; rc=$?
+ok '[ $rc = 2 ] && grep -q "dist-test/new/payload.json.sig differs from the served payload.json.sig" "$T/out" && ! calls | grep -q "^snapshot-switch"' "--record refused: new/ has a different signature"
+cp "$DT/payload.json.sig" "$DT/new/payload.json.sig"
+reset
+vr run 'clean Windows' "$RS/upd-tamper.suite" --record; rc=$?
+ok '[ $rc = 1 ] && grep -q "dist-test/new/payload.json.sig differs from the served payload.json.sig" "$G/upd-tamper@$K1-arm64.failed" && [ ! -e "$G/upd-tamper@$K1-arm64.ok" ]' "--record fails: new/ signature changed during the run"
+rm -f "$DT/payload.json.sig" "$DT/new/payload.json.sig" "$R/dist-test/payload.json.sig"
 mkrels; reset
 vr run 'clean Windows' "$RS/upd.suite" --record; rc=$?
 U="$G/upd@$K1-arm64.ok"
-ok '[ $rc = 0 ] && grep -qE "^served dist-test/new/payload.json [0-9a-f]{64} $C$" "$U" && grep -qE "^served dist-test/a/payload.json [0-9a-f]{64} 1111111111111111111111111111111111111111$" "$U"' "the record binds the candidate to HEAD and names the fixture with its own commit"
+ok '[ $rc = 0 ] && grep -qxF "served dist-test/new/payload.json $(shasum -a 256 "$DT/payload.json" | cut -c1-64) $C" "$U" && grep -qE "^served dist-test/a/payload.json [0-9a-f]{64} 1111111111111111111111111111111111111111$" "$U"' "the record binds the candidate to the root payload and names the fixture with its own commit"
 vr check "$C" "$DT"; rc=$?
 ok '[ $rc = 0 ] && grep -qx "commit $C" "$T/gates/$C/vm-win.ok" && grep -q "^row alpha arm64 clean Windows: alpha@$K1-arm64.ok$" "$T/gates/$C/vm-win.ok" && grep -q "^row beta arm64 {$K2}: beta@$K2-arm64.ok$" "$T/gates/$C/vm-win.ok"' "check: every row of release.list passed: vm-win.ok lists them (by name and by {id}) ($(cat "$T/out"))"
 vr check 0000000000000000000000000000000000000000 "$DT"; ok '[ $? = 1 ]' 'check: another commit fails'
@@ -404,16 +762,16 @@ forge() {   # NAME SED-SCRIPT [FILE]: the edited copy of FILE (alpha's record) c
   cp "$T/forge.saved" "$f"
 }
 forge "another suite line" 's/^suite alpha$/suite gamma/'
-forge "one step fewer" '/^step user two /d'
+forge "one step fewer" '/^step user-signed-high two /d'
 forge "a step that failed" 's/^step sys one PASS 0 /step sys one FAIL 1 /'
 forge "a step that passed with another code" 's/^step sys one PASS 0 /step sys one PASS 7 /'
 forge "result fail" 's/^result pass$/result fail/'
 forge "no suite file line" '/^file tests\/win\/suites\/alpha.suite /d'
-forge "another snapshot's id and name" "s/^snapshot .*/snapshot {$K2} rekordbox 7.2.19 logged in/"
+forge "another snapshot's id and name" "s/^snapshot .*/snapshot {$K2} rekordbox 7.2.19 installed/"
 forge "another arch" 's/^arch arm64$/arch x64/'
 forge "another VM's uuid (VX8)" 's/^vm_uuid .*/vm_uuid 33333333-aaaa-bbbb-cccc-000000000003/'
 forge "no vm_uuid line (VX8)" '/^vm_uuid /d'
-forge "the steps in another order" 's/^step sys one /step sys TMP /; s/^step user two /step sys one /; s/^step sys TMP /step user two /'
+forge "the steps in another order" 's/^step sys one /step sys TMP /; s/^step user-signed-high two /step sys one /; s/^step sys TMP /step user-signed-high two /'
 forge "another stage commit" "s/^stage_commit .*/stage_commit 0000000000000000000000000000000000000000/"
 forge "no include file line" '/^file tests\/win\/suites\/inc.ps1 /d'
 forge "no vm-run.sh file line" '/^file tests\/win\/vm-run.sh /d'
@@ -424,6 +782,8 @@ forge "two result lines" '/^result pass$/p'
 forge "a result incomplete line too" '/^result pass$/{p;s/pass/incomplete/;}'
 forge "no served candidate line" '/^served dist-test\/new\/payload.json /d' "$U"
 forge "a candidate of another commit" "s|^served dist-test/new/payload.json \([0-9a-f]*\) .*|served dist-test/new/payload.json \1 0000000000000000000000000000000000000000|" "$U"
+forge "a candidate with other payload bytes from the same commit" \
+  "s|^served dist-test/new/payload.json [0-9a-f]* |served dist-test/new/payload.json $(printf '%064d' 0) |" "$U"
 cp "$rec" "$G/alpha@99999999-aaaa-bbbb-cccc-000000000009-arm64.ok"
 vr check "$C" "$DT"; ok '[ $? = 1 ] && grep -q "two records of alpha" "$T/out"' "check: two records for one row fail"
 rm -f "$G/alpha@99999999-aaaa-bbbb-cccc-000000000009-arm64.ok"
@@ -435,18 +795,17 @@ vr check ../x "$DT"; ok '[ $? = 1 ] && grep -q "isn.t a full commit id" "$T/out"
 vr check "$C" "$DT"; ok '[ $? = 0 ]' 'check: passes again after the forged ones'
 # a record left by a run that didn't end its own way is a failure (VS1)
 touch "$F/beta-slow" "$F/kill-fails"; reset
-vr run 'rekordbox 7.2.19 logged in' "$RS/beta.suite" --record; rc=$?
+vr run 'rekordbox 7.2.19 installed' "$RS/beta.suite" --record; rc=$?
 ok '[ $rc = 2 ] && [ -f "$G/beta@$K2-arm64.failed" ] && [ ! -e "$G/beta@$K2-arm64.ok" ] && grep -qx "result fail" "$G/beta@$K2-arm64.failed" && grep -q "couldn.t be ended" "$G/beta@$K2-arm64.failed" && [ "$(calls | grep -c "^snapshot-switch")" = 2 ]' "--record: a step whose processes can't be ended: the VM reverted, .failed written"
 vr check "$C" "$DT"; ok '[ $? = 1 ] && grep -q "beta on .* failed" "$T/out"' "check: fails on it"
-rm -f "$F/kill-fails"; reset
-t0=$(date +%s)
-perl -e 'setpgrp(0, 0); exec @ARGV' "$VR" run 'rekordbox 7.2.19 logged in' "$RS/beta.suite" --record > "$T/out" 2>&1 & vp=$!
-until grep -q "step 2: maybe" "$T/out" 2> /dev/null || [ $(( $(date +%s) - t0 )) -ge 20 ]; do sleep 0.5; done
-sleep 1; kill -TERM -"$vp" 2> /dev/null; wait "$vp"; rc=$?
-ok '[ $rc = 130 ] && [ -f "$G/beta@$K2-arm64.failed" ] && grep -qx "result incomplete" "$G/beta@$K2-arm64.failed" && [ ! -e "$G/beta@$K2-arm64.ok" ]' "--record interrupted mid-step: its incomplete record is a .failed"
+rm -f "$F/kill-fails" "$F/sleep.pid"; reset
+perl -e 'setpgrp(0, 0); exec @ARGV' "$VR" run 'rekordbox 7.2.19 installed' "$RS/beta.suite" --record > "$T/out" 2>&1 & vp=$!
+wait_for test -s "$F/sleep.pid"; ready=$?
+kill -TERM -"$vp" 2> /dev/null; wait "$vp"; rc=$?
+ok '[ $ready = 0 ] && [ $rc = 130 ] && [ -f "$G/beta@$K2-arm64.failed" ] && grep -qx "result incomplete" "$G/beta@$K2-arm64.failed" && [ ! -e "$G/beta@$K2-arm64.ok" ]' "--record interrupted mid-step: its incomplete record is a .failed"
 vr check "$C" "$DT"; ok '[ $? = 1 ] && grep -q "beta on .* failed" "$T/out"' "check: fails on an incomplete record"
 rm -f "$F/beta-slow"; reset
-vr run 'rekordbox 7.2.19 logged in' "$RS/beta.suite" --record > /dev/null 2>&1
+vr run 'rekordbox 7.2.19 installed' "$RS/beta.suite" --record > /dev/null 2>&1
 vr check "$C" "$DT"; ok '[ $? = 0 ]' 'check: passes again after a good rerun'
 # check under the share's lock (VT1): while another run holds it, check stops and writes nothing
 mkdir "$T/share/.vm-run.lock"; sleep 120 & lp=$!; echo "$lp" > "$T/share/.vm-run.lock/pid"
@@ -486,7 +845,7 @@ vr run 'clean Windows' "$RS/gamma.suite" --record; rc=$?
 ok '[ $rc = 2 ] && grep -q "isn.t $C.s tree (.*core/texts.def)" "$T/out"' "--record refused: a file of HEAD's missing from repo/ (VT3)"
 # the share inside a git checkout, as the default one is (VX1): repo/'s own files are hashed, never
 # the enclosing checkout's (here it has HEAD's files at its top, where a relative path would land)
-git init -q "$T"; git -C "$R" archive "$C" scripts tests/win core/texts.def win/c/aumid.h | tar -xf - -C "$T"
+git init -q "$T"; git -C "$R" archive "$C" scripts tests/win core/texts.def win/c/aumid.h win/c/afterexit.h | tar -xf - -C "$T"
 vr stage > /dev/null; echo changed >> "$T/share/repo/scripts/bootstrap.ps1"; reshas
 vr run 'clean Windows' "$RS/gamma.suite" --record; rc=$?
 ok '[ $rc = 2 ] && grep -q "the share.s repo/ isn.t $C.s tree (.*scripts/bootstrap.ps1)" "$T/out"' "--record refused: the share inside a checkout, a repo/ file that isn't HEAD's (VX1)"
@@ -621,13 +980,70 @@ runid="$(basename "$(last_results)")"; launch="$T/share/job/$runid/2-two.launch.
 ok 'grep -qF "Get-Content \$out -Encoding UTF8" "$launch" && grep -qF "[Console]::OutputEncoding = New-Object Text.UTF8Encoding \$false" "$launch"' "the launcher reads hidden.exe's log as UTF-8 and passes it on as UTF-8 (VS15)"
 ok 'grep -qF "\$task = '\''rbstems-run-$runid'\''" "$launch" && grep -qF "Unregister-ScheduledTask -TaskName \$task" "$launch" && ! grep -qF "TaskName '\''rbstems-run'\''" "$launch"' "a user step's task is the run's own (rbstems-run-<run>), unregistered at its end"
 
+# ---- two VMs side by side: a lock and a port per VM; stage and check wait for no run on any VM
+# rb-win-hand's fake: the same share, its own state and calls
+F2="$T/fake2"; rm -rf "$F2"; cp -R "$F" "$F2"
+reset2() {
+  : > "$F2/calls"; echo running > "$F2/state"; echo rb-win-hand > "$F2/name"; rm -f "$F2/switch-fails" "$F2/prljob-done" "$F2/no-marker" "$F2/rc-zero"
+  printf 'win|+|%s\n' "$T/share" > "$F2/shares"; echo on > "$F2/shf"; echo Unknown > "$F2/defined"; : > "$F2/snapshares"; echo Off > "$F2/snapdefined"
+  rm -f "$F2/switch-running" "$F2/share-unseen" "$F2/shf-pending"
+}
+hand() { FAKE_DIR="$F2" VMRUN_VM=rb-win-hand "$@"; }
+reset; reset2
+mkdir -p "$T/share/.vm-run.lock"; sleep 60 & holder=$!; echo "$holder" > "$T/share/.vm-run.lock/pid"
+hand vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
+ok '[ $rc = 0 ] && [ "$(cat "$T/share/.vm-run.lock/pid")" = "$holder" ] && [ ! -e "$T/share/.vm-run.rb-win-hand.lock" ] && grep -q "^exec rb-win-hand " "$F2/calls" && ! calls | grep -q .' "rb-win-template's lock held: a run on rb-win-hand goes on under its own lock, released after (rc $rc)"
+ok 'basename "$(last_results)" | grep -qE -- "-good-rb-win-hand-[0-9]+\$"' "a run on another VM names it in its id (its job and results folders)"
+mv "$T/share/.vm-run.lock" "$T/share/.vm-run.rb-win-hand.lock"; reset2
+hand vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
+ok '[ $rc = 2 ] && grep -q "another vm-run.sh (pid $holder) drives the VM" "$T/out" && ! grep -q "^snapshot-switch" "$F2/calls"' "rb-win-hand's lock held: a second run on rb-win-hand refused"
+reset
+vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
+ok '[ $rc = 0 ] && [ "$(cat "$T/share/.vm-run.rb-win-hand.lock/pid")" = "$holder" ] && [ ! -e "$T/share/.vm-run.lock" ]' "... while a run on rb-win-template goes on (rc $rc)"
+kill "$holder" 2> /dev/null; wait "$holder" 2> /dev/null; rm -rf "$T/share/.vm-run.rb-win-hand.lock"
+# each VM's own port when VMRUN_HTTP_PORT doesn't set one: rb-win-template 8766, another VM 8767
+reset; reset2
+env -u VMRUN_HTTP_PORT "$VR" run 'clean Windows' "$T/suites/good.suite" > "$T/out" 2>&1; rc=$?
+res="$(last_results)"
+ok '[ $rc = 0 ] && grep -q "port 8766 " "${res}http.log" && grep -qF "127.0.0.1:8766/" "$T/share/job/$(basename "$res")/6-http.ps1"' "rb-win-template serves on 8766 (rc $rc)"
+hand env -u VMRUN_HTTP_PORT "$VR" run 'clean Windows' "$T/suites/good.suite" > "$T/out" 2>&1; rc=$?
+res="$(last_results)"
+ok '[ $rc = 0 ] && grep -q "port 8767 " "${res}http.log" && grep -qF "127.0.0.1:8767/" "$T/share/job/$(basename "$res")/6-http.ps1" && grep -q payload_version "${res}6-http.log"' "rb-win-hand serves on 8767 (rc $rc)"
+# a run on each VM at once: a stage and a check refused meanwhile (the share's flock), each run's
+# own port, folders and VM, both passing, both locks released, then the share free again
+printf '%s\n' '#fake: hold nap' '#fake: out napped' > "$T/suites/s/nap.ps1"
+printf '%s\n' '#fake: out dozed' > "$T/suites/s/doze.ps1"
+printf '%s\n' 'need http' 'sys 30 nap s/nap.ps1' 'sys 60 http s/http.ps1' > "$T/suites/nap.suite"
+printf '%s\n' 'need http' 'sys 60 doze s/doze.ps1' 'sys 60 http s/http.ps1' > "$T/suites/doze.suite"
+reset; reset2; P2=$((VMRUN_HTTP_PORT + 1))
+mkdir -p "$T/share/repo"; echo keep > "$T/share/repo/keep"
+hand env VMRUN_HTTP_PORT=$P2 "$VR" run 'clean Windows' "$T/suites/nap.suite" > "$T/outB" 2>&1 & pb=$!
+wait_for test -e "$F2/nap.ready"; ready=$?
+vr stage; rc=$?
+ok '[ $ready = 0 ] && [ $rc = 2 ] && grep -q "another vm-run.sh reads the share" "$T/out" && [ -f "$T/share/repo/keep" ] && [ ! -e "$T/share/.vm-run.lock" ]' "stage refused while a run on rb-win-hand alone holds the share: the share as it was (rc $rc)"
+vr check 0000000000000000000000000000000000000000 "$DT"; rc=$?
+ok '[ $rc = 2 ] && grep -q "another vm-run.sh reads the share" "$T/out"' "check refused while a run on rb-win-hand holds the share (rc $rc)"
+"$VR" run 'clean Windows' "$T/suites/doze.suite" > "$T/outA" 2>&1; ra=$?
+kill -0 "$pb" 2> /dev/null; b_alive=$?
+touch "$F2/nap.release"
+wait "$pb"; rb=$?
+ra_res="$(ls -d "$T/share/results/"*-doze-[0-9]*/ | tail -1)"; rb_res="$(ls -d "$T/share/results/"*-nap-rb-win-hand-*/ | tail -1)"
+ok '[ $ra = 0 ] && [ $rb = 0 ] && [ $b_alive = 0 ]' "a run on rb-win-template starts and ends while one on rb-win-hand goes on, both pass (rc $ra, $rb)"
+ok 'grep -q "port $VMRUN_HTTP_PORT " "${ra_res}http.log" && grep -q "port $P2 " "${rb_res}http.log" && grep -q payload_version "${ra_res}2-http.log" && grep -q payload_version "${rb_res}2-http.log"' "each run served on its own port"
+ok '[ "$ra_res" != "$rb_res" ] && grep -q "^step sys doze PASS" "${ra_res}results.txt" && ! grep -q nap "${ra_res}results.txt" && grep -q "^step sys nap PASS" "${rb_res}results.txt" && ! grep -q doze "${rb_res}results.txt" && [ -f "$T/share/job/$(basename "$ra_res")/1-doze.ps1" ] && [ ! -e "$T/share/job/$(basename "$ra_res")/1-nap.ps1" ] && [ -f "$T/share/job/$(basename "$rb_res")/1-nap.ps1" ]' "each run's job and results folders its own"
+ok 'grep -q "^exec rb-win-hand " "$F2/calls" && ! calls | grep -q rb-win-hand && grep -q "^snapshot-switch rb-win-hand " "$F2/calls" && [ "$(calls | grep -c "^snapshot-switch")" = 2 ]' "each run drove its own VM only"
+ok '[ ! -e "$T/share/.vm-run.lock" ] && [ ! -e "$T/share/.vm-run.rb-win-hand.lock" ]' "both locks released"
+vr check 0000000000000000000000000000000000000000 "$DT"; rc=$?
+ok '[ $rc = 1 ] && ! grep -q "reads the share" "$T/out"' "after both runs the share is free: check goes on (rc $rc: no such commit)"
+rm -f "$T/share/repo/keep"
+
 # ---- a failed revert stops the run
 reset; touch "$F/switch-fails"
 vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
 ok '[ $rc = 2 ] && ! calls | grep -q "^exec"' 'a failed snapshot switch: exit 2, nothing run'
-reset; echo 1000 > "$F/bootfails"
-VMRUN_BOOT=2 vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
-ok '[ $rc = 2 ] && grep -q "cmd /c ver within 2 s" "$T/out" && [ "$(calls | grep -c "^snapshot-switch")" = 2 ] && calls | grep -q "^stop"' 'a VM that never answers: bounded, exit 2, stopped and reverted again'
+reset; echo 12 > "$F/bootfails"
+VMRUN_BOOT=1 VMRUN_POLL=0.2 vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
+ok '[ $rc = 2 ] && grep -q "cmd /c ver within 1 s" "$T/out" && [ "$(calls | grep -c "^snapshot-switch")" = 2 ] && calls | grep -q "^stop"' 'a VM that does not answer by the boot deadline: exit 2, stopped and reverted again'
 echo 0 > "$F/bootfails"
 reset; touch "$F/prepare-fails"
 vr run 'clean Windows' "$T/suites/good.suite"; rc=$?
@@ -642,9 +1058,9 @@ rm -f "$F/prepare-fails"
 reset
 printf '%s\n' '#fake: out once' '#fake: rc 5' | "$VR" sys > "$T/out" 2>&1; rc=$?
 ok '[ $rc = 5 ] && grep -q "^once" "$T/out" && ! calls | grep -q "^snapshot-switch"' 'sys: the status passed on, no revert'
-printf '%s\n' '#fake: out mine' | "$VR" user-signed 30 > "$T/out" 2>&1; rc=$?
-ok '[ $rc = 0 ] && grep -q "launched as user-signed" "$T/out" && grep -q "^mine" "$T/out"' 'user-signed: through the launcher'
-printf '%s\n' '#fake: sleep 30' | "$VR" sys 2 > "$T/out" 2>&1; rc=$?
+printf '%s\n' '#fake: out mine' | "$VR" user-signed-high 30 > "$T/out" 2>&1; rc=$?
+ok '[ $rc = 0 ] && grep -q "^fake: launched as user-signed-high$" "$T/out" && grep -q "^mine" "$T/out"' 'user-signed-high: through the launcher'
+printf '%s\n' '#fake: sleep 4' | "$VR" sys 1 > "$T/out" 2>&1; rc=$?
 ok '[ $rc = 124 ]' 'a one-off script past its timeout: 124'
 echo x | "$VR" sys 601 > "$T/out" 2>&1; ok '[ $? = 2 ]' 'a timeout over 600 s refused'
 t0=$(date +%s)
@@ -652,14 +1068,14 @@ printf '%s\n' '#fake: bg-sleep 20' '#fake: out done' | "$VR" sys 60 > "$T/out" 2
 took=$(( $(date +%s) - t0 ))
 ok '[ $rc = 0 ] && [ "$took" -lt 10 ]' "what a prlctl leaves in its group is killed when it ends: no wait on its output (${took}s) (VR15)"
 # an interrupt stops prlctl's whole group and still reverts the VM (VR14, VR13)
-reset
+reset; rm -f "$F/sleep.pid"
 printf '%s\n' 'sys 60 slow s/slow.ps1' > "$T/suites/longslow.suite"
 t0=$(date +%s)
 perl -e 'setpgrp(0, 0); exec @ARGV' "$VR" run 'clean Windows' "$T/suites/longslow.suite" > "$T/out" 2>&1 & vp=$!
-until grep -q "step 1: slow" "$T/out" 2> /dev/null || [ $(( $(date +%s) - t0 )) -ge 20 ]; do sleep 0.5; done
-sleep 1; kill -TERM -"$vp" 2> /dev/null; wait "$vp"; rc=$?
+wait_for test -s "$F/sleep.pid"; ready=$?
+kill -TERM -"$vp" 2> /dev/null; wait "$vp"; rc=$?
 took=$(( $(date +%s) - t0 ))
-ok '[ $rc = 130 ] && [ "$took" -lt 25 ] && [ "$(calls | grep -c "^snapshot-switch")" = 2 ] && [ ! -e "$T/share/.vm-run.lock" ]' "TERM during a step: exit 130 in ${took}s, prlctl's group stopped, the VM reverted, the lock released"
+ok '[ $ready = 0 ] && [ $rc = 130 ] && [ "$took" -lt 25 ] && [ "$(calls | grep -c "^snapshot-switch")" = 2 ] && [ ! -e "$T/share/.vm-run.lock" ]' "TERM during a step: exit 130 in ${took}s, prlctl's group stopped, the VM reverted, the lock released"
 : > "$F/calls"; echo 'Windows 11' > "$F/name"
 echo x | "$VR" sys > "$T/out" 2>&1; ok '[ $? = 2 ] && ! calls | grep -q "^exec"' "sys on the owner's VM refused"
 
@@ -695,19 +1111,49 @@ for bad in 'need file ../x' 'need file a b' 'need tea' 'include none.ps1' 'inclu
   vr run 'clean Windows' "$T/suites/bad.suite"; ok '[ $? = 2 ]' "refused: $bad"
 done
 
+# ---- wait SECS NAME logon (a step that signed out or restarted; vmlib's Set-AutoLogon signs back in)
+reset
+for bad in 'wait 60 x other' 'wait 0 x logon' 'wait 601 x logon' 'wait 60 x logon extra' 'wait 60 x' 'need autologon'; do
+  printf '%s\n' "$bad" 'sys 60 one s/pass.ps1' > "$T/suites/bad.suite"
+  vr run 'clean Windows' "$T/suites/bad.suite"; rc=$?
+  ok '[ $rc = 2 ] && ! calls | grep -q "^snapshot-switch"' "a suite line refused: $bad"
+done
+printf '%s\n' 'sys 60 one s/pass.ps1' 'wait 30 back logon' 'sys 60 two s/pass.ps1' > "$T/suites/waits.suite"
+reset; echo 3 > "$F/wait-left"; touch "$F/wait-down"
+vr run 'clean Windows' "$T/suites/waits.suite"; rc=$?
+res="$(last_results)"
+ok '[ $rc = 0 ] && grep -q "^step wait back PASS 0 " "$res/results.txt" && grep -q "^step sys two PASS 0 " "$res/results.txt"' "a wait step passes once the user is signed in again ($(tr '\n' ';' < "$res/results.txt"))"
+ok '[ "$(calls | grep -c "2-back.wait.ps1")" = 5 ] && grep -q "vm-run-wait: rb signed in" "$res/2-back.log" && [ "$(grep -c "not yet" "$res/2-back.log")" = 3 ] && grep -q "restarting" "$res/2-back.log"' "the wait probe is tried again while not yet signed in and while the VM doesn't answer ($(calls | grep -c "2-back.wait.ps1") probes)"
+ok 'grep -q "C:.rbtest.signout.mark" "$T/share/job/$(basename "$res")/2-back.wait.ps1" && ! calls | grep -q "back.wrap.ps1"' "the wait probe reads the sign-out mark; no step script runs for it"
+reset; touch "$F/wait-nomark"
+vr run 'clean Windows' "$T/suites/waits.suite"; rc=$?
+res="$(last_results)"
+ok '[ $rc = 1 ] && grep -q "^step wait back FAIL 3 " "$res/results.txt" && grep -q "^step sys two PASS 0 " "$res/results.txt" && [ "$(calls | grep -c "2-back.wait.ps1")" = 1 ]' "a wait step with no sign-out mark fails at once, the steps after it still run ($(tr '\n' ';' < "$res/results.txt"))"
+rm -f "$F/wait-nomark"
+printf '%s\n' 'sys 60 one s/pass.ps1' 'wait 1 back logon' 'sys 60 two s/pass.ps1' > "$T/suites/waits.suite"
+reset; echo 12 > "$F/wait-left"
+VMRUN_POLL=0.2 vr run 'clean Windows' "$T/suites/waits.suite"; rc=$?
+res="$(last_results)"
+ok '[ $rc = 1 ] && grep -q "^step wait back TIMEOUT 124 " "$res/results.txt" && grep -q "^step sys two PASS 0 " "$res/results.txt" && ! calls | grep -q "kill-2.ps1"' "a wait step sees no sign-in by its deadline: TIMEOUT, no kill, then the next step runs ($(tr '\n' ';' < "$res/results.txt"))"
+rm -f "$F/wait-left"
+
 # ---- stage: the repo's files and the built test exes into the share
 mkdir -p "$R/build/winc/win-x64" "$R/build/common-win/arm64" "$R/build/winc"
 echo exe > "$R/build/winc/win-x64/winc-wintest.exe"; echo pwt > "$R/build/common-win/arm64/plat-win-test.exe"; echo fx > "$R/build/winc/fixtures.txt"
 vr stage; rc=$?
-ok '[ $rc = 0 ] && [ -f "$T/share/repo/scripts/bootstrap.ps1" ] && [ -f "$T/share/repo/tests/win/bootstrap/bootstrap.tests.ps1" ] && [ -f "$T/share/repo/core/texts.def" ] && [ -f "$T/share/repo/win/c/aumid.h" ] && [ ! -e "$T/share/repo/core/other.c" ]' "stage: HEAD's scripts, tests/win, texts.def and aumid.h only"
+ok '[ $rc = 0 ] && [ -f "$T/share/repo/scripts/bootstrap.ps1" ] && [ -f "$T/share/repo/tests/win/bootstrap/bootstrap.tests.ps1" ] && [ -f "$T/share/repo/core/texts.def" ] && [ -f "$T/share/repo/win/c/aumid.h" ] && [ -f "$T/share/repo/win/c/afterexit.h" ] && [ ! -e "$T/share/repo/core/other.c" ]' "stage: HEAD's scripts, tests/win, texts.def, aumid.h and afterexit.h only"
 ok '[ -f "$T/share/vm/x64/winc-wintest.exe" ] && [ -f "$T/share/vm/arm64/plat-win-test.exe" ] && [ -f "$T/share/vm/fixtures.txt" ] && [ ! -e "$T/share/vm/x64/plat-win-test.exe" ]' 'stage: the built test exes there are, by architecture'
 ok '[ "$(cat "$T/share/repo/.commit")" = "$C" ] && grep -qx "$(shasum -a 256 "$T/share/vm/x64/winc-wintest.exe" | cut -c1-64) vm/x64/winc-wintest.exe" "$T/share/vm/shas.txt" && [ "$(grep -c . "$T/share/vm/shas.txt")" = 3 ]' 'stage: repo/.commit names HEAD, vm/shas.txt lists what it staged'
 ok 'grep -q "^still missing" "$T/out" && grep -q "^  vm/x64/plat-win-test.exe (build/common-win/x64/plat-win-test.exe)$" "$T/out" && grep -q "^  vm/arm64/location-win-test.exe" "$T/out" && ! grep -q "^  vm/x64/winc-wintest.exe" "$T/out"' 'stage: says what is still missing, and from where'
 FAKE_BUILD_FAIL=common vr stage --build; rc=$?
 ok '[ $rc = 2 ] && grep -q "common/tests/win.sh build/common-win failed" "$T/out" && grep -q "common broke" "$R/build/vm-inputs/win-tests.log" && [ ! -e "$T/share/vm/x64/plat-win-test.exe" ] && [ -f "$T/share/vm/x64/winc-wintest.exe" ]' 'stage --build: a builder that fails stops it before the share is touched, its log kept'
 vr stage --build; rc=$?
-allvm() { local a f; for a in x64 arm64; do for f in winc-wintest.exe winc-app-wintest.exe plat-win-test.exe checked.dll rbsp-core.dll; do [ -f "$T/share/vm/$a/$f" ] || return 1; done; done; }
+allvm() { local a f; for a in x64 arm64; do for f in winc-wintest.exe winc-app-wintest.exe winc-update-wintest.exe plat-win-test.exe checked.dll rbsp-core.dll; do [ -f "$T/share/vm/$a/$f" ] || return 1; done; done; }
+ok '(for a in x64 arm64; do [ -f "$T/share/vm/$a/memo-stamp-wintest.exe" ] && grep -q " vm/$a/memo-stamp-wintest.exe$" "$T/share/vm/shas.txt" || exit 1; done)' 'NW6: stage --build stages and binds the memo probe for both architectures'
+ok '(for app in app-test app-x64-test; do [ -f "$T/share/vm/shell/$app/RB Stems Plus.exe" ] && grep -q " vm/shell/$app/RB Stems Plus.exe$" "$T/share/vm/shas.txt" || exit 1; done)' 'W13b: stage --build stages and binds the native and forced-x64 TEST shells'
+ok '[ "$(cat "$T/share/vm/x64/winc-update-wintest.exe")" = "upd x64" ] && grep -q " vm/arm64/winc-update-wintest.exe$" "$T/share/vm/shas.txt"' 'stage --build: winc-update-wintest.exe (review K2) staged by architecture and listed'
 ok '[ $rc = 0 ] && allvm && [ "$(cat "$T/share/vm/arm64/winc-app-wintest.exe")" = "app arm64" ] && [ -f "$T/share/vm/fixtures.txt" ]' 'stage --build: builds and stages both architectures'"'"' test exes, the core DLL'"'"'s test-hooks build and fixtures.txt'
+ok '[ "$(cat "$T/share/vm/x64/sysdesk.exe")" = "sysdesk x64" ] && [ "$(cat "$T/share/vm/arm64/sysdesk.exe")" = "sysdesk arm64" ] && [ -f "$T/share/vm/uia/rbui/rbui.exe" ] && [ -f "$T/share/vm/uia/rbui/Interop.UIAutomationClient.dll" ] && grep -q " vm/uia/rbui/FlaUI.Core.dll$" "$T/share/vm/shas.txt"' 'stage --build: the UI driver too (tests/win/uia/build.sh): sysdesk.exe by architecture, rbui and its DLLs in vm/uia/rbui/, listed in vm/shas.txt'
 ok 'grep -q "^  vm/x64/location-win-test.exe" "$T/out" && ! grep -q "^  vm/x64/plat-win-test.exe" "$T/out" && ! grep -q "fixtures.txt" <(sed -n "/^still missing/,\$p" "$T/out")' 'stage --build: only what this branch can'"'"'t build is still missing'
 # vm/.commit: only test exes stage --build built, now, from a clean HEAD (VS10)
 ok '[ "$(cat "$T/share/vm/.commit")" = "$C" ] && grep -qx "$(shasum -a 256 "$T/share/repo/scripts/bootstrap.ps1" | cut -c1-64) repo/scripts/bootstrap.ps1" "$T/share/repo/shas.txt"' "stage --build at a clean HEAD: vm/.commit names it; repo/shas.txt lists repo/ (VS10, VS7)"
@@ -751,33 +1197,61 @@ vr stage bogus; ok '[ $? = 2 ]' 'stage: an unknown option refused'
 # ---- T17's suites parse, find their includes and scripts, and run through the fake
 mkdir -p "$T/share/dist-test/a" "$T/share/dist-test/carried" "$T/share/dist-test/new"
 echo x > "$T/share/dist-test/bootstrap.ps1"
+mkdir -p "$T/share/vm/uia/rbui"
+echo x > "$T/share/vm/uia/rbui/rbui.exe"
 for r in a carried new; do echo '{}' > "$T/share/dist-test/$r/payload.json"; done
 # bridge.suite's need file lines: what bridge/win/tests/stage.sh puts in the share
 mkdir -p "$T/share/bridge-win/fake" "$T/share/bridge-win/model"
 for f in run.ps1 onnxruntime.dll harness.exe fake/onnxruntime.dll model/hdemucs.onnx; do echo x > "$T/share/bridge-win/$f"; done
-for s in bootstrap uninstall platform update smoke worker bridge uninstall-cases restore volumes; do
-  reset
-  snap='clean Windows'; case "$s" in worker|bridge|restore) snap='rekordbox 7.2.19 logged in' ;; esac   # each suite's snapshot (release.list's for its rows)
-  vr run "$snap" "$here/tests/win/suites/$s.suite"; rc=$?
-  res="$(last_results)"
+suites=(bootstrap startup uninstall platform platform-owner prepare-w13b update update-rollback smoke worker worker-choice bridge
+        uninstall-cases restore volumes sessions shell-ui sessions-interactive shell-copy watcher stems-cache-uac
+        prepare-app prepare-facts prepare-update)
+# Each lane gets its own fake state, staged share and port. Keep the results for
+# assertions in suite order and gather both sets of scripts for the parser below.
+run_suite_lane() (
+  local i="$2" s snap rc
+  T="$1"; F="$T/fake"
+  export FAKE_DIR="$F" FAKE_SHARE="$T/share" FAKE_VOLUMES="$T/volumes" VMRUN_SHARE="$T/share" \
+    VMRUN_VOLUMES="$T/volumes" VMRUN_HTTP_PORT="$3"
+  for ((; i < ${#suites[@]}; i += 2)); do
+    s="${suites[i]}"
+    reset
+    snap='clean Windows'; case "$s" in worker|worker-choice|bridge|restore|shell-copy|watcher|stems-cache-uac|prepare-app|prepare-facts|prepare-update) snap='rekordbox 7.2.19 installed' ;; esac
+    "$VR" run "$snap" "$here/tests/win/suites/$s.suite" > "$T/$s.out" 2>&1; rc=$?
+    printf '%s\n%s\n' "$rc" "$(last_results)" > "$T/$s.result"
+  done
+)
+other_lane="$T/suite-lane"
+mkdir -p "$other_lane/share" "$other_lane/volumes"
+cp -R "$F" "$other_lane/fake" || exit 2
+cp -R "$T/share/"{bridge-win,dist-test,probe,repo,vm} "$other_lane/share/" || exit 2
+run_suite_lane "$other_lane" 1 "$((VMRUN_HTTP_PORT + 20000))" & suite_lane_pid=$!
+run_suite_lane "$T" 0 "$VMRUN_HTTP_PORT"
+wait "$suite_lane_pid" || exit 2
+for ((i = 0; i < ${#suites[@]}; i++)); do
+  s="${suites[i]}"
+  lane="$T"; [ $((i % 2)) = 0 ] || lane="$other_lane"
+  { read -r rc; read -r res; } < "$lane/$s.result" || exit 2
   n=$(grep -c '^step ' "$res/results.txt" 2> /dev/null)
-  ok '[ $rc = 0 ] && [ "$n" -ge 1 ] && ! grep -qv " PASS " "$res/results.txt"' "suite $s: $n steps parse and run through the fake ($(tail -2 "$T/out" | tr '\n' ' '))"
+  ok '[ $rc = 0 ] && [ "$n" -ge 1 ] && ! grep -qv " PASS " "$res/results.txt"' "suite $s: $n steps parse and run through the fake ($(tail -2 "$lane/$s.out" | tr '\n' ' '))"
   # bridge.suite's network step (review TR71: BW3's row, the share mapped as a network drive)
   [ "$s" != bridge ] || ok 'grep -q "^step user network PASS " "$res/results.txt"' "suite bridge: its network step runs through the fake ($(grep "^step user network " "$res/results.txt" 2> /dev/null))"
 done
+mv "$other_lane/share/job/"* "$T/share/job/" || exit 2
 ok 'grep -l "function Check" "$T/share/job"/*bootstrap*/1-unit-51.ps1 > /dev/null 2>&1' "a T17 step starts with vmlib.ps1"
 ok 'f="$(ls "$T/share/job"/*worker*/3-cache-install.ps1 2> /dev/null | head -1)"; [ -n "$f" ] && [ "$(grep -n "function Check" "$f" | cut -d: -f1)" -lt "$(grep -n "function Close-Rekordbox" "$f" | cut -d: -f1)" ]' "worker.suite's steps start with vmlib.ps1, then worker/rblib.ps1"
 ok 'f="$(ls "$T/share/job"/*restore*/5-restore.ps1 2> /dev/null | head -1)"; [ -n "$f" ] && [ "$(grep -n "function Check" "$f" | cut -d: -f1)" -lt "$(grep -n "function Close-Rekordbox" "$f" | cut -d: -f1)" ] && [ "$(grep -n "function Close-Rekordbox" "$f" | cut -d: -f1)" -lt "$(grep -n "function Invoke-Restore" "$f" | cut -d: -f1)" ]' "restore.suite's steps start with vmlib.ps1, worker/rblib.ps1, then restore/rslib.ps1"
 ok 'f="$(ls "$T/share/job"/*uninstall-cases*/3-menu-uninstall.ps1 2> /dev/null | head -1)"; [ -n "$f" ] && grep -q "function Invoke-MenuUninstall" "$f"' "uninstall-cases.suite's steps start with uninstall/cases/unlib.ps1 too"
+ok 'f="$(ls "$T/share/job"/*sessions*/2-account-b.ps1 2> /dev/null | head -1)"; [ -n "$f" ] && grep -q "function New-TestAccount" "$f" && grep -q "function Start-AfterExitWatch" "$f" && grep -q "function Get-BProcesses" "$f"' "sessions.suite's steps start with vmlib.ps1, uninstall/cases/unlib.ps1, then sessions/sslib.ps1"
 ok 'f="$(ls "$T/share/job"/*volumes*/2-ntfs-cases.ps1 2> /dev/null | head -1)"; [ -n "$f" ] && grep -q "function Test-Loc" "$f" && grep -q "function Check" "$f"' "volumes.suite's steps start with vmlib.ps1 and volumes/vlib.ps1"
 # ---- the PowerShell itself (VR17): the text ids exist; with pwsh, every assembled script (the
 # steps with their prelude and includes, the wrappers, the launchers, the prepare step) parses
 # with no error and uses no PowerShell 7-only syntax (&&, ||, ??, ?., ?[, the ternary ?:)
 bad=""
-for id in $(grep -rhoE "Get-CoreText '[A-Z0-9_]+'" "$here/tests/win/suites" | sed "s/.*'\(.*\)'/\1/" | sort -u); do
+for id in $(grep -rhoE "Get-(Core|Menu)Text '[A-Z0-9_]+'" "$here/tests/win/suites" | sed "s/.*'\(.*\)'/\1/" | sort -u); do
   grep -qE "^TEXT\($id," "$here/core/texts.def" || bad+=" $id"
 done
-ok '[ -z "$bad" ]' "every Get-CoreText id is in core/texts.def${bad:+ (missing:$bad)}"
+ok '[ -z "$bad" ]' "every Get-CoreText and Get-MenuText id is in core/texts.def${bad:+ (missing:$bad)}"
 bad=""
 for k in $(grep -rhoE "Get-BootText '[A-Za-z0-9]+'" "$here/tests/win/suites" | sed "s/.*'\(.*\)'/\1/" | sort -u); do
   grep -qE "^[[:space:]]+$k[[:space:]]+=[[:space:]]+['\"]" "$here/scripts/bootstrap.ps1" || bad+=" $k"
@@ -785,6 +1259,87 @@ done
 ok '[ -z "$bad" ]' "every Get-BootText key is one of scripts/bootstrap.ps1's \$Texts${bad:+ (missing:$bad)}"
 ok '! grep -rF "'\''RB Stems Plus cleanup'\''" "$here/tests/win/suites" | grep -qv "StartsWith("' "the RunOnce cleanup values are matched by their prefix (UN13: one per temp folder), never by one name"
 if command -v pwsh > /dev/null 2>&1; then
+  cat > "$T/worker-choice-protocol.ps1" <<'EOF'
+param($ScriptPath, $Work)
+$ErrorActionPreference = 'Stop'
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($ScriptPath, [ref]$null, [ref]$null)
+foreach ($node in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
+    . ([scriptblock]::Create($node.Extent.Text))
+}
+function Get-Sha($path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $path).Hash.ToLowerInvariant() }
+$RbExe = Join-Path $Work 'rekordbox.exe'
+Set-Content -LiteralPath $RbExe -Value 'rekordbox fixture'
+$manifest = 'c' * 64
+$name = 'rbstemsplus-admin-' + ('d' * 32)
+$source = 'C:\B source'
+$exe = 'C:\Program Files\RB Stems Plus\bin\worker.exe'
+$setup = New-FixtureWorkerStartInfo $exe 'install-worker' $source $manifest $name
+$install = New-FixtureWorkerStartInfo $exe 'install' $source $manifest $name
+$exe16 = (Get-Sha $RbExe).Substring(0, 16)
+$tail = '"--manifest" "{0}" "--source" "{1}" "--force" "{{0}}" "--pipe" "\\.\pipe\{2}"' -f $manifest, $source, $name
+if ($setup.Arguments -cne ('"install-worker" "--proto" "2" "--targets" "*" ' + ($tail -f 0)) -or
+    $install.Arguments -cne ('"install" "--proto" "2" "--targets" "7.2.19:' + $exe16 + '" ' + ($tail -f 1))) {
+    throw "Wrong protocol arguments: $($setup.Arguments) / $($install.Arguments)"
+}
+Confirm-FixtureWorkerResult 'install-worker' 13 13 'run the app''s own worker now' | Out-Null
+Confirm-FixtureWorkerResult 'install' 0 0 "log`r`n@target 7.2.19 0 installed`r`n" | Out-Null
+function Assert-ResultFailure($code, $pipeLog, $expected) {
+    try { Confirm-FixtureWorkerResult 'install' 0 $code $pipeLog | Out-Null }
+    catch {
+        if ($_.Exception.Message -ceq $expected) { return }
+        throw
+    }
+    throw "Expected fixture failure: $expected"
+}
+Assert-ResultFailure 0 '@target 7.2.20 0 installed' 'Expected an installed result for rekordbox 7.2.19'
+Assert-ResultFailure 15 '' 'install scope or staged payload changed (exit 15)'
+Assert-ResultFailure 16 "@target 7.2.19 0 installed`n@target 7.2.20 6 put-back`n@target 7.2.21 - not-started" `
+    'install only partially completed (exit 16): 7.2.19 0 installed, 7.2.20 6 put-back, 7.2.21 - not-started'
+'PASS VM worker protocol 2'
+EOF
+  pwsh -NoProfile -NonInteractive -File "$T/worker-choice-protocol.ps1" "$here/tests/win/suites/sessions/worker-choice-install.ps1" "$T" > "$T/worker-choice.out" 2>&1; rc=$?
+  ok '[ "$rc" = 0 ] && grep -qx "PASS VM worker protocol 2" "$T/worker-choice.out"' "worker-choice protocol 2 ($(cat "$T/worker-choice.out"))"
+  pwsh -NoProfile -NonInteractive -File "$here/tests/win/w13b-checks-test.ps1" \
+    "$here/win/shell/vm/w13b-checks.ps1" "$here/tests/harness/traces/A/prepare-choose-estimate.jsonl" "$T" > "$T/w13b-cases.out" 2>&1; rc=$?
+  ok '[ "$rc" = 0 ] && [ "$(grep -c "^PASS " "$T/w13b-cases.out")" -eq 10 ]' "W13b trace and pixel assertions ($(tail -1 "$T/w13b-cases.out"))"
+  pwsh -NoProfile -NonInteractive -File "$here/tests/win/suites/shell-ui/a11y-test.ps1" > "$T/a11y.out" 2>&1; rc=$?
+  ok '[ "$rc" = 0 ] && [ "$(grep -c "^PASS " "$T/a11y.out")" -eq 5 ]' "shell UI accessibility host checks ($(tr '\n' ' ' < "$T/a11y.out"))"
+  pwsh -NoProfile -NonInteractive -File "$here/tests/win/suites/prepare/app-test.ps1" > "$T/prepare-app.out" 2>&1; rc=$?
+  ok '[ "$rc" = 0 ] && [ "$(grep -c "^PASS " "$T/prepare-app.out")" -eq 6 ]' "Prepare app host checks ($(tr '\n' ' ' < "$T/prepare-app.out"))"
+  pwsh -NoProfile -NonInteractive -File "$here/tests/win/update-suite-test.ps1" "$T/update-cases" > "$T/update-cases.out" 2>&1; rc=$?
+  ok '[ "$rc" = 0 ] && [ "$(grep -c "^PASS UP" "$T/update-cases.out")" -eq 8 ]' "update sticky and stub-change host cases ($(tail -1 "$T/update-cases.out"))"
+  pwsh -NoProfile -NonInteractive -File "$here/tests/win/update-suite-test.ps1" -Work "$T/rollback-cases" -Group rollback > "$T/rollback-cases.out" 2>&1; rc=$?
+  ok '[ "$rc" = 0 ] && [ "$(grep -c "^PASS UP" "$T/rollback-cases.out")" -eq 13 ]' "update-rollback host cases ($(tail -1 "$T/rollback-cases.out"))"
+
+  pwsh -NoProfile -NonInteractive -File "$here/tests/win/suites/uac/trace-order-test.ps1" > "$T/session-trace.out" 2>&1; rc=$?
+  ok '[ "$rc" = 0 ]' "session trace ($(tail -1 "$T/session-trace.out"))"
+  cat > "$T/switch-sweep.ps1" <<'EOF'
+param($switchScript, $fixture)
+$ErrorActionPreference = 'Stop'
+function Share($path) { Join-Path $fixture $path }
+function Need($path, $why) {
+    $file = Share $path
+    if (-not (Test-Path -LiteralPath $file)) { throw "missing release fixture: $path" }
+    $file
+}
+function Check($pass, $what) { if (-not $pass) { throw $what } }
+function Done {}
+$VmRun = @{ Step = '' }
+foreach ($source in 'a', 'new') {
+    $dir = New-Item -ItemType Directory -Force (Share "dist-test/$source")
+    @{ payload_version = $source } | ConvertTo-Json | Set-Content (Join-Path $dir.FullName 'payload.json')
+}
+foreach ($step in 'switch-a-native-0', 'switch-new-x64-2000', 'switch-a') {
+    $VmRun.Step = $step
+    & $switchScript
+    $served = Get-Content -Raw (Share 'dist-test/current/payload.json') | ConvertFrom-Json
+    if ($served.payload_version -ne ($step -split '-')[1]) { throw "wrong fixture served for $step" }
+}
+'shell-ui switch: both sweep variants and the plain update step served the expected fixture'
+EOF
+  pwsh -NoProfile -NonInteractive -File "$T/switch-sweep.ps1" "$here/tests/win/suites/update/switch.ps1" "$T/w2-fixture" > "$T/switch.out" 2>&1; rc=$?
+  ok '[ "$rc" = 0 ] && grep -q "^shell-ui switch: both sweep variants" "$T/switch.out"' "shell-ui switch serves the named release for each sweep variant ($(tail -1 "$T/switch.out"))"
+
   cat > "$T/parse.ps1" <<'EOF'
 $n = 0; $errs = 0; $seven = 0
 $kinds = 'AndAnd', 'OrOr', 'QuestionQuestion', 'QuestionQuestionEquals', 'QuestionDot', 'QuestionLBracket', 'QuestionMark'
@@ -803,10 +1358,10 @@ EOF
   # the Windows bridge's run.ps1 (bridge.suite's steps dot-source it from the share)
   pwsh -NoProfile -NonInteractive -File "$T/parse.ps1" "$here/bridge/win/tests" > "$T/parse-bridge.out" 2>&1
   ok 'grep -q "^pwsh: [1-9][0-9]* files, 0 parse errors, 0 7-only tokens$" "$T/parse-bridge.out"' "bridge/win/tests' PowerShell parses in pwsh, no 7-only syntax ($(tr '\n' ' ' < "$T/parse-bridge.out"))"
-  printf '%s\n' '$a = "no $x: here"' > "$T/share/job/broken.ps1"
-  pwsh -NoProfile -NonInteractive -File "$T/parse.ps1" "$T/share/job" > "$T/parse.out" 2>&1
+  mkdir "$T/parse-broken"
+  printf '%s\n' '$a = "no $x: here"' > "$T/parse-broken/broken.ps1"
+  pwsh -NoProfile -NonInteractive -File "$T/parse.ps1" "$T/parse-broken" > "$T/parse.out" 2>&1
   ok 'grep -q "^PARSE broken.ps1:1:" "$T/parse.out"' "the parse check finds a \"\$x:\" string (VR4's kind)"
-  rm -f "$T/share/job/broken.ps1"
 else
   echo "SKIP the pwsh parse of the assembled scripts: no pwsh here (brew install powershell)"
 fi
@@ -824,28 +1379,81 @@ printf 'ZIP' > "$D/dist-test/w.zip"; printf 'B' > "$D/dist-test/bootstrap.ps1"
 "$SD" "$D" --key "$T/k2" --key "$T/k1" > "$T/out" 2>&1; rc=$?
 ok '[ $rc = 0 ] && [ "$(cat "$D/dist-test/fault-zip/w.zip")" = ZIPX ] && cmp -s "$D/dist-test/fault-zip/payload.json.sig" "$T/sig.saved" && [ "$(tail -c 1 "$D/dist-test/fault-sig/payload.json.sig")" = X ] && [ "$(tail -c 1 "$D/dist-test/fault-json/payload.json")" = X ] && [ -f "$D/dist-test/fault-json/bootstrap.ps1" ]' 'stage-dist.sh: one byte appended to the zip, the json, the sig, the rest as it was'
 B="$D/dist-test/bad-version"
-ok '[ -f "$B/bootstrap.ps1" ] && [ "$(cat "$B/w.zip")" = ZIP ] && [ "$(python3 -I -c "import json,sys; print(json.load(open(sys.argv[1]))[\"windows\"][\"app\"][\"version\"])" "$B/payload.json")" = 1.5.1 ] && /usr/bin/openssl dgst -sha256 -verify "$T/k1/test.pub.pem" -signature "$B/payload.json.sig" "$B/payload.json" > /dev/null 2>&1 && grep -q "k2 didn.t sign this TEST build" "$T/out"' "stage-dist.sh: bad-version/ names another app version, signed with the key that signed the TEST build (a key that didn't is passed over)"
+ok '[ -f "$B/bootstrap.ps1" ] && [ "$(cat "$B/w.zip")" = ZIP ] && [ "$(python3 -I -c "import json,sys; print(json.load(open(sys.argv[1]))[\"windows\"][\"app\"][\"version\"])" "$B/payload.json")" = 0.0.0 ] && /usr/bin/openssl dgst -sha256 -verify "$T/k1/test.pub.pem" -signature "$B/payload.json.sig" "$B/payload.json" > /dev/null 2>&1 && grep -q "k2 didn.t sign this TEST build" "$T/out"' "stage-dist.sh: bad-version/ names another app version, signed with the key that signed the TEST build (a key that didn't is passed over)"
 "$SD" "$D" --key "$T/k2" > "$T/out" 2>&1; rc=$?
 ok '[ $rc = 0 ] && [ ! -e "$B" ] && grep -q "bad-version/ not made" "$T/out" && [ -d "$D/dist-test/fault-zip" ]' "stage-dist.sh: no key that signed the TEST build: no bad-version/, said; the faults still made"
 cp "$T/k1/test.pub.pem" "$T/norel/release.pub.pem"
 "$SD" "$D" --key "$T/k1" > "$T/out" 2>&1; rc=$?
 ok '[ $rc = 2 ] && grep -q "a release key never signs" "$T/out" && [ ! -e "$B" ]' "stage-dist.sh: a key pair whose public half is one of keys/*.pub.pem is refused"
 rm -f "$T/norel/release.pub.pem"
+# carried/ from update.suite's a/: the next payload_version, a/'s windows.app.version and files, signed with a/'s key
+A="$D/dist-test/a"; CR="$D/dist-test/carried"; mkdir -p "$A"
+printf '%s' '{"payload_version": "1.4.9", "commit": "c1", "windows": {"app": {"zip": "w.zip", "version": "1.4.9"}}}' > "$A/payload.json"
+/usr/bin/openssl dgst -sha256 -sign "$T/k2/test-key.pem" -out "$A/payload.json.sig" "$A/payload.json"; printf 'AZIP' > "$A/w.zip"; printf 'AB' > "$A/bootstrap.ps1"
+"$SD" "$D" --key "$T/k1" --key "$T/k2" > "$T/out" 2>&1; rc=$?
+pv() { python3 -I -c 'import json, sys; p = json.load(open(sys.argv[1])); print(p["payload_version"], p["windows"]["app"]["version"], p["commit"])' "$1"; }
+ok '[ $rc = 0 ] && [ "$(pv "$CR/payload.json")" = "1.4.10 1.4.9 c1" ] && [ "$(cat "$CR/w.zip")" = AZIP ] && [ "$(cat "$CR/bootstrap.ps1")" = AB ] && /usr/bin/openssl dgst -sha256 -verify "$T/k2/test.pub.pem" -signature "$CR/payload.json.sig" "$CR/payload.json" > /dev/null 2>&1 && grep -q "payload_version 1.4.9 -> 1.4.10, windows.app.version 1.4.9" "$T/out"' "stage-dist.sh: carried/ is a/ with the next payload_version, a/'s app version, signed with a/'s key (rc $rc)"
+"$SD" "$D" --key "$T/k1" > "$T/out" 2>&1; rc=$?
+ok '[ $rc = 0 ] && [ "$(pv "$CR/payload.json")" = "1.4.10 1.4.9 c1" ] && grep -q "carried/ not made: no test key pair" "$T/out" && [ -d "$B" ]' "stage-dist.sh: no key that signed a/: carried/ left as it was, said; bad-version/ still made"
+rm -f "$A/payload.json.sig"
+"$SD" "$D" --key "$T/k2" > "$T/out" 2>&1; rc=$?
+ok '[ $rc = 0 ] && [ -f "$CR/payload.json" ] && grep -q "carried/ not made: no signed update.suite release" "$T/out"' "stage-dist.sh: an unsigned a/: carried/ left as it was, said"
+rm -rf "$A" "$CR"
+"$SD" "$D" --key "$T/k1" > "$T/out" 2>&1; rc=$?
+ok '[ $rc = 0 ] && [ ! -e "$CR" ] && grep -q "carried/ not made: no signed update.suite release" "$T/out"' "stage-dist.sh: no a/: no carried/, said"
 printf '%s' '{"windows": {"app": {"zip": "../w.zip"}}}' > "$D/dist-test/payload.json"
 "$SD" "$D" --key "$T/k1" > "$T/out" 2>&1; ok '[ $? = 2 ]' 'stage-dist.sh: a zip name with a path refused'
 # stage makes them too, for the share's signed TEST build, with the checkout's own test key
 mkdir -p "$R/build/test-keys"; cp "$T/k1/test-key.pem" "$T/k1/test.pub.pem" "$R/build/test-keys/"
 cp "$DT/payload.json" "$T/payload.saved"
-printf '%s' '{"payload_version": "1.5.0", "windows": {"app": {"zip": "w.zip", "version": "2.0.0"}}}' > "$DT/payload.json"
-/usr/bin/openssl dgst -sha256 -sign "$T/k1/test-key.pem" -out "$DT/payload.json.sig" "$DT/payload.json"; printf 'ZIP' > "$DT/w.zip"
+printf '{"payload_version": "1.5.0", "commit": "%s", "windows": {"app": {"zip": "w.zip", "version": "1.5.0"}}}\n' "$C" > "$DT/payload.json"
+# a TEST build in a plan's shape is signed with the gate archive's test key (build.sh), not the
+# checkout's: stage passes that key too, so bad-version/ is made
+mkdir -p "$T/arch/tag-v9.9.9/test-keys"; cp "$T/k2/test-key.pem" "$T/k2/test.pub.pem" "$T/arch/tag-v9.9.9/test-keys/"
+/usr/bin/openssl dgst -sha256 -sign "$T/k2/test-key.pem" -out "$DT/payload.json.sig" "$DT/payload.json"; printf 'ZIP' > "$DT/w.zip"; printf B > "$DT/bootstrap.ps1"
+GATES_ARCHIVE="$T/arch" vr stage; rc=$?
+ok '[ $rc = 0 ] && [ -f "$DT/bad-version/payload.json" ] && /usr/bin/openssl dgst -sha256 -verify "$T/k2/test.pub.pem" -signature "$DT/bad-version/payload.json.sig" "$DT/bad-version/payload.json" > /dev/null 2>&1 && grep -q "signed with the test key in $T/arch/tag-v9.9.9/test-keys" "$T/out"' "stage: a TEST build signed with the gate archive's test key gets bad-version/, with that key (rc $rc)"
+/usr/bin/openssl dgst -sha256 -sign "$T/k1/test-key.pem" -out "$DT/payload.json.sig" "$DT/payload.json"; printf 'ZIP' > "$DT/w.zip"; printf B > "$DT/bootstrap.ps1"
+cp "$DT/payload.json" "$DT/payload.json.sig" "$DT/w.zip" "$DT/bootstrap.ps1" "$R/dist-test/"
 vr stage; rc=$?
-ok '[ $rc = 0 ] && [ -d "$DT/fault-zip" ] && [ -d "$DT/fault-json" ] && [ -d "$DT/fault-sig" ] && grep -q "2.0.0 -> 2.0.1, signed with the test key in $R/build/test-keys" "$T/out" && ! grep -q "fault-\*/ and bad-version/" "$T/out"' "stage: the share's signed TEST build gets its faults and bad-version/, with the checkout's test key"
+ok '[ $rc = 0 ] && [ -d "$DT/fault-zip" ] && [ -d "$DT/fault-json" ] && [ -d "$DT/fault-sig" ] && grep -q "signed with the test key in $R/build/test-keys" "$T/out" && ! grep -q "fault-\*/ and bad-version/" "$T/out"' "stage: the share's signed TEST build gets its faults and bad-version/, with the checkout's test key"
+reset
+vr run 'clean Windows' "$RS/gamma.suite" --record; rc=$?
+ok '[ $rc = 0 ] && [ -f "$DT/bad-version/payload.json" ]' "--record accepts the bad-version/ made by stage (rc $rc, $(grep -m1 '^vm-run.sh:' "$T/out"))"
+# stage --serve DIR: the folder a run --serve DIR serves gets them too (bootstrap's faults fetch them from the run's server)
+SV="$T/share/dist-other"; rm -rf "$SV"; mkdir -p "$SV"
+printf '%s' '{"payload_version": "0.0.0", "windows": {"app": {"zip": "w.zip", "version": "0.0.0"}}}' > "$SV/payload.json"
+/usr/bin/openssl dgst -sha256 -sign "$T/k1/test-key.pem" -out "$SV/payload.json.sig" "$SV/payload.json"; printf 'OZIP' > "$SV/w.zip"; printf 'OB' > "$SV/bootstrap.ps1"
+vr stage --serve "$SV"; rc=$?
+ok '[ $rc = 0 ] && [ "$(cat "$SV/fault-zip/w.zip")" = OZIPX ] && [ "$(tail -c 1 "$SV/fault-json/payload.json")" = X ] && [ -d "$SV/fault-sig" ] && grep -Fq "0.0.0 -> 0.0.00," "$T/out" && [ -d "$DT/fault-zip" ]' "stage --serve DIR: DIR's signed TEST build gets its faults and bad-version/ too, dist-test/ still its own"
+vr stage --serve "$T/sd/dist-test"; ok '[ $? = 2 ] && grep -q "must be inside the share" "$T/out"' "stage --serve: a folder outside the share refused"
+rm -f "$SV/payload.json.sig"; vr stage --serve "$SV"; ok '[ $? = 2 ] && grep -q "no signed TEST build" "$T/out"' "stage --serve: a folder with no signed TEST build refused"
+rm -rf "$SV"
 cp "$T/payload.saved" "$DT/payload.json"; rm -f "$DT/payload.json.sig"
+cp "$DT/payload.json" "$R/dist-test/payload.json"; rm -f "$R/dist-test/payload.json.sig" "$R/dist-test/w.zip"
 
 # ---- tests/win/first-run.sh against the fake (never against a VM here)
 FRS="$R/tests/win/first-run.sh"   # the checkout's own, as vm-run.sh (VT2)
+first_run_base="$C"
+# Only these suites run by name here. Copy their actual definitions and referenced
+# inputs, so the early stage and record cases don't hash the unrelated suite tree.
+(
+  cd "$here/tests/win/suites" || exit 2
+  suites=(smoke.suite platform.suite bootstrap.suite uninstall.suite update.suite)
+  {
+    printf '%s\n' "${suites[@]}"
+    awk '$1 == "include" { print $2 } $1 ~ /^(sys|user|user-high|user-signed|user-signed-high)$/ { print $4 }' "${suites[@]}"
+  } | LC_ALL=C sort -u | tar -cf - -T -
+) | tar -xf - -C "$RS" || exit 2
+git -C "$R" add tests/win/suites && git -C "$R" -c user.email=t@t -c user.name=t commit -q -m 'first-run suites' || exit 2
+C="$(git -C "$R" rev-parse HEAD)"
 # the share as a release's --record runs want it: no stray fixture copies, the checkout's TEST build
-rm -rf "$DT"/fault-* "$DT/bad-version"; cp "$DT/bootstrap.ps1" "$R/dist-test/bootstrap.ps1"; mkrels
+rm -rf "$DT"/fault-* "$DT/bad-version"; cp "$DT/bootstrap.ps1" "$R/dist-test/bootstrap.ps1"
+printf '{"payload_version": "1.5.0", "commit": "%s"}\n' "$C" > "$DT/payload.json"
+cp "$DT/payload.json" "$R/dist-test/payload.json"
+# Like the RC builder, populate new/ from the finalized root payload.
+mkrels
+ok 'cmp -s "$DT/payload.json" "$DT/new/payload.json"' "first-run.sh: the new/ candidate matches the staged TEST payload"
 reset
 "$FRS" --dry-run < /dev/null > "$T/out" 2>&1; rc=$?
 ok '[ $rc = 0 ] && [ ! -s "$F/calls" ] && [ "$(grep -c "== step [0-9]" "$T/out")" = 10 ] && grep -q "would run (at most 1800s): vm-run.sh run clean Windows smoke" "$T/out" && grep -q "DRY RUN: nothing was run" "$T/out"' "first-run.sh --dry-run: steps 0-9 said, prlctl never called"
@@ -879,14 +1487,13 @@ ok '[ $rc = 0 ] && grep -q "first run: every step passed" "$T/out" && grep -q "^
 rm -f "$T/the share"
 # TERM to first-run.sh's own pid (not its group) ends vm-run.sh too, after its cleanup: the VM
 # reverted, the lock released, then the stop said (VX10)
-reset; rm -f "$T/fr.out"
+reset; rm -f "$T/fr.out" "$F/sleep.pid"
 printf 'y\n' | perl -e 'setpgrp(0, 0); exec @ARGV' "$FRS" --from 5 > "$T/fr.out" 2>&1 & fp=$!
-t0=$(date +%s)
-until grep -q "step 1: sleeper" "$T/fr.out" 2> /dev/null || [ $(( $(date +%s) - t0 )) -ge 20 ]; do sleep 0.5; done
-sleep 1; kill -TERM "$fp" 2> /dev/null; wait "$fp"; rc=$?
+wait_for test -s "$F/sleep.pid"; ready=$?
+kill -TERM "$fp" 2> /dev/null; wait "$fp"; rc=$?
 lock_after="$([ -e "$T/share/.vm-run.lock" ] && echo held || echo free)"; switches="$(calls | grep -c "^snapshot-switch")"
 t0=$(date +%s); until grep -q "STOP at step 5" "$T/fr.out" 2> /dev/null || [ $(( $(date +%s) - t0 )) -ge 5 ]; do sleep 0.2; done
-ok '[ $rc = 1 ] && [ "$lock_after" = free ] && [ "$switches" = 2 ] && grep -q "STOP at step 5: interrupted during vm-run.sh" "$T/fr.out"' "first-run.sh: TERM to its own pid ends vm-run.sh after its cleanup, then stops (VX10: rc $rc, lock $lock_after, $switches switches)"
+ok '[ $ready = 0 ] && [ $rc = 1 ] && [ "$lock_after" = free ] && [ "$switches" = 2 ] && grep -q "STOP at step 5: interrupted during vm-run.sh" "$T/fr.out"' "first-run.sh: TERM to its own pid ends vm-run.sh after its cleanup, then stops (VX10: rc $rc, lock $lock_after, $switches switches)"
 # (unfixed, vm-run.sh lives on: the next cases wait for the share's lock to go, bounded)
 t0=$(date +%s); while [ -e "$T/share/.vm-run.lock" ] && [ $(( $(date +%s) - t0 )) -lt 60 ]; do sleep 0.5; done
 # first-run.sh's bounded (VT4, VT6): a leftover in the child's group ends with it; a child's
@@ -894,12 +1501,9 @@ t0=$(date +%s); while [ -e "$T/share/.vm-run.lock" ] && [ $(( $(date +%s) - t0 )
 eval "$(sed -n '/^bounded() {/,/^}/p' "$FRS")"
 t0=$(date +%s); out="$(bounded 1 bash -c 'sleep 4 & echo hi; exit 0')"; rc=$?; t1=$(date +%s)
 ok '[ $rc = 0 ] && [ "$out" = hi ] && [ $((t1 - t0)) -le 2 ]' "first-run.sh bounded: a child's leftover (sleep 4 &) is killed when it ends: back in $((t1 - t0)) s (VT6)"
-t0=$(date +%s)
-bounded 2 bash -c 'trap "echo cleanup-start; sleep 70; echo cleanup-done; exit 3" TERM; echo started; while :; do sleep 1; done' > "$T/bounded.out" 2>&1 & bp=$!
-until grep -q cleanup-start "$T/bounded.out" 2> /dev/null || [ $(( $(date +%s) - t0 )) -ge 20 ]; do sleep 0.5; done
-ok 'grep -q "^started$" "$T/bounded.out" && grep -q "^cleanup-start$" "$T/bounded.out" && kill -0 "$bp" 2> /dev/null' "first-run.sh bounded: the child's lines come while it runs (VT5's streaming has them)"
-wait "$bp"; rc=$?; t1=$(date +%s)
-ok '[ $rc = 124 ] && grep -q "^cleanup-done$" "$T/bounded.out" && [ $((t1 - t0)) -ge 70 ]' "first-run.sh bounded: a 70 s cleanup after TERM is waited for, then 124 (VT4: $((t1 - t0)) s)"
+wait "$cleanup_case" && read -r rc took < "$T/cleanup.result" || { rc=1; took=0; }
+ok '[ -e "$T/cleanup.streaming" ] && grep -qx started "$T/cleanup.out" && grep -qx cleanup-start "$T/cleanup.out"' "first-run.sh bounded: the child's lines come while it runs (VT5's streaming has them)"
+ok '[ $rc = 124 ] && grep -qx cleanup-done "$T/cleanup.out" && [ "$took" -ge 70 ]' "first-run.sh bounded: a 70 s cleanup after TERM is waited for, then 124 (VT4: ${took}s in background)"
 # a TERM, then the bound running out during the child's cleanup: finish runs once, its one TERM
 # to the group, and the cleanup ends whole: 130, never the alarm's 124 (VX5)
 # (the child writes its parent's pid, bounded's perl: no pgrep in the sandbox)
@@ -910,7 +1514,7 @@ wait "$bp"; rc=$?
 ok '[ $rc = 130 ] && grep -q "^cleanup-done$" "$T/bounded.out"' "first-run.sh bounded: TERM, then the bound out during a 3 s cleanup: 130, the cleanup whole (VX5: rc $rc)"
 # step 9's verdict on check (VT7): exit 1 with exactly the expected lines, nothing else
 eval "$(sed -n '/^check_ok() {/,/^}/p' "$FRS")"
-NR1='vm-run.sh check: no record of worker on "rekordbox 7.2.19 logged in" (arm64) in /g/vm-win'
+NR1='vm-run.sh check: no record of worker on "rekordbox 7.2.19 installed" (arm64) in /g/vm-win'
 NR2='vm-run.sh check: no record of other on "clean Windows" (arm64) in /g/vm-win'
 check_ok 1 "$NR1" "$NR1" > /dev/null; ok '[ $? = 0 ]' "check_ok: exit 1 with exactly the row without a suite: ok"
 check_ok 1 "$NR1"$'\n'"$NR2" "$NR2"$'\n'"$NR1" > /dev/null; ok '[ $? = 0 ]' "check_ok: each expected line once, in any order: ok"
@@ -923,37 +1527,59 @@ check_ok 1 "" "" > /dev/null; ok '[ $? = 1 ]' "check_ok: a silent failure with n
 check_ok 0 "" "vm-run.sh check: x passed" > /dev/null; ok '[ $? = 0 ]' "check_ok: a pass with no row expected to fail: ok"
 check_ok 0 "$NR1" "" > /dev/null; ok '[ $? = 1 ]' "check_ok: a pass although a row has no suite stops step 9"
 # end to end: a release.list row with no suite: step 9 passes on exactly its "no record" line
-printf '%s\n' 'ghost arm64 clean Windows' >> "$RS/release.list"
+# Step 9 only needs the record fixtures from the checkout before the full first-run cases.
+git -C "$R" reset --hard "$first_run_base" > /dev/null || exit 2
+first_run_step9() {
+  vr stage || return $?
+  printf 'y\n' | "$FRS" --from 9 > "$T/out" 2>&1
+}
+# One passing row covers how the expected diagnostics interact with a valid record.
+printf '%s\n' 'alpha arm64 clean Windows' 'ghost arm64 clean Windows' > "$RS/release.list"
 git -C "$R" add -A && git -C "$R" -c user.email=t@t -c user.name=t commit -q -m ghost
 C="$(git -C "$R" rev-parse HEAD)"
 printf '{"payload_version": "1.5.0", "commit": "%s"}\n' "$C" > "$T/share/dist-test/payload.json"
 cp "$T/share/dist-test/payload.json" "$R/dist-test/payload.json"; mkrels
 reset
-printf 'y\nn\n' | "$FRS" > "$T/out" 2>&1; rc=$?
+first_run_step9; rc=$?
 ok '[ $rc = 0 ] && grep -q "ghost on \"clean Windows\" (arm64): no ghost.suite yet, not run" "$T/out" && grep -q "ok: check fails closed only on the rows no suite can pass yet: no suite: ghost;" "$T/out" && grep -q "first run: every step passed" "$T/out"' "first-run.sh: a row with no suite: step 9 passes on its one \"no record\" line ($(grep -m1 STOP "$T/out"))"
 # step 9 and a known gap (first-run.sh's GAPS, worker:cache-hit): a row whose record skipped only
 # that step fails check closed, and step 9 says so and passes; a SKIP of any other step stops it.
 # The checkout gets a worker row and suite, committed: HEAD, the TEST build and the releases follow
-gaprun() {   # FIRST-STEP-SCRIPT [older]: older: an older gap-only record under another snapshot id
+gaprun() {   # FIRST-STEP-SCRIPT [SNAPSHOT-NAME for an older record with another snapshot ID]
   printf '%s\n' 'need http' "sys 60 one s/$1.ps1" 'sys 60 cache-hit s/skip.ps1' "# ${2:-}" > "$RS/worker.suite"
   git -C "$R" add -A && git -C "$R" -c user.email=t@t -c user.name=t commit -q -m "worker $1 ${2:-}"
   C="$(git -C "$R" rev-parse HEAD)"
   printf '{"payload_version": "1.5.0", "commit": "%s"}\n' "$C" > "$T/share/dist-test/payload.json"
   cp "$T/share/dist-test/payload.json" "$R/dist-test/payload.json"; mkrels
-  if [ "${2:-}" = older ]; then
+  if [ -n "${2:-}" ]; then
     mkdir -p "$T/gates/$C/vm-win"
-    printf 'commit %s\nsuite worker\nsnapshot {99999999-aaaa-bbbb-cccc-000000000009} other\narch arm64\nrun older\nstep sys one PASS 0 1s\nstep sys cache-hit SKIP 77 1s\nresult skip\n' "$C" > "$T/gates/$C/vm-win/worker@99999999-aaaa-bbbb-cccc-000000000009-arm64.failed"
+    printf 'commit %s\nsuite worker\nsnapshot {99999999-aaaa-bbbb-cccc-000000000009} %s\narch arm64\nrun older\nstep sys one PASS 0 1s\nstep sys cache-hit SKIP 77 1s\nresult skip\n' "$C" "$2" > "$T/gates/$C/vm-win/worker@99999999-aaaa-bbbb-cccc-000000000009-arm64.failed"
   fi
   reset
-  printf 'y\nn\n' | "$FRS" > "$T/out" 2>&1
+  first_run_step9
 }
 printf '%s\n' 'worker arm64 clean Windows' >> "$RS/release.list"
 gaprun pass; rc=$?
 ok '[ $rc = 0 ] && grep -q "vm-run.sh check: worker on \"clean Windows\" (arm64) failed: worker@" "$T/out" && grep -q "only a known gap skipped (worker:cache-hit): worker" "$T/out" && grep -q "first run: every step passed" "$T/out"' "first-run.sh: a known gap's SKIP (worker's cache-hit) fails check closed; step 9 says so and passes ($(grep -m1 STOP "$T/out"))"
 gaprun skip; rc=$?
 ok '[ $rc = 1 ] && grep -q "STOP at step 9: vm-run.sh check $C failed: vm-run.sh check: worker on" "$T/out"' "first-run.sh: the gap's row with another step skipped too stops step 9"
-gaprun pass older; rc=$?
-ok '[ $rc = 1 ] && grep -q "STOP at step 9: worker (arm64) has 2 records in" "$T/out"' "first-run.sh: an older gap-only record of worker under another snapshot id stops step 9 (WS3)"
+gaprun pass other; rc=$?
+ok '[ $rc = 0 ] && grep -q "first run: every step passed" "$T/out"' "first-run.sh: step 9 ignores a worker record for a different snapshot (VX9: $(grep -m1 STOP "$T/out"))"
+gaprun pass 'clean Windows'; rc=$?
+ok '[ $rc = 1 ] && grep -q "STOP at step 9: worker on \"clean Windows\" (arm64) has 2 records" "$T/out"' "first-run.sh: step 9 rejects two records for the worker row's snapshot (VX9)"
+# The result from a previously passing run of a regular row is insufficient, even if check itself
+# would accept it. Match by snapshot ID here (the worker cases above match by name).
+record_pick() (
+  eval "$(sed -n '/^record_for_run() {/,/^}/p' "$FRS")"
+  fail() { echo "$*"; exit 1; }
+  GATES="$T/gates" head=vx9
+  mkdir -p "$GATES/$head/vm-win"
+  printf '%s\n' 'snapshot {id} other' 'run previous' > "$GATES/$head/vm-win/alpha@id-arm64.ok"
+  record_for_run alpha arm64 '{id}' "$1"
+)
+record_pick previous > "$T/out"; ok '[ $? = 0 ]' "first-run.sh: step 9 matches snapshot IDs (VX9)"
+record_pick current > "$T/out"; rc=$?
+ok '[ $rc = 1 ] && grep -q "isn.t the run step 9 just made (current)" "$T/out"' "first-run.sh: step 9 rejects a regular row's stale record (VX9)"
 # the gap row's line is accepted only as the whole of what check says: any other status or line
 # stops step 9 (WS1)
 GL='vm-run.sh check: worker on "clean Windows" (arm64) failed: worker@11111111-aaaa-bbbb-cccc-000000000001-arm64.failed'
@@ -962,6 +1588,88 @@ check_ok 1 "$GL" "" > /dev/null; ok '[ $? = 1 ]' "check_ok: on the gap row, chec
 check_ok 2 "$GL" "vm-run.sh: another vm-run.sh (pid 1) drives the VM" > /dev/null; ok '[ $? = 1 ]' "check_ok: on the gap row, exit 2 with a stop line stops step 9 (WS1)"
 check_ok 137 "$GL" "" > /dev/null; ok '[ $? = 1 ]' "check_ok: on the gap row, exit 137 stops step 9 (WS1)"
 check_ok 1 "$GL" "$GL"$'\n'"tests/win/vm-run.sh: line 700: x: unbound variable" > /dev/null; ok '[ $? = 1 ]' "check_ok: the gap line followed by a crash line stops step 9 (WS1)"
+
+# ---- the owner's stick and empty reader
+printf '%s\n' 'need usb' 'need usb-reader' 'sys 60 facts s/reader.ps1' > "$T/suites/reader.suite"
+printf '%s\n' '#fake: jobfile usb.assigned' '#fake: jobfile usb-reader.assigned' > "$T/suites/s/reader.ps1"
+printf '%s\n' 'usb rb-win-template stick-id' 'usb-reader rb-win-template reader-id' > "$T/vm-run.conf"
+reset
+vr run 'clean Windows' "$T/suites/reader.suite"; rc=$?
+res="$(last_results)"
+ok '[ $rc = 0 ] && [ "$(calls | awk "/^start/{exit} /^srv usb set/{print \$4}" | xargs)" = "stick-id reader-id" ] && [ "$(calls | awk "/^srv usb del/{print \$4}" | xargs)" = "stick-id reader-id" ] && grep -qx "JOBFILE usb.assigned: stick-id" "$res/1-facts.log" && grep -qx "JOBFILE usb-reader.assigned: reader-id" "$res/1-facts.log"' 'empty reader: both devices are independently assigned, reported and released'
+reset; touch "$F/prepare-fails"
+vr run 'clean Windows' "$T/suites/reader.suite"; rc=$?
+ok '[ $rc = 2 ] && [ "$(calls | awk "/^srv usb del/{print \$4}" | xargs)" = "stick-id reader-id" ]' 'empty reader: an early failure releases both attached devices'
+rm -f "$F/prepare-fails"
+printf '%s\n' 'usb rb-win-template same-id' 'usb-reader rb-win-template same-id' > "$T/vm-run.conf"
+reset
+vr run 'clean Windows' "$T/suites/reader.suite"; rc=$?
+ok '[ $rc = 2 ] && grep -q "same device id" "$T/out" && ! calls | grep -qE "^(snapshot-switch|srv)"' 'empty reader: a shared device ID is rejected before the revert'
+rm -f "$T/vm-run.conf"
+
+# ---- the release architecture matrix
+ok '(for s in platform startup; do for a in arm64 x64-prism; do grep -Eq "^$s +$a +clean Windows$" "$here/tests/win/suites/release.list" || exit 1; done; done)' 'Prism: the release matrix requires native and Prism records for platform and startup'
+printf '%s\n' 'gamma arm64 clean Windows' 'gamma x64-prism clean Windows' > "$RS/release.list"
+git -C "$R" add -A && git -C "$R" -c user.email=t@t -c user.name=t commit -q -m matrix
+C="$(git -C "$R" rev-parse HEAD)"
+DT="$T/share/dist-test"
+rm -rf "$DT"; mkdir "$DT"
+printf '{"payload_version":"1.5.0","commit":"%s"}\n' "$C" > "$DT/payload.json"
+cp "$DT/payload.json" "$R/dist-test/payload.json"
+"$R/tests/win/first-run.sh" --dry-run > "$T/out" 2>&1; rc=$?
+ok '[ $rc = 0 ] && grep -q "gamma.suite --arch x64-prism --record" "$T/out"' 'Prism: the first-run driver selects the release row architecture'
+vr stage --build; rc=$?
+ok '[ $rc = 0 ] && grep -qx "$(printf "forced\n" | shasum -a 256 | cut -c1-64) vm/x64/forced-shell.exe" "$T/share/vm/shas.txt"' 'Prism: stage --build stages and hashes the forced shell'
+reset; echo ARM64 > "$F/arch"
+vr run 'clean Windows' gamma --arch arm64 --record; arm_rc=$?
+vr run 'clean Windows' gamma --arch x64-prism --record; prism_rc=$?
+g="$T/gates/$C/vm-win"; base="$g/gamma@11111111-aaaa-bbbb-cccc-000000000001"
+res="$(last_results)"
+job="$T/share/job/$(basename "$res")"
+ok '[ "$arm_rc:$prism_rc" = 0:0 ] && [ -f "$base-arm64.ok" ] && grep -qx "arch arm64" "$base-x64-prism.ok" && grep -qx "lane x64-prism" "$base-x64-prism.ok" && grep -q "TestArch = '\''x64'\''" "$job/1-one.ps1"' 'Prism: ARM64 and forced x64 records coexist and x64 reaches the test prelude'
+vr check "$C" "$DT"; rc=$?
+ok '[ $rc = 0 ] && grep -q "passed (2 rows" "$T/out"' 'Prism: check accepts the two distinct ARM64 and Prism passes'
+sed 's/^arch arm64$/arch x64/' "$base-x64-prism.ok" > "$T/prism-rec"
+mv "$T/prism-rec" "$base-x64-prism.ok"
+vr check "$C" "$DT"; rc=$?
+ok '[ $rc = 1 ] && grep -q "isn.t an x64 run on ARM64" "$T/out"' 'Prism: check rejects a Prism record claiming an x64 guest'
+reset; echo AMD64 > "$F/arch"
+vr run 'clean Windows' gamma --arch x64-prism; rc=$?
+ok '[ $rc = 2 ] && grep -q "cannot run on this VM (x64)" "$T/out" && ! calls | grep -q "1-one.ps1"' 'Prism: an x64 guest cannot run the Prism lane'
+
+TMPDIR="$T" bash "$here/tests/win/update-fixtures-test.sh" > "$T/fixture-build.out" 2>&1; rc=$?
+ok '[ "$rc" = 0 ] && grep -q "^PASS IN3/IN5:" "$T/fixture-build.out"' "IN3/IN5 fixture builder ($(tail -1 "$T/fixture-build.out"))"
+
+# ---- the published bootstrap path on the TEST server
+printf '%s\n' 'published bootstrap fixture' > "$T/share/dist-test/bootstrap.ps1"
+printf '%s\n' '#fake: get releases/latest/download/bootstrap.ps1' \
+  '#fake: get releases/latest/download/sub/bootstrap.ps1' > "$T/suites/s/published.ps1"
+printf '%s\n' 'need http' 'sys 60 published s/published.ps1' > "$T/suites/published.suite"
+reset; echo ARM64 > "$F/arch"
+vr run 'clean Windows' "$T/suites/published.suite"; rc=$?
+res="$(last_results)"
+ok '[ $rc = 0 ] && grep -qx "published bootstrap fixture" "$res/1-published.log" && grep -qx "GET-REFUSED releases/latest/download/sub/bootstrap.ps1" "$res/1-published.log"' 'published bootstrap: the server maps the exact release asset path to the TEST file'
+if command -v pwsh > /dev/null; then
+  cat > "$T/published.ps1" <<'PS'
+param([string]$Suites)
+$VmRun = @{ Url = 'http://10.211.55.2:8766/'; Step = 'published' }
+. (Join-Path $Suites 'bootstrap/published.ps1')
+$capture = @{ Base = $null }
+function Get-Layout { @{} }
+function Get-ItemProperty { @{ VerifiedAndReputablePolicyState = 2 } }
+function Invoke-OneLiner([string]$base) {
+    $capture.Base = $base
+    throw 'mock one-liner'
+}
+try { & (Join-Path $Suites 'bootstrap/install.ps1') }
+catch { if ($_.Exception.Message -ne 'mock one-liner') { throw } }
+if ($capture.Base -ceq 'https://10.211.55.2:8766/releases/latest/download/') { exit 0 }
+"unexpected bootstrap base: $($capture.Base)"
+exit 1
+PS
+  pwsh -NoProfile -NonInteractive -File "$T/published.ps1" "$here/tests/win/suites" > "$T/published.out" 2>&1; rc=$?
+  ok '[ $rc = 0 ]' "published bootstrap: the installer calls the one-liner at the published HTTPS base ($(tail -1 "$T/published.out"))"
+fi
 
 echo "vm-run.sh: $pass passed, $fail failed"
 [ "$fail" = 0 ]

@@ -1,17 +1,13 @@
-# T17: the shipped worker and bridge (release.md section 8's worker row: install through the
-# shipped worker, rekordbox starting with the shipped bridge, a cache hit on each newly listed
-# rekordbox version). From "rekordbox 7.2.19 logged in", arm64 (release.list's row):
+# T17: VM diagnostics for the shipped worker and bridge. From "rekordbox 7.2.19 installed", arm64:
 #   tests/win/vm-run.sh stage
-#   tests/win/vm-run.sh run "rekordbox 7.2.19 logged in" worker
+#   tests/win/vm-run.sh run "rekordbox 7.2.19 installed" worker
 # The share holds the TEST build in dist-test/ (bootstrap.ps1, payload.json, its .sig, the Windows
 # zip and the bridge DLL its payload names: scripts/build.sh --test http://10.211.55.2:8766/ ...,
 # copied in); its windows.compatible.rekordbox must list 7.2.19, or Install Stems Cache stays off.
 # prep sets UAC to elevate an administrator without a prompt in this reverted VM (nothing answers
 # the secure desktop in a run): the worker still starts as an elevation, its prompt is by hand.
-# cache-hit SKIPs until a step can load a track in rekordbox (its own notes), so this suite's
-# record isn't a pass yet and the worker row still fails closed (release.md section 8).
-# OPEN OWNER QUESTION, not decided here: can a recorded by-hand W13a round (by-hand.md) stand in
-# for this suite's record? Until the owner answers, nothing here or in check treats one as a pass.
+# cache-hit SKIPs in the VM (see its notes). For the release.list worker row, the release
+# check requires RB-KIT's real-PC record (release.md section 8).
 include lib/vmlib.ps1
 include worker/rblib.ps1
 need http

@@ -209,6 +209,7 @@ af("aflong.m4a", slong, ["-f", "m4af", "-d", "alac"])
 
 # ---- AAC (the probe's classification only)
 ff("ffaac.m4a", [s16], ["-c:a", "aac", "-b:a", "192k"], "aac")
+ff("ff-hop-boundary.m4a", [src("aac-hop-boundary", 10.9, 44100, 2, 16, 12)], ["-c:a", "aac", "-b:a", "128k"], "aac")
 ff("ffaac-mono48.m4a", [path("s24.wav")], ["-ac", "1", "-c:a", "aac"], "aac")
 ff("ffaac-fast.mp4", [s16], ["-c:a", "aac", "-movflags", "+faststart"], "aac")
 ff("ffaac51.m4a", [s51], ["-c:a", "aac"], "aac")

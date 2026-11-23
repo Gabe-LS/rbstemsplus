@@ -1,0 +1,10 @@
+# ps51-check.ps1 on ps51-selftest/: each line starts one line of its output (the C# 6 block at line 8
+# fails on 5.1's C# 5 compiler); nothing else may fail
+PARSE bad-parse.ps1:2:
+STATIC bad-api.ps1:3 [Windows.Point]::new(0 arguments)
+STATIC bad-api.ps1:4 [Windows.Automation.AutomationElement]::Compare
+STATIC bad-api.ps1:5 [Math]::Max(1 arguments)
+STATIC bad-api.ps1:6 [No.Such.Type]::Thing type not found
+STATIC bad-api.ps1:7 [string]::Length on System.String: is an instance member
+ADDTYPE bad-api.ps1:8 TypeDefinition failed
+ps51-check: FAIL (7)

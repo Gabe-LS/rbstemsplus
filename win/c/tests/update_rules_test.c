@@ -143,6 +143,12 @@ static void pure(void) {
     CHECK(update_image_kind("rbsp-watch-x64.exe") == UPDATE_IMAGE_WATCHER && update_image_kind("RBSP-WATCH-arm64.exe") == UPDATE_IMAGE_WATCHER
               && update_image_kind("rbsp-watch") == UPDATE_IMAGE_WATCHER,
           "a watcher's name, any case (watcher_in's prefix)");
+    /* review K2F3: a ShortPath launch shortens the exe name too */
+    CHECK(update_image_kind("RBSP-W~1.EXE") == UPDATE_IMAGE_WATCHER && update_image_kind("rbsp-w~2.exe") == UPDATE_IMAGE_WATCHER
+              && update_image_kind("RBSTEM~1.EXE") == UPDATE_IMAGE_APP,
+          "our exe names' 8.3 forms, any case");
+    CHECK(update_image_kind("RBSP-W~") == UPDATE_IMAGE_OTHER && update_image_kind("RBSTE~1.EXE") == UPDATE_IMAGE_OTHER,
+          "a bare 8.3 stem or another stem: another program's");
     CHECK(update_image_kind("csrss.exe") == UPDATE_IMAGE_OTHER && update_image_kind("RB Stems Plus.exe.old") == UPDATE_IMAGE_OTHER
               && update_image_kind("RB Stems Plus") == UPDATE_IMAGE_OTHER && update_image_kind("rbsp-watc") == UPDATE_IMAGE_OTHER
               && update_image_kind("") == UPDATE_IMAGE_OTHER && update_image_kind(NULL) == UPDATE_IMAGE_OTHER
@@ -155,6 +161,46 @@ static void pure(void) {
     CHECK(!update_open_skips(0) && !update_open_skips(6) && !update_open_skips(8) && !update_open_skips(299) && !update_open_skips(1450)
               && !update_open_skips(0x80000005ul),
           "another error (none, ERROR_INVALID_HANDLE, NOT_ENOUGH_MEMORY, PARTIAL_COPY, NO_SYSTEM_RESOURCES, 5 in a high word): not skipped");
+    /* review K2: one of this account's in another logon session (session 0's password-logon task)
+     * is refused with ERROR_ACCESS_DENIED, as another account's is. Skipped by the error alone,
+     * running_under missed it and the uninstall deleted the app; its path from the system's list
+     * now decides */
+    {
+        const int W = UPDATE_IMAGE_WATCHER, A = UPDATE_IMAGE_APP, O = UPDATE_IMAGE_OTHER;
+        CHECK(update_listed_verdict(0, 5, 1, 1, W, 0) == UPDATE_LISTED_FOUND && update_listed_verdict(0, 5, 1, 1, W, 1) == UPDATE_LISTED_FOUND,
+              "K2: refused (5), its path in the apps folder: found, for running_under and stop_watchers");
+        CHECK(update_listed_verdict(0, 5, 1, 1, O, 0) == UPDATE_LISTED_FOUND, "refused, any name, its path in the folder: found");
+        CHECK(update_listed_verdict(0, 5, 1, 0, W, 0) == UPDATE_LISTED_SKIP && update_listed_verdict(0, 5, 1, 0, A, 0) == UPDATE_LISTED_SKIP,
+              "GH1: refused (5), our name, its path elsewhere (another account's own copy): never counts");
+        CHECK(update_listed_verdict(0, 5, -1, 0, A, 0) == UPDATE_LISTED_UNKNOWN && update_listed_verdict(0, 5, -1, 0, W, 1) == UPDATE_LISTED_UNKNOWN,
+              "refused (5), its path unreadable, our name: unknown (the files kept)");
+        CHECK(update_listed_verdict(0, 5, -1, 0, O, 0) == UPDATE_LISTED_SKIP && update_listed_verdict(0, 5, -1, 0, A, 1) == UPDATE_LISTED_SKIP,
+              "refused, its path unreadable, not our name (an app's name for stop_watchers): skipped");
+        CHECK(update_listed_verdict(0, 5, 0, 0, A, 0) == UPDATE_LISTED_SKIP && update_listed_verdict(0, 87, -1, 1, A, 0) == UPDATE_LISTED_SKIP
+                  && update_listed_verdict(0, 87, 1, 1, A, 0) == UPDATE_LISTED_SKIP,
+              "gone (its path 0, or ERROR_INVALID_PARAMETER): skipped");
+        CHECK(update_listed_verdict(0, 8, 1, 0, A, 0) == UPDATE_LISTED_UNKNOWN && update_listed_verdict(0, 8, 1, 1, O, 0) == UPDATE_LISTED_FOUND
+                  && update_listed_verdict(0, 8, 1, 0, O, 0) == UPDATE_LISTED_SKIP,
+              "another error: in the folder found, else unknown by our name (as before)");
+        CHECK(update_listed_verdict(1, 0, 1, 1, O, 0) == UPDATE_LISTED_FOUND && update_listed_verdict(1, 0, 1, 0, A, 0) == UPDATE_LISTED_SKIP,
+              "opened: by its path");
+        CHECK(update_listed_verdict(1, 0, -1, 0, A, 0) == UPDATE_LISTED_UNKNOWN && update_listed_verdict(1, 0, 0, 0, A, 0) == UPDATE_LISTED_UNKNOWN
+                  && update_listed_verdict(1, 0, -1, 0, O, 0) == UPDATE_LISTED_SKIP,
+              "opened, its path unreadable: unknown by our name");
+        /* review K2's undefined1, undefined2: when a mismatch proves the image is elsewhere */
+        CHECK(update_nt_path(1, 1, 1, 0) == 1 && update_nt_path(1, 1, 0, 0) == 1 && update_nt_path(1, 1, 0, -1) == 1,
+              "a match: the folder's, with or without the canonical form");
+        CHECK(update_nt_path(1, 0, 1, 0) == 0, "a mismatch against the canonical form, no 8.3 component: elsewhere (GH1)");
+        CHECK(update_nt_path(1, 0, 0, 0) == -1 && update_nt_path(1, 0, 0, 1) == -1,
+              "no canonical form (the folder's final path couldn't be had): a mismatch proves nothing");
+        CHECK(update_nt_path(1, 0, 1, -1) == -1, "an 8.3 component that couldn't be resolved: a mismatch proves nothing");
+        CHECK(update_nt_path(1, 1, 1, 1) == 1, "an 8.3 component resolved, its final path the folder's: a match");
+        CHECK(update_nt_path(1, 0, 1, 1) == 0, "an 8.3 component resolved, its final path elsewhere: elsewhere (GH1)");
+        CHECK(update_nt_path(0, 0, 1, 0) == -1 && update_nt_path(0, 1, 1, 0) == -1, "not read: can't be told");
+        CHECK(update_listed_verdict(0, 5, update_nt_path(1, 0, 0, 0), 0, W, 1) == UPDATE_LISTED_UNKNOWN
+                  && update_listed_verdict(0, 5, update_nt_path(1, 0, 1, -1), 0, A, 0) == UPDATE_LISTED_UNKNOWN,
+              "refused (5), a mismatch that proves nothing, our name: unknown (the files kept)");
+    }
     CHECK(update_scan_result(0, 0, 1) == 0, "nothing found, nothing unknown, the list read to its end: 0");
     CHECK(update_scan_result(1, 0, 1) == 1 && update_scan_result(1, 1, 0) == 1, "one found: 1");
     CHECK(update_scan_result(0, 1, 1) == -1, "one of ours couldn't be inspected: -1");

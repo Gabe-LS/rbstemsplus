@@ -9,16 +9,21 @@
 # scripts/bundle-compare.sh and scripts/mac-inputs.py are copied in. release.sh runs in a
 # pseudo-terminal, so it has the Terminal it asks for, and answers "yes" at its prompt.
 #
+# The gate archive is GATES_ARCHIVE=$t/ga, sealed (tests/perf/archive.sh), with a throwaway test key
+# pair in tag-v0.1.0/test-keys/ (tkey) that signs the fake TEST builds' payload.json, so release.sh
+# archives each release's TEST build there (step 10). The real tests/perf/archive.sh, record.py
+# and archive-release.sh are copied in.
+#
 # Sourced with rel set (the release.sh to test) and root (this checkout). Leaves: t (the scratch
 # folder, removed on exit unless KEEP=1), dev (the sandbox checkout), key (the throwaway key),
-# FAKE_GH (the fake's folder), and the helpers below.
+# FAKE_GH (the fake's folder), tkey (the test key pair's folder), and the helpers below.
 
 t="$(mktemp -d "${TMPDIR:-/tmp}/rbsp-release-test.XXXXXX")"
 t="$(cd "$t" && pwd -P)"
 trap 'if [ "${KEEP:-0}" = 1 ]; then echo "kept $t"; else rm -rf "${t:?}"; fi' EXIT
 export HOME="$t/home" GIT_CONFIG_NOSYSTEM=1 FAKE_GH="$t/gh"
 mkdir -p "$HOME" "$FAKE_GH/releases" "$t/bin"
-pass=0; fail=0
+pass=0; fail=0; rs_rc=0; rs_name=""; rs_tag=""
 ok() { pass=$((pass + 1)); }
 bad() { fail=$((fail + 1)); echo "FAIL: $*"; }
 
@@ -39,7 +44,9 @@ while [ $# -gt 0 ]; do
     --json) json="$2"; shift 2 ;;
     -q) q="$2"; shift 2 ;;
     --pattern) pats+=("$2"); shift 2 ;;
-    --title|--notes|--notes-file) shift 2 ;;
+    --notes) printf '%s\n' "$2" > "$s/notes"; shift 2 ;;
+    --notes-file) cp "$2" "$s/notes"; shift 2 ;;
+    --title) shift 2 ;;
     --draft|--verify-tag) shift ;;
     -*) echo "fake gh: unknown option $1" >&2; exit 1 ;;
     *) if [ -z "$tag" ]; then tag="$1"; else files+=("$1"); fi; shift ;;
@@ -94,12 +101,27 @@ mkdir -p "$dev/keys" "$dev/scripts" "$dev/docs" "$dev/app/Sources" "$dev/bridge"
 /usr/bin/openssl ec -in "$key" -pubout -out "$dev/keys/release.pub.pem" 2> /dev/null
 /usr/bin/openssl ecparam -name prime256v1 -genkey -noout | /usr/bin/openssl ec -pubout -out "$dev/keys/backup.pub.pem" 2> /dev/null
 cp "$rel" "$dev/scripts/release.sh" && chmod 755 "$dev/scripts/release.sh"
+# The real privacy gate has its own offline export test.
+printf 'pass\n' > "$dev/scripts/public-scan.py"
+: > "$dev/.publicallow"
 cp "$root/scripts/unwrap-notes.py" "$root/scripts/bundle-compare.sh" "$root/scripts/mac-inputs.py" "$dev/scripts/"
 # the real G3 check (release.sh runs tests/mac/g3.sh check before it builds)
 mkdir -p "$dev/tests/mac" && cp "$root/tests/mac/g3.sh" "$dev/tests/mac/" && chmod 755 "$dev/tests/mac/g3.sh"
+# the real performance gate and gate archive (step 4b's records, step 10's archiving; T27)
+mkdir -p "$dev/tests/perf" && cp "$root/tests/perf/archive.sh" "$root/tests/perf/record.py" "$root/tests/perf/archive-release.sh" "$dev/tests/perf/" \
+  && chmod 755 "$dev/tests/perf/record.py" "$dev/tests/perf/archive-release.sh"
+export GATES_ARCHIVE="$t/ga"
+tkey="$GATES_ARCHIVE/tag-v0.1.0/test-keys"
+mkdir -p "$tkey" "$GATES_ARCHIVE/mac-A"
+/usr/bin/openssl ecparam -name prime256v1 -genkey -noout -out "$tkey/test-key.pem" 2> /dev/null
+/usr/bin/openssl ec -in "$tkey/test-key.pem" -pubout -out "$tkey/test.pub.pem" 2> /dev/null
+echo "a baseline" > "$GATES_ARCHIVE/mac-A/toolchain.txt"
+# reseal: the gate archive's SHA256SUMS anew, after a test changed it
+reseal() { (A="$GATES_ARCHIVE"; . "$root/tests/perf/archive.sh" && seal); }
+reseal
 printf 'dist/\ndist-test/\nbuild/\n' > "$dev/.gitignore"
-printf 'docs/internal-notes.md\n' > "$dev/.publicignore"
-echo "kept here" > "$dev/docs/internal-notes.md"
+printf 'docs/hidden-notes.md\n' > "$dev/.publicignore"
+echo "kept here" > "$dev/docs/hidden-notes.md"
 echo "sandbox" > "$dev/README.md"
 echo "print(\"the app\")" > "$dev/app/Sources/main.swift"
 echo "int bridge;" > "$dev/bridge/rbstems_bridge.c"
@@ -144,10 +166,12 @@ BUILD
 # the fake build: dist/ in the plan's shape (release.sh passes --plan FILE [--carry DIR]),
 # payload.json naming the public commit and each Mac file's version and commit. FAKE_BOOTSTRAP_KEY:
 # a key (base64) bootstrap.sh trusts, as a test build's does; FAKE_APP_EXES=0|2: the app zip with
-# its executable left out, or with a second one (another .app at the same depth)
+# its executable left out, or with a second one (another .app at the same depth); FAKE_BUILD_HOOK:
+# a command run first (a test changing a gate's file during the build)
 cat > "$dev/scripts/build.sh" <<'BUILD'
 #!/bin/bash
 set -euo pipefail
+[ -z "${FAKE_BUILD_HOOK:-}" ] || eval "$FAKE_BUILD_HOOK"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 v="$(tr -d '[:space:]' < "$root/VERSION")"
 c="$(git -C "$root" rev-parse HEAD)"
@@ -216,29 +240,78 @@ PY
 # rs NAME ARGS...: release.sh in the sandbox checkout, in a pseudo-terminal, "yes" typed
 rs() {
   local name="$1"; shift
-  (cd "$dev" && python3 -I "$t/bin/pty-run.py" "$t/$name.out" scripts/release.sh "$@" < /dev/null > /dev/null 2>&1)
+  rs_name="$name"; rs_tag="${1:-}"; rs_rc=0
+  (cd "$dev" && python3 -I "$t/bin/pty-run.py" "$t/$name.out" scripts/release.sh "$@" < /dev/null > /dev/null 2>&1) || rs_rc=$?
   tr -d '\r' < "$t/$name.out" > "$t/$name.log"
+  return "$rs_rc"
 }
-# g3_record [KIND]: a G3 record of HEAD (build/gates/<HEAD>/g3-mac.ok), as tests/mac/g3.sh run
+# Git state and file inventory, measured without refreshing the public index.
+public_state() (
+  cd "$t/public" || exit 1
+  git --no-optional-locks status --porcelain --ignored && git symbolic-ref HEAD && git show-ref --head \
+    && git reflog --all --format=%H && git count-objects -v || exit 1
+  for f in .git/index .git/FETCH_HEAD; do
+    [ ! -f "$f" ] || shasum -a 256 "$f" || exit 1
+  done
+  find . -type f -print | LC_ALL=C sort
+)
+public_unchanged() {
+  public_state > "$t/public.after" && cmp -s "$t/public.before" "$t/public.after" \
+    && ok || bad "$1: the refused run wrote to the public clone"
+}
+# g3_record [KIND] [JSON]: a G3 record of HEAD (build/gates/<HEAD>/g3-mac.ok), as tests/mac/g3.sh run
 # writes a passing one for HEAD's plan and a fake TEST payload (dist-test/payload.json), with every
 # required scenario (g3.sh _t required); KIND: pass (default), partial (a --from leaving out
-# v1.0.0), stub (a selftest's), failed (g3-mac.failed only), stale (the TEST payload changed since)
+# v1.0.0), stub (a selftest's), failed (g3-mac.failed only), stale (the TEST payload changed since).
+# JSON adds fields to the fake TEST payload (test_build_files).
 g3_record() {
   local c r
   c="$(g -C "$dev" rev-parse HEAD)"; r="$dev/build/gates/$c/g3-mac.ok"
-  mkdir -p "$dev/dist-test" "${r%/*}"; echo "{\"commit\": \"$c\"}" > "$dev/dist-test/payload.json"
+  mkdir -p "${r%/*}"; test_build_files "${2:-}"
   rm -f "$r" "${r%.ok}.failed"
   { echo "g3 1"; echo "commit $c"; echo "payload_sha256 $(shasum -a 256 "$dev/dist-test/payload.json" | cut -c1-64)"
     echo "plan_sha256 $(shasum -a 256 "${r%/*}/plan" | cut -c1-64)"; echo "guests rb26-template"; echo "guest_versions rb26-template=26.6.2"
-    (cd "$dev" && GATES_ARCHIVE="$t/no-archive" tests/mac/g3.sh _t required "$c" "rb26-template") \
+    (cd "$dev" && tests/mac/g3.sh _t required "$c" "rb26-template") \
       | while read -r gg nn; do echo "scenario $gg $nn pass 1min clicks=none"; done
     echo "coverage ok"; echo "result pass"; } > "$r"
+  test_signed; perf_records
   case "${1:-pass}" in
     partial) sed -i '' -e '/^scenario rb26-template update-v1.0.0 /d' -e 's/^coverage ok$/coverage partial (--from omits v1.0.0)/' -e 's/^result pass$/result FAIL (0 scenarios failed; coverage partial (--from omits v1.0.0))/' "$r" ;;
     stub) echo "stub (selftest)" >> "$r" ;;
     failed) sed -i '' 's/^result pass$/result FAIL (1 scenarios failed)/' "$r"; mv "$r" "${r%.ok}.failed" ;;
     stale) echo '{"changed": 1}' > "$dev/dist-test/payload.json" ;;
   esac
+}
+# test_build_files [JSON]: dist-test/ as a fake TEST build: the Mac files (fakes when there are
+# none), payload.json for HEAD naming the app zip's and the bridge's SHA-256 (JSON: more of its
+# keys, a windows block), and SHA256SUMS over them and the Windows files there are, as
+# scripts/build.sh writes it (step 10 checks the archived files against both)
+test_build_files() {
+  local d="$dev/dist-test" f w=()
+  mkdir -p "$d"
+  for f in rbstemsplus-app.zip libonnxruntime.1.18.0.dylib bootstrap.sh; do [ -f "$d/$f" ] || echo "test $f" > "$d/$f"; done
+  printf '{"commit": "%s", "app": {"sha256": "%s"}, "bridge": {"sha256": "%s"}%s}\n' "$(g -C "$dev" rev-parse HEAD)" \
+    "$(shasum -a 256 "$d/rbstemsplus-app.zip" | cut -c1-64)" "$(shasum -a 256 "$d/libonnxruntime.1.18.0.dylib" | cut -c1-64)" "${1:+, $1}" > "$d/payload.json"
+  for f in rbstemsplus-windows.zip rbstemsplus-bridge-win-x64.dll bootstrap.ps1 NOTICE-windows.txt; do [ ! -f "$d/$f" ] || w+=("$f"); done
+  (cd "$d" && shasum -a 256 rbstemsplus-app.zip libonnxruntime.1.18.0.dylib bootstrap.sh ${w[@]+"${w[@]}"} payload.json > SHA256SUMS)
+}
+# test_signed: dist-test/ as the gate archive takes a TEST build (step 10): the Mac files (fakes,
+# when the TEST build made none) and payload.json signed with the archived test key
+test_signed() {
+  local d="$dev/dist-test" f
+  for f in rbstemsplus-app.zip libonnxruntime.1.18.0.dylib bootstrap.sh; do [ -f "$d/$f" ] || echo "test $f" > "$d/$f"; done
+  /usr/bin/openssl dgst -sha256 -sign "$tkey/test-key.pem" -out "$d/payload.json.sig" "$d/payload.json"
+}
+# perf_records [win]: passing performance records of HEAD for dist-test/payload.json, as
+# tests/perf/record.py write makes them (build/gates/<HEAD>/perf-mac.tsv; perf-win.tsv with win)
+perf_records() {
+  local c p
+  c="$(g -C "$dev" rev-parse HEAD)"
+  printf '# compare: pass\nmetric\tA\tB\tchange\tallowed\tverdict\tnA\tnB\nP1\t100.000\t101.000\t+1.000\t20.000\tpass\t8\t8\n' > "$t/compare-pass.tsv"
+  for p in mac ${1:-}; do
+    python3 -I "$dev/tests/perf/record.py" write "$p" "$c" "$dev/dist-test/payload.json" "$dev/build/gates/$c/perf-$p.tsv" "$t/compare-pass.tsv" > /dev/null \
+      || bad "perf_records: record.py write $p failed"
+  done
 }
 # rsp NAME ARGS...: the plan (NAME-plan, with --plan), a passing G3 record, then the real run (NAME)
 rsp() {
@@ -253,7 +326,9 @@ g3_refusals() {
   local name="$1" k; shift
   rs "$name-plan" "$@" --plan
   rm -rf "$dev/build/gates/$(g -C "$dev" rev-parse HEAD)/g3-mac."*
+  public_state > "$t/public.before"
   rs "$name-nog3" "$@"; refused "$name-nog3" "no passing G3 tart run for"
+  public_unchanged "$name-nog3"
   grep -q "no G3 record" "$t/$name-nog3.log" && ok || bad "$name-nog3: g3.sh check's reason not shown"
   for k in stale partial stub failed; do
     g3_record "$k"; rs "$name-g3$k" "$@"; refused "$name-g3$k" "no passing G3 tart run for"
@@ -267,9 +342,10 @@ released() {
   if grep -q "Draft $2 is on Gabe-LS/rbstemsplus" "$t/$1.log" && [ -f "$FAKE_GH/releases/$2/payload.json.sig" ]; then ok
   else bad "$1: no draft $2"; tail -5 "$t/$1.log" | sed 's/^/    /'; fi
 }
-# refused NAME TEXT: the run stopped with a message holding TEXT, and made no draft
+# refused NAME TEXT: the last rs failed with a message holding TEXT, and made no draft
 refused() {
-  if grep -q "release.sh: .*$2" "$t/$1.log" && ! grep -q "is on Gabe-LS/rbstemsplus" "$t/$1.log"; then ok
+  if [ "$rs_name" = "$1" ] && [ "$rs_rc" != 0 ] && [ ! -e "$FAKE_GH/releases/$rs_tag" ] \
+    && grep -q "release.sh: .*$2" "$t/$1.log"; then ok
   else bad "$1: not refused with '$2'"; tail -5 "$t/$1.log" | sed 's/^/    /'; fi
 }
 # planned NAME LINE: the plan run NAME wrote its plan, with LINE (a regular expression) in it

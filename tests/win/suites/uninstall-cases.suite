@@ -1,7 +1,6 @@
 # T17/T11: the complete uninstall's VM cases that need no click but the app's own dialogs (app.md
-# 5.9's VM cases, by-hand.md's W13a list; moved here from there), in three install-and-uninstall
-# rounds. From "clean Windows":
-#   tests/win/vm-run.sh stage
+# 5.9's VM cases, by-hand.md's W13a list; moved here from there). From "clean Windows":
+#   tests/win/vm-run.sh stage --build
 #   tests/win/vm-run.sh run "clean Windows" uninstall-cases
 # Round 1: from the app's menu after a quiet start; a junction inside the apps folder; a planted
 #   %TEMP%\ping.cmd; EnableExtensions=0 in HKCU; a %TEMP% holding ! % ^.
@@ -12,14 +11,21 @@
 #   reverts the VM).
 # Round 3: the stub and DLL copied elsewhere and started with --after-exit (refused); a junction at
 #   Microsoft\CLR_v4.0 (left).
-# Without Stems Cache (that one needs rekordbox and UAC). What stays by hand (the logon after the
-# RunOnce value, an app that never quits, DebugView, a UNC TMP) is in by-hand.md. Needs a TEST build
-# as uninstall.suite does; not a release.list row.
+# Round 4 (K2): a watcher of the same account in another session (session 0, a scheduled task with
+#   a password logon: the account gets a random one), then the uninstall from Settings (--uninstall): AX_LEFT, the files,
+#   the Apps & features entry and the shortcut kept, the log (the debug output) naming the apps
+#   folder the watcher runs from, the RunOnce value written before the kept dialog, which shows;
+#   then that watcher ended and the uninstall run again: everything gone.
+# Round 6: an app held past the parent wait, followed by a real uninstall with its temp copy
+#   held and PING running in that folder. DBWIN records the refusal and the successful cleanup.
+# Without Stems Cache. Stage --build supplies rbui for round 6's app dialogs.
 include lib/vmlib.ps1
 include uninstall/cases/unlib.ps1
 need http
+need vm
 need file repo/core/texts.def
 need file dist-test/bootstrap.ps1
+need file vm/uia/rbui/rbui.exe
 # MODE       SECS NAME                 SCRIPT
 user         600  install              bootstrap/install.ps1
 user         120  plant                uninstall/cases/plant.ps1
@@ -31,3 +37,17 @@ sys          60   unblock-cmd          uninstall/cases/unblock-cmd.ps1
 user         600  install-3            bootstrap/install.ps1
 user         180  copies-refused       uninstall/cases/copies.ps1
 user         600  clr-junction         uninstall/cases/clr-junction.ps1
+user         600  install-4            bootstrap/install.ps1
+sys          120  k2-watcher           uninstall/cases/k2-watcher.ps1
+user         600  k2-uninstall         uninstall/cases/k2.ps1
+sys          60   k2-stop              uninstall/cases/k2-stop.ps1
+user         600  k2-again             uninstall/cases/k2-again.ps1
+# Round 5, k2-short (K2F1): the session-0 watcher started by its 8.3 short path
+user         600  install-5            bootstrap/install.ps1
+sys          120  k2-watcher-short     uninstall/cases/k2-watcher-short.ps1
+user         600  k2-short-uninstall   uninstall/cases/k2.ps1
+sys          60   k2-short-stop        uninstall/cases/k2-stop.ps1
+user         600  k2-short-again       uninstall/cases/k2-again.ps1
+user         600  install-6            bootstrap/install.ps1
+user         300  never-quits          uninstall/cases/never-quits.ps1
+user         300  held-copy            uninstall/cases/held-copy.ps1

@@ -5,12 +5,15 @@
 
 #include "../admin_proto.h"
 #include "../native_config.h"
+#include "../native_facts.h"
 #include "../models.h"
 #include "../native_steps.h"
+#include "../native_location.h"
 
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdatomic.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -129,7 +132,8 @@ static int f_blocked(void *ctx) {
 }
 static char removed[1024];
 static int rm_rc;
-static const char *rm_swap_loc;      /* at the first delete: this folder moved away, an empty one made at its name (review MQ3) */
+static const char *rm_swap_loc;      /* at the first delete: move this folder away and replace it (review MQ3) */
+static const char *rm_swap_file;     /* optional file in the replacement */
 static const char *rm_fail_prefix;   /* names starting so fail with EBUSY (NULL: none) */
 static int rm_calls;
 /* plat_remove_tree_at on the Mac, for the fake: name in dfd and everything under it, never
@@ -159,6 +163,12 @@ static int f_rm(void *ctx, plat_dir d, const char *name) {
         char mv[1400];
         snprintf(mv, sizeof mv, "%s-moved", rm_swap_loc);
         if (rename(rm_swap_loc, mv) || mkdir(rm_swap_loc, 0755)) abort();
+        if (rm_swap_file) {
+            char file[1400];
+            snprintf(file, sizeof file, "%s/%s", rm_swap_loc, rm_swap_file);
+            int fd = open(file, O_WRONLY | O_CREAT | O_EXCL, 0644);
+            if (fd < 0 || close(fd)) abort();
+        }
         rm_swap_loc = NULL;
     }
     if (rm_fail_prefix && !strncmp(name, rm_fail_prefix, strlen(rm_fail_prefix))) return EBUSY;
@@ -169,6 +179,9 @@ static int f_rm(void *ctx, plat_dir d, const char *name) {
  * must be a folder (not followed), the one expected, and empty */
 static void (*race_do)(int dfd, const char *name);
 static void race_empty(int dfd, const char *name);
+static void race_support(int dfd, const char *name) {
+    if (!strcmp(name, "rbstemsplus")) race_empty(dfd, name);
+}
 static int f_rmdir(void *ctx, plat_dir d, const char *name, plat_id expect) {
     (void)ctx;
     if (race_do) race_do(d.fd, name);
@@ -312,20 +325,21 @@ static int f_fault(int op, const char *name) {
     return fault_rc;
 }
 
-/* a support folder at scratch/name: originals (named so) with a model, installed, payload/1.5.2,
- * Cache with a stem */
+#define SAVED_MODEL "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.onnx"
+
+/* a support folder at scratch/name with a saved model, installed and a payload */
+
 static void own_tree(char *sup, size_t n, const char *scratch, const char *name, const char *originals) {
     char p[1300];
     mkp(sup, n, scratch, name);
     mkp(p, sizeof p, sup, originals);
-    snprintf(p, sizeof p, "%s/%s/abc.onnx", sup, originals);
+    snprintf(p, sizeof p, "%s/%s/" SAVED_MODEL, sup, originals);
     spit_n(p, 3);
     snprintf(p, sizeof p, "%s/installed", sup);
     spit_n(p, 3);
     mkp(p, sizeof p, sup, "payload");
     mkp(p, sizeof p, sup, "payload/1.5.2");
-    mkp(p, sizeof p, sup, "Cache");
-    snprintf(p, sizeof p, "%s/Cache/stem", sup);
+    snprintf(p, sizeof p, "%s/payload/1.5.2/payload.json", sup);
     spit_n(p, 3);
 }
 
@@ -342,45 +356,41 @@ static int there(const char *sup, const char *name) {
  * (S54), roots must be folders (S59), other links unlinked as themselves (S60), failed deletes
  * (S61) */
 static void test_remove_own(const char *scratch, const native_steps_env *base) {
-    char sup[1100], cache[1100], logs[1100], p[1200], q[1300], outside[1100];
+    char sup[1100], p[1200], q[1300], outside[1100];
     struct stat st;
     native_steps_env e = *base;
     e.support = sup;
-    const char *others[2] = {cache, logs};
     rm_rc = 0;
     rm_fail_prefix = NULL;
     native_steps_test_fault = f_fault;
     mkp(outside, sizeof outside, scratch, "own-outside");
     snprintf(p, sizeof p, "%s/keep-me", outside);
     spit_n(p, 1);
-    /* support's files and folders, its originals; a cache with a file; no logs folder */
+    /* Support’s app artifacts and saved originals. */
     own_tree(sup, sizeof sup, scratch, "own-support", "originals");
-    mkp(cache, sizeof cache, scratch, "own-cache");
-    snprintf(p, sizeof p, "%s/stem", cache);
-    spit_n(p, 3);
-    snprintf(logs, sizeof logs, "%s/own-logs", scratch);
-    CHECK(native_remove_own_folders(&e, sup, 1, others, 2) == 0, "keep the originals: all went");
-    CHECK(there(sup, "originals/abc.onnx") && stat(cache, &st), "the originals kept, the cache gone");
+    CHECK(native_remove_own_folders(&e, sup, 1) == 0, "keep the originals: all went");
+    CHECK(there(sup, "originals/" SAVED_MODEL), "the originals were kept");
     CHECK(!there(sup, "installed") && !there(sup, "payload") && !there(sup, "Cache"), "support's other entries gone");
-    /* an ordinary link among support's entries: unlinked as itself, what it points to untouched */
+    /* An unknown link and its target stay. */
     snprintf(p, sizeof p, "%s/linked", sup);
     CHECK(!symlink(outside, p), "a link in support");
     F.logged[0] = 0;
-    CHECK(native_remove_own_folders(&e, sup, 1, NULL, 0) == 0 && !there(sup, "linked") && !F.logged[0], "a link in support: unlinked, all went");
+    CHECK(native_remove_own_folders(&e, sup, 1) == 1 && there(sup, "linked"), "an unknown link in support is kept");
+    if (unlink(p)) abort();
     snprintf(p, sizeof p, "%s/keep-me", outside);
     CHECK(!stat(p, &st), "what it points to untouched");
     /* without keeping: support goes whole */
-    CHECK(native_remove_own_folders(&e, sup, 0, others, 2) == 0 && stat(sup, &st), "support gone whole");
-    CHECK(native_remove_own_folders(&e, sup, 1, others, 2) == 0, "nothing there: all went");
+    CHECK(native_remove_own_folders(&e, sup, 0) == 0 && stat(sup, &st), "support gone whole");
+    CHECK(native_remove_own_folders(&e, sup, 1) == 0, "nothing there: all went");
 
     /* a mixed-case Originals (a volume that ignores case finds it as "originals"): kept, by id */
     own_tree(sup, sizeof sup, scratch, "own-case", "Originals");
     snprintf(p, sizeof p, "%s/oRIGINALS", sup);
-    if (!stat(p, &st)) {
-        CHECK(native_remove_own_folders(&e, sup, 1, NULL, 0) == 0 && there(sup, "Originals/abc.onnx") && !there(sup, "installed"),
+    {
+        CHECK(native_remove_own_folders(&e, sup, 1) == 0 && there(sup, "Originals/" SAVED_MODEL) && !there(sup, "installed"),
               "a mixed-case Originals: kept, the rest gone");
     }
-    CHECK(native_remove_own_folders(&e, sup, 0, NULL, 0) == 0 && stat(sup, &st), "without keeping: all gone");
+    CHECK(native_remove_own_folders(&e, sup, 0) == 0 && stat(sup, &st), "without keeping: all gone");
 
     /* end to end (review VU3): MODELS_INFO's verified decides REMOVE_OWN_FOLDERS' keep; a saved
      * copy that can't be read is verified (unknown), so it stays. The DLL's own dispatch
@@ -394,79 +404,66 @@ static void test_remove_own(const char *scratch, const native_steps_env *base) {
     snprintf(rbdir, sizeof rbdir, "%s/rb-model", scratch);
     models mm = {.dir = rbdir, .originals = "", .support = sup};
     int verified = models_any_verified(&mm);
-    CHECK(verified == 1 && native_remove_own_folders(&e, sup, verified, NULL, 0) == 0 && !lstat(locked, &st) && !there(sup, "installed"),
+    CHECK(verified == 1 && native_remove_own_folders(&e, sup, verified) == 0 && !lstat(locked, &st) && !there(sup, "installed"),
           "e2e: a copy that can't be read: verified, REMOVE_OWN_FOLDERS keeps it, the rest gone");
     chmod(locked, 0644);
-    CHECK(native_remove_own_folders(&e, sup, 0, NULL, 0) == 0 && stat(sup, &st), "e2e: then without keeping: all gone");
+    CHECK(native_remove_own_folders(&e, sup, 0) == 0 && stat(sup, &st), "e2e: then without keeping: all gone");
 
     /* support that can't be listed (0300): 1, nothing deleted, the originals kept */
     own_tree(sup, sizeof sup, scratch, "own-locked", "originals");
     chmod(sup, 0300);
     removed[0] = 0;
     F.logged[0] = 0;
-    int r = native_remove_own_folders(&e, sup, 1, NULL, 0), r0 = native_remove_own_folders(&e, sup, 0, NULL, 0);
+    int r = native_remove_own_folders(&e, sup, 1), r0 = native_remove_own_folders(&e, sup, 0);
     chmod(sup, 0755);
     CHECK(r == 1 && r0 == 1 && !removed[0] && strstr(F.logged, "couldn't open"), "support unreadable: 1 either way, logged, nothing tried");
-    CHECK(there(sup, "originals/abc.onnx") && there(sup, "installed"), "the originals and the rest kept");
+    CHECK(there(sup, "originals/" SAVED_MODEL) && there(sup, "installed"), "the originals and the rest kept");
 
-    /* a one-shot EBUSY on support's open, then on the originals' stat, then on Cache's: 1, everything kept */
+    /* A one-shot EBUSY on opening support stops all cleanup. */
     fault_rc = EBUSY;
     const struct {
         int op, keep;
         const char *name;
-    } faults[] = {{NS_FAULT_OPEN, 1, sup}, {NS_FAULT_OPEN, 0, sup}, {NS_FAULT_STAT, 1, "originals"}, {NS_FAULT_STAT, 0, "Cache"}};
-    for (int i = 0; i < 4; i++) {
+    } faults[] = {{NS_FAULT_OPEN, 1, sup}, {NS_FAULT_OPEN, 0, sup}};
+    for (int i = 0; i < (int)(sizeof faults / sizeof faults[0]); i++) {
         fault_op = faults[i].op;
         fault_name = faults[i].name;
         removed[0] = 0;
-        CHECK(native_remove_own_folders(&e, sup, faults[i].keep, NULL, 0) == 1 && !fault_name && !removed[0], "EBUSY %d: 1, nothing tried", i);
-        CHECK(there(sup, "originals/abc.onnx") && there(sup, "installed") && there(sup, "Cache/stem"), "EBUSY %d: everything kept", i);
+        CHECK(native_remove_own_folders(&e, sup, faults[i].keep) == 1 && !fault_name && !removed[0], "EBUSY %d: 1, nothing tried", i);
+        CHECK(there(sup, "originals/" SAVED_MODEL) && there(sup, "installed") && there(sup, "payload/1.5.2/payload.json"), "EBUSY %d: everything kept", i);
     }
     /* an entry's own stat failing in the walk: 1, the rest still go, support stays */
     fault_op = NS_FAULT_STAT;
     fault_name = "installed";
-    CHECK(native_remove_own_folders(&e, sup, 0, NULL, 0) == 1 && there(sup, "installed") && !there(sup, "payload") && !there(sup, "originals"),
+    CHECK(native_remove_own_folders(&e, sup, 0) == 1 && there(sup, "installed") && !there(sup, "payload") && !there(sup, "originals"),
           "an entry that can't be looked at: 1, kept with support, the rest gone");
     fault_name = NULL;
-    /* a delete that fails (rm_rc): 1, every entry still tried, support stays */
-    own_tree(sup, sizeof sup, scratch, "own-busy", "originals");
-    rm_rc = EBUSY;
-    removed[0] = 0;
-    CHECK(native_remove_own_folders(&e, sup, 1, NULL, 0) == 1 && strstr(removed, "installed|") && strstr(removed, "payload|")
-              && !strstr(removed, "originals|") && !stat(sup, &st),
-          "deletes that fail: 1, each entry tried, support stays");
-    removed[0] = 0;
-    CHECK(native_remove_own_folders(&e, sup, 0, NULL, 0) == 1 && strstr(removed, "originals|") && !strstr(removed, "own-busy|") && !stat(sup, &st),
-          "without keeping too: support not tried");
-    rm_rc = 0;
-    CHECK(native_remove_own_folders(&e, sup, 0, NULL, 0) == 0 && stat(sup, &st), "then all of it goes");
-
     /* a link at Cache (and at Logs): left, 1, what it points to untouched, support stays */
     for (int keep = 0; keep < 2; keep++) {
         own_tree(sup, sizeof sup, scratch, "own-linked-cache", "originals");
         snprintf(p, sizeof p, "%s/Cache", sup);
-        CHECK(!rm_tree_at(AT_FDCWD, p) && !symlink(outside, p), "a linked Cache");
+        CHECK(!symlink(outside, p), "a linked Cache");
         snprintf(p, sizeof p, "%s/Logs", sup);
         CHECK(!symlink(outside, p), "a linked Logs");
         F.logged[0] = 0;
-        CHECK(native_remove_own_folders(&e, sup, keep, NULL, 0) == 1 && there(sup, "Cache") && there(sup, "Logs") && !there(sup, "installed")
+        CHECK(native_remove_own_folders(&e, sup, keep) == 1 && there(sup, "Cache") && there(sup, "Logs") && !there(sup, "installed")
                   && strstr(F.logged, "refused to delete"),
               "keep=%d: the links at Cache and Logs left, logged, 1, the rest gone", keep);
-        CHECK(!stat(sup, &st) && (keep ? there(sup, "originals/abc.onnx") : !there(sup, "originals")), "keep=%d: support stays", keep);
+        CHECK(!stat(sup, &st) && (keep ? there(sup, "originals/" SAVED_MODEL) : !there(sup, "originals")), "keep=%d: support stays", keep);
         snprintf(p, sizeof p, "%s/keep-me", outside);
         CHECK(!stat(p, &st), "keep=%d: what they point to untouched", keep);
         snprintf(p, sizeof p, "%s/Cache", sup);
         unlink(p);
         snprintf(p, sizeof p, "%s/Logs", sup);
         unlink(p);
-        CHECK(native_remove_own_folders(&e, sup, 0, NULL, 0) == 0 && stat(sup, &st), "keep=%d: then all of it goes", keep);
+        CHECK(native_remove_own_folders(&e, sup, 0) == 0 && stat(sup, &st), "keep=%d: then all of it goes", keep);
     }
 
     /* support a link: left, nothing deleted where it points */
     snprintf(sup, sizeof sup, "%s/own-linked-support", scratch);
     CHECK(!symlink(outside, sup), "a linked support folder");
     removed[0] = 0;
-    CHECK(native_remove_own_folders(&e, sup, 0, NULL, 0) == 1 && native_remove_own_folders(&e, sup, 1, NULL, 0) == 1 && !lstat(sup, &st)
+    CHECK(native_remove_own_folders(&e, sup, 0) == 1 && native_remove_own_folders(&e, sup, 1) == 1 && !lstat(sup, &st)
               && !removed[0],
           "support a link: left either way, not all went");
     snprintf(p, sizeof p, "%s/keep-me", outside);
@@ -476,17 +473,9 @@ static void test_remove_own(const char *scratch, const native_steps_env *base) {
     spit_n(sup, 2);
     F.logged[0] = 0;
     removed[0] = 0;
-    CHECK(native_remove_own_folders(&e, sup, 0, NULL, 0) == 1 && native_remove_own_folders(&e, sup, 1, NULL, 0) == 1 && !stat(sup, &st)
+    CHECK(native_remove_own_folders(&e, sup, 0) == 1 && native_remove_own_folders(&e, sup, 1) == 1 && !stat(sup, &st)
               && S_ISREG(st.st_mode) && !removed[0] && strstr(F.logged, "refused to delete"),
           "a file at support: refused, left, logged");
-    /* a file or a link where one of others is: refused, left, logged */
-    snprintf(cache, sizeof cache, "%s/own-file", scratch);
-    snprintf(logs, sizeof logs, "%s/own-linked-support", scratch);
-    snprintf(sup, sizeof sup, "%s/own-none", scratch);
-    F.logged[0] = 0;
-    CHECK(native_remove_own_folders(&e, sup, 0, others, 2) == 1 && !stat(cache, &st) && !lstat(logs, &st) && strstr(F.logged, "refused to delete"),
-          "others a file or a link: refused, left, logged");
-
     /* support not the expected one: the scratch parent, a sibling, none, empty: refused, logged,
      * nothing touched */
     char sib[1100];
@@ -498,23 +487,23 @@ static void test_remove_own(const char *scratch, const native_steps_env *base) {
             e.support = wrong[i];
             F.logged[0] = 0;
             removed[0] = 0;
-            CHECK(native_remove_own_folders(&e, sup, keep, NULL, 0) == 1 && !removed[0] && strstr(F.logged, "refused to delete"),
+            CHECK(native_remove_own_folders(&e, sup, keep) == 1 && !removed[0] && strstr(F.logged, "refused to delete"),
                   "support %s keep=%d: refused, logged, nothing tried", wrong[i] ? wrong[i] : "NULL", keep);
         }
     e.support = sup;
     for (int i = 0; i < 4; i++) {
         F.logged[0] = 0;
         removed[0] = 0;
-        CHECK(native_remove_own_folders(&e, wrong[i], 0, NULL, 0) == 1 && !removed[0] && strstr(F.logged, "refused to delete"),
+        CHECK(native_remove_own_folders(&e, wrong[i], 0) == 1 && !removed[0] && strstr(F.logged, "refused to delete"),
               "expected %s: refused, logged, nothing tried", wrong[i] ? wrong[i] : "NULL");
     }
-    CHECK(there(sup, "originals/abc.onnx") && there(sup, "installed") && there(sib, "installed") && !stat(scratch, &st), "nothing touched");
+    CHECK(there(sup, "originals/" SAVED_MODEL) && there(sup, "installed") && there(sib, "installed") && !stat(scratch, &st), "nothing touched");
     /* the case of the expected path's letters ignored */
     char upper[1100];
     snprintf(upper, sizeof upper, "%s", sup);
     for (char *c = strrchr(upper, '/'); c && *c; c++)
         if (*c >= 'a' && *c <= 'z') *c = (char)(*c - 32);
-    CHECK(native_remove_own_folders(&e, upper, 0, NULL, 0) == 0 && stat(sup, &st), "the expected path in another case: all gone");
+    CHECK(native_remove_own_folders(&e, upper, 0) == 0 && stat(sup, &st), "the expected path in another case: all gone");
 
     /* review SF2 and its follow-up: support under a linked parent (a junction at LocalAppData):
      * everything goes, support itself through the parent opened following the link, by id */
@@ -525,13 +514,13 @@ static void test_remove_own(const char *scratch, const native_steps_env *base) {
     own_tree(sup, sizeof sup, lparent, "rbstemsplus", "originals");
     F.logged[0] = 0;
     snprintf(p, sizeof p, "%s/rbstemsplus", real);
-    CHECK(native_remove_own_folders(&e, sup, 0, NULL, 0) == 0 && stat(p, &st) && !lstat(lparent, &st) && S_ISLNK(st.st_mode),
+    CHECK(native_remove_own_folders(&e, sup, 0) == 0 && stat(p, &st) && !lstat(lparent, &st) && S_ISLNK(st.st_mode),
           "support under a linked parent: 0, support gone, the link kept (%s)", F.logged);
     /* support swapped for another empty folder between its walk and its delete: that one stays, 1 */
     own_tree(sup, sizeof sup, lparent, "rbstemsplus", "originals");
-    race_do = race_empty;
+    race_do = race_support;
     F.logged[0] = 0;
-    int sr = native_remove_own_folders(&e, sup, 0, NULL, 0);
+    int sr = native_remove_own_folders(&e, sup, 0);
     race_do = NULL;
     CHECK(sr == 1 && !stat(p, &st) && S_ISDIR(st.st_mode) && strstr(F.logged, "couldn't remove"), "support swapped before its delete: 1, the other folder stays (%s)",
           F.logged);
@@ -544,30 +533,27 @@ static void test_remove_own(const char *scratch, const native_steps_env *base) {
     fault_op = NS_FAULT_OPEN;
     fault_rc = EACCES;
     F.logged[0] = 0;
-    sr = native_remove_own_folders(&e, sup, 0, NULL, 0);
+    sr = native_remove_own_folders(&e, sup, 0);
     CHECK(sr == 1 && !fault_name && !stat(p, &st) && strstr(F.logged, "couldn't open"), "the parent can't be opened: 1, support left empty, logged (%s)", F.logged);
     rmdir(p);
 
-    /* review SF3: in keep mode only a folder named originals stays: a link or a file there goes */
-    own_tree(sup, sizeof sup, scratch, "own-sf3a", "unused");
+    /* Originals must be a directory before its recognized files can be removed. */
+    mkp(sup, sizeof sup, scratch, "own-sf3");
     snprintf(p, sizeof p, "%s/originals", sup);
     CHECK(!symlink(outside, p), "originals a link");
-    CHECK(native_remove_own_folders(&e, sup, 1, NULL, 0) == 0 && stat(sup, &st), "originals a link: unlinked with the rest, all went");
-    snprintf(p, sizeof p, "%s/keep-me", outside);
-    CHECK(!stat(p, &st), "what it pointed to untouched");
-    own_tree(sup, sizeof sup, scratch, "own-sf3b", "unused");
-    snprintf(p, sizeof p, "%s/originals", sup);
+    CHECK(native_remove_own_folders(&e, sup, 1) == 1 && !lstat(p, &st), "originals a link: kept");
+    unlink(p);
     spit_n(p, 2);
-    CHECK(native_remove_own_folders(&e, sup, 1, NULL, 0) == 0 && stat(sup, &st), "originals a file: gone with the rest");
+    CHECK(native_remove_own_folders(&e, sup, 0) == 1 && !lstat(p, &st), "originals a file: kept");
 
     /* review SF4: what stays is decided by stat ids, never the listing's */
     own_tree(sup, sizeof sup, scratch, "own-sf4", "originals");
     snprintf(p, sizeof p, "%s/Cache", sup);
-    CHECK(!rm_tree_at(AT_FDCWD, p) && !symlink(outside, p), "a linked Cache");
+    CHECK(!symlink(outside, p), "a linked Cache");
     fault_op = NS_FAULT_LIST_ID;
     fault_name = "originals";
     fault_rc = 1;
-    CHECK(native_remove_own_folders(&e, sup, 1, NULL, 0) == 1 && !fault_name && there(sup, "originals/abc.onnx") && there(sup, "Cache"),
+    CHECK(native_remove_own_folders(&e, sup, 1) == 1 && !fault_name && there(sup, "originals/" SAVED_MODEL) && there(sup, "Cache"),
           "a listing id other than the stat id: the originals and the linked Cache still kept");
     fault_name = NULL;
 
@@ -576,19 +562,19 @@ static void test_remove_own(const char *scratch, const native_steps_env *base) {
     fault_op = NS_FAULT_LIST;
     fault_name = "";
     fault_rc = 1;
-    CHECK(native_remove_own_folders(&e, sup, 0, NULL, 0) == 1 && !fault_name && !stat(sup, &st), "a listing not read whole: 1, support kept");
+    CHECK(native_remove_own_folders(&e, sup, 0) == 1 && !fault_name && !stat(sup, &st), "a listing not read whole: 1, support kept");
     fault_name = NULL;
     native_steps_test_fault = NULL;
-    CHECK(native_remove_own_folders(&e, sup, 0, NULL, 0) == 0 && stat(sup, &st), "read whole again: all gone");
+    CHECK(native_remove_own_folders(&e, sup, 0) == 0 && stat(sup, &st), "read whole again: all gone");
 
-    /* S61's m3: a 258-byte name (86 CJK characters) in support: deleted with the rest, support gone */
+    /* Unknown names are kept regardless of their length. */
     own_tree(sup, sizeof sup, scratch, "own-m3", "originals");
     char longname[300] = "";
     for (int k = 0; k < 86; k++) strcat(longname, "\xe9\x9f\xb3");
     snprintf(p, sizeof p, "%s/%s", sup, longname);
     spit_n(p, 1);
     CHECK(strlen(longname) == 258 && !stat(p, &st), "m3: the 258-byte name was made");
-    CHECK(native_remove_own_folders(&e, sup, 0, NULL, 0) == 0 && stat(sup, &st), "m3: a 258-byte name: deleted, support gone (0)");
+    CHECK(native_remove_own_folders(&e, sup, 0) == 1 && !stat(p, &st), "m3: the unknown 258-byte name is kept");
 }
 
 /* LEFTOVER (review S55): a fake process list, naps counted */
@@ -678,22 +664,22 @@ static void test_remove_location(const char *scratch, const native_steps_env *ba
     snprintf(p, sizeof p, "%s/not-a-model", loc);
     spit_n(p, 1);
     /* no marker, or another id: refused, nothing touched */
-    CHECK(native_remove_location_under(&e, top, rel, id, 0, name, err) == 6, "no marker: 6");
+    CHECK(native_remove_location_under(&e, top, rel, id, 0, name, err, NULL) == 6, "no marker: 6");
     snprintf(p, sizeof p, "%s/.rbstemsplus-cache", loc);
     FILE *x = fopen(p, "w");
     fprintf(x, "id=%s\nformat=rbstems-v1\n", "11111111-2222-3333-4444-555555555555");
     fclose(x);
-    CHECK(native_remove_location_under(&e, top, rel, id, 0, name, err) == 6, "another location's marker: 6");
+    CHECK(native_remove_location_under(&e, top, rel, id, 0, name, err, NULL) == 6, "another location's marker: 6");
     x = fopen(p, "w");
     fprintf(x, "id=%s\nformat=rbstems-v1\n", id);
     fclose(x);
     /* not our folder's name, or "..": refused as not connected */
-    CHECK(native_remove_location_under(&e, top, "drive/Stems", id, 0, name, err) == 1
-              && native_remove_location_under(&e, top, "drive/../drive/Stems/RB Stems Plus Cache.noindex", id, 0, name, err) == 1,
+    CHECK(native_remove_location_under(&e, top, "drive/Stems", id, 0, name, err, NULL) == 1
+              && native_remove_location_under(&e, top, "drive/../drive/Stems/RB Stems Plus Cache.noindex", id, 0, name, err, NULL) == 1,
           "not a location's path: 1");
     /* Clear: the model folders and "._" files go; the marker, the folder and other files stay */
     snprintf(p, sizeof p, "%s/%s", loc, hexd);
-    CHECK(!native_remove_location_under(&e, top, rel, id, 0, name, err) && stat(p, &st), "Clear: the model folder went");
+    CHECK(!native_remove_location_under(&e, top, rel, id, 0, name, err, NULL) && stat(p, &st), "Clear: the model folder went");
     snprintf(p, sizeof p, "%s/._stray", loc);
     CHECK(stat(p, &st), "and the ._ file");
     snprintf(p, sizeof p, "%s/not-a-model", loc);
@@ -705,22 +691,22 @@ static void test_remove_location(const char *scratch, const native_steps_env *ba
     mkp(real, sizeof real, top, "real-drive");
     snprintf(lk, sizeof lk, "%s/linked", top);
     CHECK(!symlink(real, lk), "a linked folder on the way");
-    CHECK(native_remove_location_under(&e, top, "linked/RB Stems Plus Cache.noindex", id, 1, name, err) == 4 && !strcmp(name, "linked") && err[0],
+    CHECK(native_remove_location_under(&e, top, "linked/RB Stems Plus Cache.noindex", id, 1, name, err, NULL) == 4 && !strcmp(name, "linked") && err[0],
           "a link on the way: 4, its name and the OS error (%s: %s)", name, err);
-    /* the uninstall: everything, the marker last, then the folder and its ._ companion */
+    /* the uninstall: everything in the cache, the marker last, then the folder */
     snprintf(p, sizeof p, "%s/drive/Stems/._RB Stems Plus Cache.noindex", top);
     spit_n(p, 1);
     rm_rc = EACCES;
-    CHECK(native_remove_location_under(&e, top, rel, id, 1, name, err) == 7 && !stat(loc, &st), "a delete that fails: 7, the folder and marker stay");
+    CHECK(native_remove_location_under(&e, top, rel, id, 1, name, err, NULL) == 7 && !stat(loc, &st), "a delete that fails: 7, the folder and marker stay");
     snprintf(p, sizeof p, "%s/.rbstemsplus-cache", loc);
     CHECK(!stat(p, &st), "the marker still there: still found");
     rm_rc = 0;
-    CHECK(!native_remove_location_under(&e, top, rel, id, 1, name, err) && stat(loc, &st), "the uninstall: the folder gone");
+    CHECK(!native_remove_location_under(&e, top, rel, id, 1, name, err, NULL) && stat(loc, &st), "the uninstall: the folder gone");
     snprintf(p, sizeof p, "%s/drive/Stems/._RB Stems Plus Cache.noindex", top);
-    CHECK(stat(p, &st), "its ._ companion too");
+    CHECK(!stat(p, &st), "test_whole_remove_preserves_parent_sibling: the unrelated regular file beside the cache stays");
     snprintf(p, sizeof p, "%s/drive/Stems", top);
     CHECK(!stat(p, &st), "its parent stays");
-    CHECK(native_remove_location_under(&e, top, rel, id, 1, name, err) == 4, "gone: its folder can't be opened (4)");
+    CHECK(native_remove_location_under(&e, top, rel, id, 1, name, err, NULL) == 4, "gone: its folder can't be opened (4)");
     test_remove_location_review(top, &e, id);
 }
 
@@ -776,6 +762,58 @@ static void make_location(const char *top, const char *parent, const char *id, c
     fclose(x);
 }
 
+static void test_reassigned_letter(const char *top, const char *id) {
+    char replacement[1300];
+    make_location(top, "reassigned-letter", id, replacement, sizeof replacement);
+    const char *letter = "E:\\Music\\" PATHS_CACHE_FOLDER;
+    native_location snap = {.kind = LOC_CHOSEN, .probe = PROBE_AVAILABLE, .has_in_use = 1};
+    /* The current E: leads to the replacement, whose marker was copied from the old volume. */
+    plat_stat st;
+    if (plat_stat_path(replacement, 0, &st)) abort();
+    native_location_identity(st.id, snap.identity);
+    snprintf(snap.in_use, sizeof snap.in_use, "%s", letter);
+    native_location_target target;
+    int64_t size;
+    native_settings settings;
+    native_settings_in in = {.location = 1, .dir = letter, .id = id, .snap = &snap};
+    native_settings_facts(&in, &settings);
+    CHECK(!native_location_now_facts(1, &snap, letter, id, "", NULL, &target, &size)
+              && !target.gate_id[0] && settings.clear == 0,
+          "reassigned_letter_with_copied_marker: neither uninstall nor Clear gets a gate");
+}
+
+static void test_replaced_confirmed_folder(const char *top, const native_steps_env *e, const char *id) {
+    for (int whole = 0; whole <= 1; whole++) {
+        const char *parent = whole ? "confirmed-remove" : "confirmed-clear";
+        char rel[128], loc[1300], moved[1400], model[1400], name[256], err[128], identity[NL_IDENTITY_MAX];
+        snprintf(rel, sizeof rel, "%s/%s", parent, PATHS_CACHE_FOLDER);
+        make_location(top, parent, id, loc, sizeof loc);
+        plat_stat confirmed, replacement;
+        if (plat_stat_path(loc, 0, &confirmed)) abort();
+        native_location_identity(confirmed.id, identity);
+        snprintf(model, sizeof model, "%s/%064d", loc, 0);
+        struct stat st;
+        plat_id wrong_volume = confirmed.id;
+        wrong_volume.vol ^= 1;
+        native_location_identity(wrong_volume, identity);
+        int r = native_remove_location_under(e, top, rel, id, whole, name, err, identity);
+        CHECK(r == 6 && !stat(model, &st), "confirmed_volume_changed: deletion requires the confirmed volume");
+        if (r != 6) continue;
+        native_location_identity(confirmed.id, identity);
+        snprintf(moved, sizeof moved, "%s-moved", loc);
+        if (rename(loc, moved)) abort();
+        make_location(top, parent, id, loc, sizeof loc);
+        if (plat_stat_path(loc, 0, &replacement) || plat_id_same(confirmed.id, replacement.id)) abort();
+        r = native_remove_location_under(e, top, rel, id, whole, name, err, identity);
+        CHECK(r == 6 && !stat(model, &st), "replaced_confirmed_folder: %s preserves the replacement's model",
+              whole ? "whole removal" : "Clear");
+        if (r != 6) continue;
+        native_location_identity(replacement.id, identity);
+        r = native_remove_location_under(e, top, rel, id, whole, name, err, identity);
+        CHECK(!r && stat(model, &st), "%s can remove a confirmed, marked folder's models", whole ? "whole removal" : "Clear");
+    }
+}
+
 /* the marker's (or its companion's) name in uppercase as the same file: a hard link on a
  * case-sensitive drive, the entry renamed on a case-insensitive one */
 static int same_file_upper(const char *loc, const char *lower, const char *upper, int sensitive) {
@@ -798,7 +836,7 @@ static void test_remove_location_ms6(const char *top, const native_steps_env *e,
     native_steps_test_fault = f_fault;
     fault_op = NS_FAULT_STAT;
     CHECK(!same_file_upper(loc, ".rbstemsplus-cache", ".RBSTEMSPLUS-CACHE", sensitive), "MS6: the marker in uppercase");
-    CHECK(!native_remove_location_under(e, top, "ms6a/RB Stems Plus Cache.noindex", id, 1, name, err) && stat(loc, &st),
+    CHECK(!native_remove_location_under(e, top, "ms6a/RB Stems Plus Cache.noindex", id, 1, name, err, NULL) && stat(loc, &st),
           "MS6: the marker in another case: 0, the folder gone");
 
     /* hard links to the marker and to its companion under other names: plain entries, all goes */
@@ -810,7 +848,7 @@ static void test_remove_location_ms6(const char *top, const native_steps_env *e,
     snprintf(p, sizeof p, "%s/.rbstemsplus-cache", loc);
     snprintf(q, sizeof q, "%s/alias", loc);
     CHECK(!link(p, q), "MS6: the marker linked to alias");
-    CHECK(!native_remove_location_under(e, top, "ms6b/RB Stems Plus Cache.noindex", id, 1, name, err) && stat(loc, &st),
+    CHECK(!native_remove_location_under(e, top, "ms6b/RB Stems Plus Cache.noindex", id, 1, name, err, NULL) && stat(loc, &st),
           "MS6: links to the marker and its companion: 0, the folder gone");
 
     /* a case variant whose stat fails: kept, and so is the marker (7) */
@@ -819,7 +857,7 @@ static void test_remove_location_ms6(const char *top, const native_steps_env *e,
     snprintf(p, sizeof p, "%s/.RBSTEMSPLUS-CACHE", loc);
     fault_name = ".RBSTEMSPLUS-CACHE";
     fault_rc = EIO;
-    int r = native_remove_location_under(e, top, "ms6c/RB Stems Plus Cache.noindex", id, 1, name, err);
+    int r = native_remove_location_under(e, top, "ms6c/RB Stems Plus Cache.noindex", id, 1, name, err, NULL);
     CHECK(r == 7 && !fault_name && !lstat(p, &st), "MS6: a variant that can't be looked at: 7 (%d), the marker kept", r);
 
     /* the marker's or the companion's stat fails: 6, nothing touched; a companion that isn't there is fine */
@@ -829,14 +867,14 @@ static void test_remove_location_ms6(const char *top, const native_steps_env *e,
     spit_n(q, 1);
     fault_name = ".rbstemsplus-cache";
     fault_rc = EIO;
-    r = native_remove_location_under(e, top, "ms6d/RB Stems Plus Cache.noindex", id, 1, name, err);
+    r = native_remove_location_under(e, top, "ms6d/RB Stems Plus Cache.noindex", id, 1, name, err, NULL);
     CHECK(r == 6 && !fault_name && !stat(p, &st), "MS6: the marker can't be looked at: 6 (%d), nothing touched", r);
     fault_name = "._.rbstemsplus-cache";
-    r = native_remove_location_under(e, top, "ms6d/RB Stems Plus Cache.noindex", id, 1, name, err);
+    r = native_remove_location_under(e, top, "ms6d/RB Stems Plus Cache.noindex", id, 1, name, err, NULL);
     CHECK(r == 6 && !fault_name && !stat(p, &st) && !lstat(q, &st), "MS6: the companion can't be looked at: 6 (%d), nothing touched", r);
     fault_name = "._.rbstemsplus-cache";
     fault_rc = ENOENT;
-    r = native_remove_location_under(e, top, "ms6d/RB Stems Plus Cache.noindex", id, 1, name, err);
+    r = native_remove_location_under(e, top, "ms6d/RB Stems Plus Cache.noindex", id, 1, name, err, NULL);
     CHECK(!r && !fault_name && stat(loc, &st), "MS6: no companion: 0 (%d), the folder gone", r);
     fault_name = NULL;
     native_steps_test_fault = NULL;
@@ -855,7 +893,7 @@ static void test_remove_location_ms6(const char *top, const native_steps_env *e,
         snprintf(blocked, sizeof blocked, "%s/blocked", loc);
         spit_n(blocked, 1);
         rm_fail_prefix = "blocked";
-        r = native_remove_location_under(e, top, "rf1a/RB Stems Plus Cache.noindex", id, 1, name, err);
+        r = native_remove_location_under(e, top, "rf1a/RB Stems Plus Cache.noindex", id, 1, name, err, NULL);
         rm_fail_prefix = NULL;
         CHECK(r == 7 && !lstat(q, &st) && !lstat(p, &st), "RF1: the marker's long-s alias with an entry that can't go: 7, alias and marker kept (%d)", r);
         /* the companion under the alias: the same */
@@ -868,7 +906,7 @@ static void test_remove_location_ms6(const char *top, const native_steps_env *e,
         spit_n(blocked, 1);
         snprintf(marker, sizeof marker, "%s/.rbstemsplus-cache", loc);
         rm_fail_prefix = "blocked";
-        r = native_remove_location_under(e, top, "rf1b/RB Stems Plus Cache.noindex", id, 1, name, err);
+        r = native_remove_location_under(e, top, "rf1b/RB Stems Plus Cache.noindex", id, 1, name, err, NULL);
         rm_fail_prefix = NULL;
         CHECK(r == 7 && !lstat(q, &st) && !lstat(marker, &st), "RF1: the companion's long-s alias with an entry that can't go: 7, alias and marker kept (%d)", r);
         /* the marker under the alias alone: the uninstall deletes it last, the folder gone */
@@ -876,7 +914,7 @@ static void test_remove_location_ms6(const char *top, const native_steps_env *e,
         snprintf(p, sizeof p, "%s/.rbstemsplus-cache", loc);
         snprintf(q, sizeof q, "%s/%s", loc, long_s_marker);
         CHECK(!rename(p, q), "RF1: the marker under its long-s alias (c)");
-        r = native_remove_location_under(e, top, "rf1c/RB Stems Plus Cache.noindex", id, 1, name, err);
+        r = native_remove_location_under(e, top, "rf1c/RB Stems Plus Cache.noindex", id, 1, name, err, NULL);
         CHECK(r == 0 && stat(loc, &st), "RF1: the marker's long-s alias alone: 0, the folder gone (%d)", r);
     }
     /* a "._" hard link to the marker, an entry that can't go: kept with the marker by the
@@ -890,7 +928,7 @@ static void test_remove_location_ms6(const char *top, const native_steps_env *e,
         spit_n(blocked, 1);
         rm_fail_prefix = "blocked";
         r = native_remove_location_under(e, top, whole ? "rf1d1/RB Stems Plus Cache.noindex" : "rf1d0/RB Stems Plus Cache.noindex", id, whole,
-                                         name, err);
+                                         name, err, NULL);
         rm_fail_prefix = NULL;
         CHECK(r == (whole ? 7 : 0) && !lstat(q, &st) && !lstat(marker, &st), "RF1: a ._ hard link to the marker, whole %d: %d (%d), link and marker kept",
               whole, whole ? 7 : 0, r);
@@ -907,14 +945,16 @@ static void test_remove_location_ms6(const char *top, const native_steps_env *e,
     spit_n(p, 2);
     snprintf(q, sizeof q, "%s/._.RBSTEMSPLUS-CACHE", loc);
     spit_n(q, 2);
-    CHECK(!native_remove_location_under(e, top, "ms6e/RB Stems Plus Cache.noindex", id, 0, name, err) && !stat(p, &st) && stat(q, &st),
+    CHECK(!native_remove_location_under(e, top, "ms6e/RB Stems Plus Cache.noindex", id, 0, name, err, NULL) && !stat(p, &st) && stat(q, &st),
           "MS6, case-sensitive: Clear keeps another file named as the marker, deletes a ._ file named as the companion");
-    CHECK(!native_remove_location_under(e, top, "ms6e/RB Stems Plus Cache.noindex", id, 1, name, err) && stat(loc, &st),
+    CHECK(!native_remove_location_under(e, top, "ms6e/RB Stems Plus Cache.noindex", id, 1, name, err, NULL) && stat(loc, &st),
           "MS6, case-sensitive: the uninstall deletes another file named as the marker: 0, the folder gone");
 }
 
 /* review MT1, MT2, MT3, MT5 */
 static void test_remove_location_review(const char *top, const native_steps_env *e, const char *id) {
+    test_reassigned_letter(top, id);
+    test_replaced_confirmed_folder(top, e, id);
     char loc[1300], rel[300], p[1500], name[256], err[128];
     struct stat st;
     static const struct {
@@ -934,7 +974,7 @@ static void test_remove_location_review(const char *top, const native_steps_env 
         make_location(top, parent, id, loc, sizeof loc);
         snprintf(rel, sizeof rel, "%s/RB Stems Plus Cache.noindex", parent);
         race_do = races[i].race;
-        int r = native_remove_location_under(e, top, rel, id, 1, name, err);
+        int r = native_remove_location_under(e, top, rel, id, 1, name, err, NULL);
         race_do = NULL;
         int kept = 1;
         if (races[i].kept) {
@@ -949,7 +989,7 @@ static void test_remove_location_review(const char *top, const native_steps_env 
     make_location(top, "mt1-early", id, loc, sizeof loc);
     rm_swap_loc = loc;
     {
-        int r = native_remove_location_under(e, top, "mt1-early/RB Stems Plus Cache.noindex", id, 1, name, err);
+        int r = native_remove_location_under(e, top, "mt1-early/RB Stems Plus Cache.noindex", id, 1, name, err, NULL);
         rm_swap_loc = NULL;
         CHECK(r == 7 && !lstat(loc, &st), "MT1 early swap: 7 (%d), the replacement kept", r);
     }
@@ -966,7 +1006,7 @@ static void test_remove_location_review(const char *top, const native_steps_env 
         snprintf(p, sizeof p, "%s/blocked", loc);
         mkdir(p, 0755);
         rm_fail_prefix = "blocked";
-        int r = native_remove_location_under(e, top, "mt2/RB Stems Plus Cache.noindex", id, 1, name, err);
+        int r = native_remove_location_under(e, top, "mt2/RB Stems Plus Cache.noindex", id, 1, name, err, NULL);
         rm_fail_prefix = NULL;
         CHECK(r == 7 && !lstat(upper, &st), "MT2: an entry that can't go: 7, the marker in another case kept (%d)", r);
     } else
@@ -978,8 +1018,8 @@ static void test_remove_location_review(const char *top, const native_steps_env 
     char longer[64];
     snprintf(longer, sizeof longer, "%s-wrong", id);
     snprintf(p, sizeof p, "%s/%064d", loc, 0);
-    CHECK(native_remove_location_under(e, top, "mt3/RB Stems Plus Cache.noindex", longer, 1, name, err) == 6
-              && native_remove_location_under(e, top, "mt3/RB Stems Plus Cache.noindex", "0E8A1D84", 1, name, err) == 6 && !stat(p, &st),
+    CHECK(native_remove_location_under(e, top, "mt3/RB Stems Plus Cache.noindex", longer, 1, name, err, NULL) == 6
+              && native_remove_location_under(e, top, "mt3/RB Stems Plus Cache.noindex", "0E8A1D84", 1, name, err, NULL) == 6 && !stat(p, &st),
           "MT3: a suffixed or short id: 6, nothing touched");
 
     /* MT5: a 258-byte name (86 CJK characters; APFS and NTFS take it, the old 256-byte list refused it): Clear keeps it, the uninstall deletes it */
@@ -990,8 +1030,8 @@ static void test_remove_location_review(const char *top, const native_steps_env 
     snprintf(p, sizeof p, "%s/%s", loc, longname);
     spit_n(p, 1);
     CHECK(strlen(longname) == 258 && !stat(p, &st), "MT5: the 258-byte name was made");
-    CHECK(!native_remove_location_under(e, top, "mt5/RB Stems Plus Cache.noindex", id, 0, name, err) && !stat(p, &st), "MT5: Clear keeps a long name");
-    CHECK(!native_remove_location_under(e, top, "mt5/RB Stems Plus Cache.noindex", id, 1, name, err) && stat(loc, &st),
+    CHECK(!native_remove_location_under(e, top, "mt5/RB Stems Plus Cache.noindex", id, 0, name, err, NULL) && !stat(p, &st), "MT5: Clear keeps a long name");
+    CHECK(!native_remove_location_under(e, top, "mt5/RB Stems Plus Cache.noindex", id, 1, name, err, NULL) && stat(loc, &st),
           "MT5: the uninstall deletes it, the folder gone");
 
     /* MT6: Clear keeps uppercase hex and the marker's companion; a model-named link goes as itself */
@@ -1017,7 +1057,7 @@ static void test_remove_location_review(const char *top, const native_steps_env 
     CHECK(!symlink(target, ulk), "MT6: a ._ link");
     snprintf(plain, sizeof plain, "%s/notes.txt", loc);
     spit_n(plain, 1);
-    CHECK(!native_remove_location_under(e, top, "mt6/RB Stems Plus Cache.noindex", id, 0, name, err) && !stat(p, &st) && !lstat(comp, &st)
+    CHECK(!native_remove_location_under(e, top, "mt6/RB Stems Plus Cache.noindex", id, 0, name, err, NULL) && !stat(p, &st) && !lstat(comp, &st)
               && !stat(plain, &st) && lstat(lk, &st) && lstat(ulk, &st) && !stat(target, &st),
           "MT6: Clear keeps uppercase hex, a non-hex name and ._ of the marker; the links went as themselves, their target kept");
     /* a marker that is a link: 6; our folder a link: 4 */
@@ -1026,13 +1066,13 @@ static void test_remove_location_review(const char *top, const native_steps_env 
     char mreal[1300];
     snprintf(mreal, sizeof mreal, "%s/mt6b/marker-real", top);
     if (rename(p, mreal) || symlink(mreal, p)) abort();
-    CHECK(native_remove_location_under(e, top, "mt6b/RB Stems Plus Cache.noindex", id, 1, name, err) == 6, "MT6: a linked marker: 6");
+    CHECK(native_remove_location_under(e, top, "mt6b/RB Stems Plus Cache.noindex", id, 1, name, err, NULL) == 6, "MT6: a linked marker: 6");
     char lfold[1300];
     mkp(lfold, sizeof lfold, top, "mt6c");
     snprintf(p, sizeof p, "%s/RB Stems Plus Cache.noindex", lfold);
     CHECK(!symlink(loc, p), "MT6: our folder a link");
-    CHECK(native_remove_location_under(e, top, "mt6c/RB Stems Plus Cache.noindex", id, 1, name, err) == 4, "MT6: our folder a link: 4");
-    CHECK(native_remove_location(e, "relative/RB Stems Plus Cache.noindex", id, 1, name, err) == 1, "MT6: a bad root: 1");
+    CHECK(native_remove_location_under(e, top, "mt6c/RB Stems Plus Cache.noindex", id, 1, name, err, NULL) == 4, "MT6: our folder a link: 4");
+    CHECK(native_remove_location(e, "relative/RB Stems Plus Cache.noindex", id, 1, name, err, NULL) == 1, "MT6: a bad root: 1");
 }
 
 /* CLEAR_THIS_MAC (review S43, S47): only support/Cache, through a no-follow handle on support */
@@ -1040,6 +1080,7 @@ static void test_clear_cache(const char *scratch, const native_steps_env *base) 
     char sup[1100], cache[1200], p[1300], outside[1100];
     struct stat st;
     int link = -1;
+    char identity[NS_CACHE_IDENTITY_MAX] = "";
     native_steps_env e = *base;
     e.support = sup;
     rm_rc = 0;
@@ -1049,33 +1090,35 @@ static void test_clear_cache(const char *scratch, const native_steps_env *base) 
     spit_n(p, 1);
     /* a real tree goes */
     mkp(sup, sizeof sup, scratch, "cc1");
-    mkp(cache, sizeof cache, sup, "Cache");
+    snprintf(cache, sizeof cache, "%s/Cache", sup);
+    native_pc_cache_create(&e, cache);
+    CHECK(!native_pc_cache_identity(&e, cache, identity), "marked new cache");
     mkp(p, sizeof p, cache, "ab");
     snprintf(p, sizeof p, "%s/ab/stem.m4a", cache);
     spit_n(p, 3);
     F.logged[0] = 0;
-    CHECK(!native_clear_cache(&e, cache, &link) && !link && stat(cache, &st) && !stat(sup, &st) && !F.logged[0],
+    CHECK(!native_clear_cache(&e, cache, identity, 1, &link) && !link && stat(cache, &st) && !stat(sup, &st) && !F.logged[0],
           "a real tree: gone, support stays, nothing logged");
     /* no Cache, no support: 0 */
     F.logged[0] = 0;
-    CHECK(!native_clear_cache(&e, cache, &link) && !link && !F.logged[0], "no Cache: 0, nothing logged");
+    CHECK(!native_clear_cache(&e, cache, identity, 1, &link) && !link && !F.logged[0], "no Cache: 0, nothing logged");
     snprintf(sup, sizeof sup, "%s/cc-none", scratch);
     snprintf(cache, sizeof cache, "%s/Cache", sup);
     F.logged[0] = 0;
-    CHECK(!native_clear_cache(&e, cache, &link) && !F.logged[0], "no support folder: 0, nothing logged");
+    CHECK(!native_clear_cache(&e, cache, identity, 1, &link) && !F.logged[0], "no support folder: 0, nothing logged");
     /* a link at Cache: left, *link; a file at Cache: refused, not a link */
     mkp(sup, sizeof sup, scratch, "cc2");
     snprintf(cache, sizeof cache, "%s/Cache", sup);
     CHECK(!symlink(outside, cache), "a linked Cache");
     F.logged[0] = 0;
-    CHECK(native_clear_cache(&e, cache, &link) == 1 && link == 1 && !lstat(cache, &st) && strstr(F.logged, "refused to delete"),
+    CHECK(native_clear_cache(&e, cache, identity, 1, &link) == 1 && link == 1 && !lstat(cache, &st) && strstr(F.logged, "refused to delete"),
           "a link at Cache: left, said so, logged");
     snprintf(p, sizeof p, "%s/keep-me", outside);
     CHECK(!stat(p, &st), "what it points to untouched");
     unlink(cache);
     spit_n(cache, 2);
     F.logged[0] = 0;
-    CHECK(native_clear_cache(&e, cache, &link) == 1 && link == 0 && !stat(cache, &st) && strstr(F.logged, "refused to delete"),
+    CHECK(native_clear_cache(&e, cache, identity, 1, &link) == 1 && link == 0 && !stat(cache, &st) && strstr(F.logged, "refused to delete"),
           "a file at Cache: refused, left, logged");
     unlink(cache);
     /* support a link (to a folder with a Cache): nothing deleted */
@@ -1086,18 +1129,20 @@ static void test_clear_cache(const char *scratch, const native_steps_env *base) 
     CHECK(!symlink(real, sup), "a linked support folder");
     snprintf(cache, sizeof cache, "%s/Cache", sup);
     F.logged[0] = 0;
-    CHECK(native_clear_cache(&e, cache, &link) != 0 && !stat(p, &st) && strstr(F.logged, "couldn't clear"), "support a link: nothing deleted, logged");
+    CHECK(native_clear_cache(&e, cache, identity, 1, &link) != 0 && !stat(p, &st) && strstr(F.logged, "refused to delete"), "support a link: nothing deleted, logged");
     /* support at mode 0000 with a Cache inside: 1, logged, Cache left */
     mkp(sup, sizeof sup, scratch, "cc-locked");
     mkp(cache, sizeof cache, sup, "Cache");
     chmod(sup, 0);
     F.logged[0] = 0;
-    CHECK(native_clear_cache(&e, cache, &link) == 1 && strstr(F.logged, "couldn't clear"), "support unreadable: 1, logged");
+    CHECK(native_clear_cache(&e, cache, identity, 1, &link) == 1 && strstr(F.logged, "couldn't clear"), "support unreadable: 1, logged");
     chmod(sup, 0755);
     CHECK(!stat(cache, &st), "its Cache still there");
     /* cache_default not support/Cache: refused, logged, nothing touched */
     mkp(sup, sizeof sup, scratch, "cc3");
-    mkp(cache, sizeof cache, sup, "Cache");
+    snprintf(cache, sizeof cache, "%s/Cache", sup);
+    native_pc_cache_create(&e, cache);
+    CHECK(!native_pc_cache_identity(&e, cache, identity), "marked new cache");
     char sibling[1200], other[1200];
     mkp(sibling, sizeof sibling, scratch, "Documents");
     mkp(other, sizeof other, scratch, "cc-other");
@@ -1106,19 +1151,50 @@ static void test_clear_cache(const char *scratch, const native_steps_env *base) 
     for (int i = 0; i < 3; i++) {
         F.logged[0] = 0;
         removed[0] = 0;
-        CHECK(native_clear_cache(&e, wrong[i], &link) == 1 && !removed[0] && strstr(F.logged, "refused to delete") && !stat(wrong[i], &st)
+        CHECK(native_clear_cache(&e, wrong[i], identity, 1, &link) == 1 && !removed[0] && strstr(F.logged, "refused to delete") && !stat(wrong[i], &st)
                   && !stat(cache, &st),
               "cache_default %s: refused, logged, nothing touched", wrong[i]);
     }
-    CHECK(native_clear_cache(&e, NULL, &link) == 1, "no cache_default: refused");
+    CHECK(native_clear_cache(&e, NULL, identity, 1, &link) == 1, "no cache_default: refused");
     /* a delete that fails: 1, logged */
+    snprintf(p, sizeof p, "%s/stem", cache);
+    spit_n(p, 1);
     rm_rc = EACCES;
     F.logged[0] = 0;
-    CHECK(native_clear_cache(&e, cache, &link) == 1 && strstr(F.logged, "couldn't clear") && !stat(cache, &st), "a failed delete: 1, logged");
+    CHECK(native_clear_cache(&e, cache, identity, 1, &link) == 1 && strstr(F.logged, "couldn't clear") && !stat(cache, &st), "a failed delete: 1, logged");
     rm_rc = 0;
+    rm_swap_loc = cache;
+    rm_swap_file = "personal-file";
+    int r = native_clear_cache(&e, cache, identity, 1, &link);
+    rm_swap_loc = rm_swap_file = NULL;
+    snprintf(p, sizeof p, "%s/personal-file", cache);
+    CHECK(r == 1 && !stat(p, &st), "test_clear_preserves_replacement: another tree moved into Cache stays");
+    snprintf(p, sizeof p, "%s-moved/stem", cache);
+    CHECK(stat(p, &st), "test_clear_preserves_replacement: only the verified directory's original contents go");
 }
 
 /* DOWNLOAD, REKORDBOX, SPACE */
+static void test_stop_keeping_unlink_failure(const char *kept) {
+    char entry[1200], manifest[1200];
+    snprintf(entry, sizeof entry, "%s/immutable.kept", kept);
+    snprintf(manifest, sizeof manifest, "%s/immutable.manifest", kept);
+    spit_n(entry, 3);
+    spit_n(manifest, 3);
+    CHECK(chflags(manifest, UF_IMMUTABLE) == 0, "NW83: make the manifest immutable");
+    CHECK(native_stop_keeping(kept, "immutable") != 0, "NW83: a failed manifest unlink reports failure");
+    CHECK(access(entry, F_OK) != 0 && errno == ENOENT && access(manifest, F_OK) == 0,
+          "NW83: the .kept file is gone and the manifest remains");
+    CHECK(chflags(manifest, 0) == 0, "NW83: clear the manifest's immutable flag");
+
+    spit_n(entry, 3);
+    CHECK(chflags(entry, UF_IMMUTABLE) == 0, "review 3: make the .kept file immutable");
+    int failed = native_stop_keeping(kept, "immutable");
+    CHECK(chflags(entry, 0) == 0, "review 3: clear the .kept file's immutable flag");
+    CHECK(failed && access(entry, F_OK) == 0 && access(manifest, F_OK) == 0,
+          "review 3: failed .kept unlink reports failure and preserves both files");
+    CHECK(!native_stop_keeping(kept, "immutable"), "review 3: Stop Keeping can be retried");
+}
+
 static void test_native_steps_more(const char *scratch) {
     char vf[1100], root[1100], p[1200], model[1200];
     snprintf(vf, sizeof vf, "%s/rekordbox 7.2.19", scratch);
@@ -1389,6 +1465,7 @@ static void test_native_state(const char *scratch) {
     CHECK(!native_stop_keeping(kept, "My_Set-1") && access(p, F_OK) == 0, "removed; the other set's left");
     snprintf(p, sizeof p, "%s/My_Set-1.manifest", kept);
     CHECK(access(p, F_OK) != 0 && !native_stop_keeping(kept, "My_Set-1"), "its manifest too; again: gone");
+    test_stop_keeping_unlink_failure(kept);
     CHECK(native_stop_keeping(kept, "odd") != 0, "a .kept that isn't a file: left, still there");
     /* review S41: "gone" only when it surely is */
     char kreal[1100], klink[1100];
@@ -1615,8 +1692,179 @@ static void test_watcher_unload(const char *scratch) {
     } else CHECK(0, "the overlong version folder couldn't be made");
 }
 
+/* LAUNCH_AGENT_LOAD, WATCHER_CHECK, WATCHER_STATE (native_watcher_*) on fakes */
+static struct {
+    char calls[1024];
+    int read_rc, present, ours, off, write_rc, running, start_rc;
+} WF;
+static void wf_add(const char *s) {
+    strncat(WF.calls, s, sizeof WF.calls - strlen(WF.calls) - 1);
+    strncat(WF.calls, ";", sizeof WF.calls - strlen(WF.calls) - 1);
+}
+static int wf_read(void *ctx, int *present, int *ours, int *off) {
+    (void)ctx;
+    wf_add("read");
+    *present = WF.present;
+    *ours = WF.ours;
+    *off = WF.off;
+    return WF.read_rc;
+}
+static int wf_write(void *ctx) {
+    (void)ctx;
+    wf_add("write");
+    if (!WF.write_rc) WF.present = WF.ours = 1;   /* StartupApproved (off) stays the user's */
+    return WF.write_rc;
+}
+static int wf_running(void *ctx) {
+    (void)ctx;
+    wf_add("running");
+    return WF.running;
+}
+static int wf_start(void *ctx) {
+    (void)ctx;
+    wf_add("start");
+    return WF.start_rc;
+}
+static void wf_log(void *ctx, const char *line) {
+    (void)ctx;
+    char b[600];
+    snprintf(b, sizeof b, "log %s", line);
+    wf_add(b);
+}
+
+static void test_watcher_load(void) {
+    native_watcher_ops ops = {wf_read, wf_write, wf_running, wf_start, wf_log, NULL};
+    int off = 7;
+    /* the complete uninstall's or Demucs v4's uninstall removed the Run value: an install puts it back
+     * and starts the watcher (the bug: LOAD wasn't there, so no watcher until the next bootstrap) */
+    memset(&WF, 0, sizeof WF);
+    CHECK(native_watcher_load(&ops, &off) == 0 && off == 0, "no Run value: written, started, reminders on (%d)", off);
+    CHECK(!strncmp(WF.calls, "read;write;log watcher: installed", 33) && strstr(WF.calls, "read;running;start;log watcher: started;"),
+          "the Run value first, then the watcher started: %s", WF.calls);
+    memset(&WF, 0, sizeof WF);
+    WF.present = WF.ours = 1;
+    WF.running = 1;
+    CHECK(native_watcher_load(&ops, &off) == 0 && !strstr(WF.calls, "write") && !strstr(WF.calls, "start"), "ours and running: nothing to do: %s",
+          WF.calls);
+    memset(&WF, 0, sizeof WF);
+    WF.present = WF.ours = WF.off = 1;
+    CHECK(native_watcher_load(&ops, &off) == 0 && off == 1 && !strstr(WF.calls, "write;") && !strstr(WF.calls, "start;")
+              && strstr(WF.calls, "log watcher: turned off in Startup apps: not started;"),
+          "ours and off: left alone: %s", WF.calls);
+    memset(&WF, 0, sizeof WF);
+    WF.present = 1;   /* another stub's */
+    WF.off = 1;
+    CHECK(native_watcher_load(&ops, &off) == 0 && off == 1 && strstr(WF.calls, "write;") && !strstr(WF.calls, "start;"),
+          "a value not ours is rewritten; the user's off still prevents starting: %s", WF.calls);
+    memset(&WF, 0, sizeof WF);
+    WF.write_rc = EACCES;
+    WF.running = -1;
+    CHECK(native_watcher_load(&ops, &off) == 0 && strstr(WF.calls, "COULD NOT BE INSTALLED") && !strstr(WF.calls, "start;") && off == 0,
+          "a refused write is logged, never fails the flow; a list unread starts none: %s", WF.calls);
+    memset(&WF, 0, sizeof WF);
+    WF.present = WF.ours = 1;
+    WF.start_rc = ENOENT;
+    CHECK(native_watcher_load(&ops, &off) == 0 && strstr(WF.calls, "log watcher: started FAILED: "), "a start that fails is logged: %s", WF.calls);
+    memset(&WF, 0, sizeof WF);
+    WF.read_rc = EIO;
+    CHECK(native_watcher_load(&ops, &off) == 0 && strstr(WF.calls, "write;") && strstr(WF.calls, "start;") && off == -1,
+          "an unreadable value is written and the watcher still starts; the state unknown");
+
+    /* checkWatcher: only a value of our name that starts something else is repaired */
+    memset(&WF, 0, sizeof WF);
+    CHECK(native_watcher_check(&ops, &off) == 0 && !strcmp(WF.calls, "read;read;") && off == 0, "no value: left alone (%s)", WF.calls);
+    memset(&WF, 0, sizeof WF);
+    WF.present = 1;
+    WF.off = 1;
+    CHECK(native_watcher_check(&ops, &off) == 0 && strstr(WF.calls, "write;log watcher: the Run value started something else") && off == 1,
+          "another stub's: pointed at ours, the user's off kept: %s", WF.calls);
+    memset(&WF, 0, sizeof WF);
+    WF.present = WF.ours = 1;
+    CHECK(native_watcher_check(&ops, &off) == 0 && !strstr(WF.calls, "write") && !strstr(WF.calls, "start"), "ours: kept, nothing started");
+    memset(&WF, 0, sizeof WF);
+    WF.present = 1;
+    WF.ours = 1;
+    WF.off = 1;
+    CHECK(native_watcher_off(&ops) == 1, "turned off in Startup apps: off");
+    WF.present = 0;
+    CHECK(native_watcher_off(&ops) == 0, "no value: not off (nothing to turn off)");
+    WF.read_rc = EIO;
+    CHECK(native_watcher_off(&ops) == -1, "unreadable: unknown");
+}
+
+static void test_settings_facts(void) {
+    native_settings o;
+    native_settings_in in;
+    memset(&in, 0, sizeof in);
+    in.max_gb = 20;
+    in.max_days = 60;
+    in.this_pc_folder = 1;
+    native_settings_facts(&in, &o);
+    CHECK(!strcmp(o.gb, "20") && !strcmp(o.days, "60") && !o.unreadable && o.size_kind == 0 && o.clear == 1 && o.location == 0 && !o.label_path[0]
+              && !o.drive[0],
+          "This PC: default limits, no path or drive label, size measuring without a snapshot, local Clear available");
+    in.this_pc_folder = 0;
+    in.max_gb = 1.5;
+    native_settings_facts(&in, &o);
+    CHECK(o.clear == 2 && !strcmp(o.gb, "1.5"), "This PC without its folder: 2; 1.5 GB as typed");
+    in.unreadable = 1;
+    native_settings_facts(&in, &o);
+    CHECK(o.unreadable && o.location == 2 && o.size_kind == -1 && o.clear == 0, "config.ini unreadable: 2, no size, nothing to clear");
+    in.unreadable = 0;
+    in.location = 2;
+    in.this_pc_folder = 1;
+    native_settings_facts(&in, &o);
+    CHECK(o.location == 3 && o.size_kind == -1 && o.clear == 1, "set wrongly: 3, no size, This PC's old stems may be cleared");
+    in.location = 1;
+    in.dir = "E:\\Music\\DJ\\RB Stems Plus";
+    in.drive = "SAMSUNG";
+    in.can_choose = 1;
+    native_settings_facts(&in, &o);
+    CHECK(o.location == 1 && !strcmp(o.label_path, "Music/DJ") && !strcmp(o.drive, "SAMSUNG") && o.clear == 0 && o.size_kind == 0 && o.can_choose,
+          "a chosen folder: parent label (%s) and drive name, size measuring without a snapshot, Choose available and Clear disabled", o.label_path);
+    in.dir = "E:\\RB Stems Plus\\";
+    native_settings_facts(&in, &o);
+    CHECK(!o.label_path[0], "a folder at the drive's root: no folders between (%s)", o.label_path);
+    in.dir = "C:\\mnt\\usb\\Stems\\RB Stems Plus";
+    in.mount = "C:\\mnt\\usb\\";
+    native_settings_facts(&in, &o);
+    CHECK(!strcmp(o.label_path, "Stems"), "a volume mounted in a folder: below its mount point (%s)", o.label_path);
+    in.dir = "\\\\?\\Volume{0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f}\\Stems\\RB Stems Plus";
+    in.mount = "";
+    native_settings_facts(&in, &o);
+    CHECK(!strcmp(o.label_path, "Stems"), "a GUID path without a mount: below its volume root (%s)", o.label_path);
+    in.dir = "E:/Music/DJ/RB Stems Plus";
+    in.mount = NULL;
+    native_settings_facts(&in, &o);
+    CHECK(!strcmp(o.label_path, "Music/DJ"), "a forward-slash path still skips the drive letter (%s)", o.label_path);
+}
+
+static void t_r1_assessed(void) {
+    static inv_list inventory = {.n = 2};
+    strcpy(inventory.it[0].folder, "/rekordbox/rekordbox 7.2.20");
+    strcpy(inventory.it[1].folder, "/rekordbox/rekordbox 7.2.19");
+    inv_assess_row rows[] = {{.r1 = NF_R1_NOTHING}, {.r1 = NF_R1_ORT_MISSING}};
+    CHECK(native_r1_assessed(&inventory, rows, inventory.it[1].folder) == NF_R1_ORT_MISSING,
+          "R1 explicitly selects the older broken installation");
+    CHECK(native_r1_assessed(&inventory, rows, "/other/rekordbox 7.2.19") == -1, "R1 rejects an unlisted path");
+    inventory.it[1].trust = INV_STALE;
+    CHECK(native_r1_assessed(&inventory, rows, inventory.it[1].folder) == -1, "R1 skips stale entries");
+}
+
+static void t_lane_a_pc_cache_create(const char *scratch);
+static void t_pc_cache_identity_deadline(const char *scratch);
+static void lane_b_support_artifacts(const char *scratch);
+static void lane_b_pending_cleanup(const char *scratch);
+static void lane_b_whole_removal(const char *scratch);
+static void lane_b_held_descendant(const char *scratch);
+
 void test_native_steps(const char *scratch) {
+    t_lane_a_pc_cache_create(scratch);
+    t_pc_cache_identity_deadline(scratch);
+    t_r1_assessed();
     test_watcher_unload(scratch);
+    test_watcher_load();
+    test_settings_facts();
     static const char A64[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     native_steps_env e = {f_fetch, f_saved, f_seen, f_age, f_sha, f_ort, f_set_bridge, f_log, f_download, f_procs, f_size, f_free, f_same,
                           NULL, scratch, "1.5.0", "C:\\m\\hdemucs.onnx", NULL, NULL, f_blocked, f_rm, f_rmdir};
@@ -1783,4 +2031,261 @@ void test_native_steps(const char *scratch) {
     native_flow_free(&fl);
     test_native_steps_more(scratch);
     test_native_state(scratch);
+    lane_b_support_artifacts(scratch);
+    lane_b_pending_cleanup(scratch);
+    lane_b_whole_removal(scratch);
+    lane_b_held_descendant(scratch);
+}
+
+/* Lane B */
+static void lane_b_support_artifacts(const char *scratch) {
+    static const char *const dirs[] = {"kept", "originals", "admin-source", "admin-source/admin", "update", "Logs", "Logs/reports"};
+    static const char *const files[] = {
+        "kept/Set-1_a.kept", "kept/Set-1_a.manifest", ("originals/" SAVED_MODEL),
+        "originals/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.engine",
+        "originals/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.onnx.damaged",
+        "admin-source/rbstemsplus-bridge-win-x64.dll", "admin-source/admin/RB Stems Plus.exe",
+        "update/payload.json", "update/payload.json.sig", "Logs/bridge.log.1",
+        "Logs/reports/RB Stems Plus report 2026-11-20 120003.zip",
+    };
+    static const char *const unknown[] = {
+        "kept/My Notes.kept", "originals/personal.engine", "admin-source/other.dll",
+        "admin-source/admin/personal.exe", "update/other.json", "Logs/watcher.log.1",
+        "Logs/reports/other.zip", "Logs/reports/RB Stems Plus report 2026-11-20 notes.zip",
+    };
+    char sup[1100], p[1400];
+    for (int keep = 0; keep < 2; keep++) {
+        snprintf(sup, sizeof sup, "%s/lane-b-support-%d", scratch, keep);
+        if (mkdir(sup, 0755)) abort();
+        for (size_t i = 0; i < sizeof dirs / sizeof dirs[0]; i++) {
+            snprintf(p, sizeof p, "%s/%s", sup, dirs[i]);
+            if (mkdir(p, 0755)) abort();
+        }
+        for (size_t i = 0; i < sizeof files / sizeof files[0]; i++) {
+            snprintf(p, sizeof p, "%s/%s", sup, files[i]);
+            spit_n(p, 1);
+        }
+        if (keep) {
+            for (size_t i = 0; i < sizeof unknown / sizeof unknown[0]; i++) {
+                snprintf(p, sizeof p, "%s/%s", sup, unknown[i]);
+                spit_n(p, 1);
+            }
+        }
+        native_steps_env e = {.support = sup, .log = f_log, .remove_empty_dir_at = f_rmdir};
+        CHECK(native_remove_own_folders(&e, sup, 0) == keep && there(scratch, keep ? "lane-b-support-1" : "lane-b-support-0") == keep,
+              "F5: support remains exactly when unknown artifacts are present");
+        for (size_t i = 0; i < sizeof files / sizeof files[0]; i++)
+            CHECK(!there(sup, files[i]), "F5: uninstall removes %s", files[i]);
+        if (keep) {
+            for (size_t i = 0; i < sizeof unknown / sizeof unknown[0]; i++)
+                CHECK(there(sup, unknown[i]), "F5: uninstall keeps %s", unknown[i]);
+        }
+    }
+}
+
+static void lane_b_pending_cleanup(const char *scratch) {
+    char sup[1100], cache[1200], moved[1200], p[1400], pending[1400], identity[NS_CACHE_IDENTITY_MAX];
+    snprintf(sup, sizeof sup, "%s/lane-b-pending", scratch);
+    snprintf(cache, sizeof cache, "%s/Cache", sup);
+    snprintf(moved, sizeof moved, "%s/moved", sup);
+    snprintf(pending, sizeof pending, "%s/%s", sup, NS_PENDING_DELETION);
+    if (mkdir(sup, 0755)) abort();
+    native_steps_env e = {.support = sup, .log = f_log, .remove_tree_at = f_rm};
+    native_pc_cache_create(&e, cache);
+    if (native_pc_cache_identity(&e, cache, identity)) abort();
+    native_steps_test_fault = f_fault;
+    fault_op = NS_FAULT_OPEN;
+    const int retry[] = {EACCES, EBUSY, ELOOP};
+    for (size_t i = 0; i < sizeof retry / sizeof retry[0]; i++) {
+        fault_name = cache;
+        fault_rc = retry[i];
+        int rc = native_this_pc_remove_stems(&e, cache, identity);
+        char *saved = NULL;
+        size_t len = 0;
+        CHECK(rc == 1 && !fault_name && !plat_read_file(pending, sizeof identity, &saved, &len) &&
+                  len == strlen(identity) && !memcmp(saved, identity, len),
+              "F6: refused or transient open (%d) records the confirmed identity and retries", retry[i]);
+        free(saved);
+        fault_name = NULL;
+        if (native_support_remove(sup, NS_PENDING_DELETION)) abort();
+    }
+    native_steps_test_fault = NULL;
+
+    if (native_support_write(sup, NS_PENDING_DELETION, identity, strlen(identity))) abort();
+    snprintf(p, sizeof p, "%s/%s", cache, NS_PC_MARKER);
+    if (unlink(p)) abort();
+    plat_stat before, after;
+    if (plat_stat_path(pending, 0, &before)) abort();
+    CHECK(native_this_pc_remove_stems(&e, cache, identity) == 1 &&
+              !plat_stat_path(pending, 0, &after) && plat_id_same(before.id, after.id),
+          "F6: an unverifiable identity leaves the existing retry record in place");
+    if (rename(cache, moved) || symlink(moved, cache)) abort();
+    CHECK(native_this_pc_remove_stems(&e, cache, identity) == 1 && there(sup, NS_PENDING_DELETION),
+          "F6: a refused cache link leaves the retry record");
+    if (unlink(cache)) abort();
+    CHECK(native_this_pc_remove_stems(&e, cache, identity) == 0 && !there(sup, NS_PENDING_DELETION),
+          "F6: a missing cache clears the retry record");
+
+    native_pc_cache_create(&e, cache);
+    char replacement[NS_CACHE_IDENTITY_MAX];
+    if (native_pc_cache_identity(&e, cache, replacement) || !strcmp(replacement, identity)) abort();
+    snprintf(p, sizeof p, "%s/%.*s", cache, 64, SAVED_MODEL);
+    if (mkdir(p, 0755) || native_support_write(sup, NS_PENDING_DELETION, identity, strlen(identity))) abort();
+    struct stat st;
+    CHECK(native_this_pc_remove_stems(&e, cache, identity) == 0 && !there(sup, NS_PENDING_DELETION) && !stat(p, &st),
+          "F6: a verified replacement clears the retry record and keeps the replacement's models");
+}
+
+static void lane_b_whole_removal(const char *scratch) {
+    static const char id[] = "0e8a1d84-4672-4f70-8b0a-2c356a48d563";
+    static const char rel[] = "lane-b-external/" PATHS_CACHE_FOLDER;
+    char external[1300], sup[1100], cache[1200], path[1500], name[256], err[128], identity[NS_CACHE_IDENTITY_MAX];
+    native_steps_env e = {.support = sup, .log = f_log, .remove_tree_at = f_rm, .remove_empty_dir_at = f_rmdir};
+    make_location(scratch, "lane-b-external", id, external, sizeof external);
+    plat_stat st;
+    if (plat_stat_path(external, 0, &st)) abort();
+    native_location_identity(st.id, identity);
+    race_do = race_file;
+    int rc = native_remove_location_under(&e, scratch, rel, id, 1, name, err, identity);
+    race_do = NULL;
+    CHECK(rc == 7 && there(external, "late-file") && there(external, ".rbstemsplus-cache"),
+          "F2: external removal failure keeps the late entry and restores ownership");
+    snprintf(path, sizeof path, "%s/late-file", external);
+    if (unlink(path) || plat_stat_path(external, 0, &st)) abort();
+    native_location_identity(st.id, identity);
+    CHECK(!native_remove_location_under(&e, scratch, rel, id, 1, name, err, identity) && !there(scratch, rel),
+          "F2: external removal can be authorized and retried");
+
+    snprintf(sup, sizeof sup, "%s/lane-b-clear", scratch);
+    snprintf(cache, sizeof cache, "%s/Cache", sup);
+    if (mkdir(sup, 0755)) abort();
+    native_pc_cache_create(&e, cache);
+    if (native_pc_cache_identity(&e, cache, identity)) abort();
+    int link;
+    race_do = race_file;
+    rc = native_clear_cache(&e, cache, identity, 1, &link);
+    race_do = NULL;
+    CHECK(rc == 1 && there(cache, "late-file") && !native_pc_cache_identity(&e, cache, identity),
+          "F2: This PC removal failure keeps the late entry and restores ownership");
+    snprintf(path, sizeof path, "%s/late-file", cache);
+    if (unlink(path)) abort();
+    CHECK(!native_clear_cache(&e, cache, identity, 1, &link) && !there(sup, "Cache"),
+          "F2: This PC removal can be authorized and retried");
+
+    snprintf(sup, sizeof sup, "%s/lane-b-unlink", scratch);
+    snprintf(cache, sizeof cache, "%s/Cache", sup);
+    if (mkdir(sup, 0755)) abort();
+    native_pc_cache_create(&e, cache);
+    if (native_pc_cache_identity(&e, cache, identity)) abort();
+    native_steps_test_fault = f_fault;
+    fault_op = NS_FAULT_UNLINK_MARKER;
+    fault_name = NS_PC_MARKER;
+    fault_rc = ENOENT;
+    rc = native_clear_cache(&e, cache, identity, 1, &link);
+    native_steps_test_fault = NULL;
+    CHECK(rc == 1 && !fault_name && there(sup, "Cache"), "F2: a missing marker during unlink cannot report successful removal");
+    fault_name = NULL;
+}
+
+static void lane_b_held_descendant(const char *scratch) {
+    static const char id[] = "0e8a1d84-4672-4f70-8b0a-2c356a48d563";
+    static const char rel[] = "lane-b-held-tree/" PATHS_CACHE_FOLDER;
+    char loc[1300], p[1500], name[256], err[128];
+    make_location(scratch, "lane-b-held-tree", id, loc, sizeof loc);
+    snprintf(p, sizeof p, "%s/ancestor", loc);
+    if (mkdir(p, 0755)) abort();
+    snprintf(p, sizeof p, "%s/ancestor/in-use", loc);
+    if (mkdir(p, 0755)) abort();
+    snprintf(p, sizeof p, "%s/ancestor/in-use/stems", loc);
+    spit_n(p, 1);
+    snprintf(p, sizeof p, "%s/sibling", loc);
+    spit_n(p, 1);
+    native_steps_env e = {.log = f_log, .remove_tree_at = f_rm, .remove_empty_dir_at = f_rmdir};
+    fault_op = NS_FAULT_OPEN;
+    fault_name = "in-use";
+    fault_rc = EBUSY;
+    native_steps_test_hold_cache_tree = 1;
+    native_steps_test_fault = f_fault;
+    int rc = native_remove_location_under(&e, scratch, rel, id, 1, name, err, NULL);
+    native_steps_test_fault = NULL;
+    CHECK(rc == 7 && !fault_name && there(loc, "ancestor/in-use/stems") && there(loc, ".rbstemsplus-cache") && !there(loc, "sibling"),
+          "L1: a failed hold keeps the entire descendant and its ancestors; siblings can still be removed");
+    fault_name = NULL;
+    native_steps_test_hold_cache_tree = 0;
+}
+
+/* Lane A, F1: native This PC initialization shares the bridge's ownership policy. */
+static void t_lane_a_pc_cache_create(const char *scratch) {
+    char support[NS_PATH_MAX], cache[NS_PATH_MAX], marker[NS_PATH_MAX], tmp[NS_PATH_MAX], data[NS_PATH_MAX];
+    char identity[NS_CACHE_IDENTITY_MAX];
+    struct stat st;
+    mkp(support, sizeof support, scratch, "lane-a-support");
+    snprintf(cache, sizeof cache, "%s/Cache", support);
+    snprintf(marker, sizeof marker, "%s/this-pc-owner", cache);
+    snprintf(tmp, sizeof tmp, "%s/.this-pc-owner.tmp", cache);
+    snprintf(data, sizeof data, "%s/keep.txt", cache);
+    native_steps_env e = {.support = support, .log = f_log, .remove_empty_dir_at = f_rmdir};
+
+    if (mkdir(cache, 0755)) abort();
+    native_pc_cache_create(&e, cache);
+    CHECK(!native_pc_cache_identity(&e, cache, identity), "F1: native init recovers an empty slot");
+    char part[NS_CACHE_IDENTITY_MAX];
+    snprintf(part, sizeof part, "%s", identity);
+    if (unlink(marker) && errno != ENOENT) abort();
+    FILE *f = fopen(marker, "wb");
+    if (!f || fwrite(part, 1, 5, f) != 5 || fclose(f)) abort();
+    f = fopen(tmp, "wb");
+    if (!f || fwrite(part, 1, 8, f) != 8 || fclose(f)) abort();
+    native_pc_cache_create(&e, cache);
+    CHECK(!native_pc_cache_identity(&e, cache, identity) && stat(tmp, &st) && errno == ENOENT,
+          "F1: native init recovers a slot containing only partial marker files");
+
+    if (unlink(marker) && errno != ENOENT) abort();
+    spit_n(marker, 5);
+    native_pc_cache_create(&e, cache);
+    CHECK(native_pc_cache_identity(&e, cache, identity) && !stat(marker, &st) && st.st_size == 5,
+          "F1: a reserved filename alone does not authorize recovery");
+    if (unlink(marker) && errno != ENOENT) abort();
+    spit_n(data, 12);
+    spit_n(marker, 5);
+    native_pc_cache_create(&e, cache);
+    CHECK(native_pc_cache_identity(&e, cache, identity) && !stat(data, &st) && st.st_size == 12 &&
+          !stat(marker, &st) && st.st_size == 5, "F1: native init leaves a populated unowned slot alone");
+
+    if (unlink(data) || unlink(marker) || (unlink(tmp) && errno != ENOENT) || rmdir(cache)) abort();
+    fault_op = NS_FAULT_OPEN_CREATED;
+    fault_name = cache;
+    fault_rc = EIO;
+    native_steps_test_fault = f_fault;
+    native_pc_cache_create(&e, cache);
+    native_steps_test_fault = NULL;
+    CHECK(!fault_name && stat(cache, &st) && errno == ENOENT, "F1: native init rolls back a newly created slot if ownership cannot be recorded");
+    native_pc_cache_create(&e, cache);
+    CHECK(!native_pc_cache_identity(&e, cache, identity), "F1: native init can retry after the failure");
+}
+
+static atomic_int pc_probe_started, pc_probe_release;
+
+static int block_pc_cache_open(int op, const char *name) {
+    if (op != NS_FAULT_OPEN || !strstr(name, "/pc-deadline-support/Cache")) return 0;
+    atomic_store(&pc_probe_started, 1);
+    for (int i = 0; i < 1000 && !atomic_load(&pc_probe_release); i++) plat_sleep_ms(1);
+    atomic_store(&pc_probe_started, 0);
+    return 0;
+}
+
+static void t_pc_cache_identity_deadline(const char *scratch) {
+    char support[NS_PATH_MAX], cache[NS_PATH_MAX], identity[NS_CACHE_IDENTITY_MAX];
+    snprintf(support, sizeof support, "%s/pc-deadline-support", scratch);
+    if (mkdir(support, 0755)) abort();
+    snprintf(cache, sizeof cache, "%s/Cache", support);
+    native_steps_env e = {.support = support};
+    native_pc_cache_create(&e, cache);
+    if (native_pc_cache_identity(&e, cache, identity)) abort();
+    native_steps_test_fault = block_pc_cache_open;
+    int rc = native_pc_cache_identity_bounded(support, cache, plat_now_mono_ns() + 80000000, identity);
+    CHECK(rc == NL_TIMEOUT && atomic_load(&pc_probe_started) && !identity[0],
+          "R2: a blocked local ownership probe times out without granting a deletion identity (%d)", rc);
+    atomic_store(&pc_probe_release, 1);
+    native_steps_test_fault = NULL;
 }

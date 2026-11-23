@@ -77,6 +77,57 @@ static char *list_of(const char *item, int n) {
 
 static int decode(const char *s) { return payload_decode(s, strlen(s), &m); }
 
+static int bound_ort(const char *version, const char *sha) {
+    const char *actual = payload_win_ort_for(&m, version);
+    return actual && !strcmp(actual, sha);
+}
+
+#define ORT_BIND_19 "{\"rekordbox\": \"7.2.19\", \"sha256\": \"" H("6") "\"}"
+#define ORT_BIND_20 "{\"rekordbox\": \"7.2.20\", \"sha256\": \"" H("8") "\"}"
+
+static void test_ort_bindings(const char *old) {
+    char *bound = edit(old, "[\"7.2.19\"], \"ort_sha256\": [\"" H("6") "\"]",
+                       "[\"7.2.19\", \"7.2.20\"], \"ort_sha256\": [\"" H("6") "\", \"" H("8") "\"], "
+                       "\"ort\": [" ORT_BIND_20 ", " ORT_BIND_19 "], \"ort_code_sha256\": \"" H("9") "\"");
+    CHECK(decode(bound) == PAYLOAD_OK && m.n_win_ort_bind == 2 && !strcmp(m.win_ort_code_sha256, H("9")),
+          "the version bindings and shared code digest are decoded");
+    CHECK(bound_ort("7.2.19", H("6")) && bound_ort("7.2.20", H("8")), "each version has its own original hash");
+    CHECK(bound_ort("7.2.19.0342", H("6")) && bound_ort("7.2.20.0001", H("8")), "dotted build suffixes inherit the binding");
+    CHECK(bound_ort("7.2.19", H("6")) && !payload_win_ort_for(&m, "7.2.190") && !payload_win_ort_for(&m, "7.2.19x")
+              && !payload_win_ort_for(&m, "7.2.21") && !payload_win_ort_for(&m, NULL), "only the listed version or its dotted prefix binds");
+
+    char *short_list = edit(old, "[\"7.2.19\"], \"ort_sha256", "[\"7.2\"], \"ort_sha256");
+    CHECK(decode(short_list) == PAYLOAD_NOT_VALID, "a Windows list cannot authorize a whole minor series");
+    free(short_list);
+
+    char *build = edit(bound, "7.2.20\"], \"ort_sha256", "7.2.19.0342\"], \"ort_sha256");
+    char *more_specific = edit(build, "[" ORT_BIND_20 ", " ORT_BIND_19 "]",
+                               "[" ORT_BIND_19 ", {\"rekordbox\": \"7.2.19.0342\", \"sha256\": \"" H("8") "\"}]");
+    CHECK(decode(more_specific) == PAYLOAD_NOT_VALID, "a Windows list names releases rather than individual builds");
+    free(more_specific);
+    free(build);
+
+    static const struct { const char *from, *to, *why; } invalid[] = {
+        {ORT_BIND_20 ", ", "", "missing version binding"},
+        {ORT_BIND_20, ORT_BIND_19, "duplicate version binding"},
+        {ORT_BIND_20, "{\"rekordbox\": \"7.2.21\", \"sha256\": \"" H("8") "\"}", "unknown version"},
+        {ORT_BIND_20, "{\"rekordbox\": \"7.2.20.0001\", \"sha256\": \"" H("8") "\"}", "version only matches by prefix"},
+        {ORT_BIND_20, "{\"rekordbox\": \"7.2.20\", \"sha256\": \"" H("a") "\"}", "unlisted original hash"},
+        {"\"ort_code_sha256\"", "\"other\"", "missing shared code digest"},
+        {"\"ort_code_sha256\": \"" H("9") "\"", "\"ort_code_sha256\": \"" H("A") "\"", "malformed shared code digest"},
+        {"[" ORT_BIND_20 ", " ORT_BIND_19 "]", "null", "null binding list"},
+        {ORT_BIND_20, "1", "non-object binding"},
+    };
+    for (size_t i = 0; i < sizeof invalid / sizeof invalid[0]; i++) {
+        char *bad = edit(bound, invalid[i].from, invalid[i].to);
+        CHECK(decode(bad) == PAYLOAD_NOT_VALID, "%s is refused", invalid[i].why);
+        free(bad);
+    }
+    CHECK(decode(bound) == PAYLOAD_OK && bound_ort("7.2.19", H("6")) && decode(old) == PAYLOAD_OK && m.n_win_ort_bind == 0
+              && !m.win_ort_code_sha256[0] && !payload_win_ort_for(&m, "7.2.19"), "an older payload clears previously decoded bindings");
+    free(bound);
+}
+
 void test_payload(void) {
     /* -- versions */
     CHECK(payload_is_release_version("1.5.0") && payload_is_release_version("123456789.1.1"), "release versions");
@@ -103,6 +154,7 @@ void test_payload(void) {
           "its lists are read");
     CHECK(!strcmp(m.model.file, "stemsplus-model.onnx") && m.model.size == 308572524 && m.n_previous_models == 1 && m.previous_models[0][0] == 'd',
           "the shared model");
+    test_ort_bindings(fin);
     char *carried = build("1.5.1", 1, "1.5.0");
     CHECK(decode(carried) == PAYLOAD_OK && !strcmp(m.win_app.version, "1.5.0"), "a carried Windows app (older than the release)");
     char *newer = build("1.5.0", 1, "1.5.1");

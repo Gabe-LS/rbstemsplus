@@ -155,6 +155,33 @@ int payload_version_cmp(const char *a, const char *b) {
     return 0;
 }
 
+/* The length of a listed version when it matches, including dotted build suffixes. */
+static size_t win_version_prefix(const char *listed, const char *version) {
+    size_t n = strlen(listed);
+    return n && !strncmp(version, listed, n) && (!version[n] || version[n] == '.') ? n : 0;
+}
+
+int payload_win_rekordbox_supported(const payload_manifest *m, const char *version) {
+    if (!m || !m->has_windows || !version || !version[0]) return 0;
+    for (int i = 0; i < m->n_win_rekordbox; i++)
+        if (win_version_prefix(m->win_rekordbox[i], version)) return 1;
+    return 0;
+}
+
+const char *payload_win_ort_for(const payload_manifest *m, const char *product_version) {
+    if (!m || !m->has_windows || !product_version || !product_version[0]) return NULL;
+    const char *sha = NULL;
+    size_t longest = 0;
+    for (int i = 0; i < m->n_win_ort_bind; i++) {
+        size_t n = win_version_prefix(m->win_ort_bind[i].rekordbox, product_version);
+        if (n > longest) {
+            longest = n;
+            sha = m->win_ort_bind[i].sha256;
+        }
+    }
+    return sha;
+}
+
 int payload_is_sha256(const char *s) {
     if (!s) return 0;
     for (int i = 0; i < 64; i++)
@@ -251,6 +278,35 @@ static int mac_part(const jval *root, const char *payload_version) {
         && payload_is_release_version(av) && payload_is_sha256(as) && payload_is_sha256(bs);
 }
 
+static int win_ort_bindings(const jval *compat, payload_manifest *m) {
+    const jval *ort = json_get(compat, "ort");
+    if (!ort) return 1;
+    if (ort->type != J_ARR || ort->n != (size_t)m->n_win_rekordbox) return 0;
+    const char *code = req_str(compat, "ort_code_sha256");
+    if (!payload_is_sha256(code)) return 0;
+
+    int seen[PAYLOAD_LIST_MAX] = {0};
+    for (size_t i = 0; i < ort->n; i++) {
+        const jval *binding = &ort->items[i];
+        const char *version = req_str(binding, "rekordbox"), *sha = req_str(binding, "sha256");
+        if (!version || !sha) return 0;
+
+        int v = 0;
+        while (v < m->n_win_rekordbox && strcmp(version, m->win_rekordbox[v])) v++;
+        if (v == m->n_win_rekordbox || seen[v]) return 0;
+        seen[v] = 1;
+
+        int h = 0;
+        while (h < m->n_win_ort_sha256 && strcmp(sha, m->win_ort_sha256[h])) h++;
+        if (h == m->n_win_ort_sha256) return 0;
+        strcpy(m->win_ort_bind[i].rekordbox, m->win_rekordbox[v]);
+        strcpy(m->win_ort_bind[i].sha256, m->win_ort_sha256[h]);
+    }
+    strcpy(m->win_ort_code_sha256, code);
+    m->n_win_ort_bind = (int)ort->n;
+    return 1;
+}
+
 static int windows_block(const jval *w, payload_manifest *m) {
     if (w->type != J_OBJ) return 0;
     const jval *app = json_get(w, "app"), *bridge = json_get(w, "bridge"), *compat = json_get(w, "compatible");
@@ -277,11 +333,13 @@ static int windows_block(const jval *w, payload_manifest *m) {
         || !plain_name(m->win_bridge.file) || !payload_is_sha256(m->win_bridge.sha256))
         return 0;
 
-    if (!str_list(json_get(compat, "rekordbox"), plain_name, (char *)m->win_rekordbox, PAYLOAD_NAME_MAX, PAYLOAD_LIST_MAX, &m->n_win_rekordbox)
+    if (!str_list(json_get(compat, "rekordbox"), payload_is_release_version, (char *)m->win_rekordbox, PAYLOAD_NAME_MAX, PAYLOAD_LIST_MAX,
+                  &m->n_win_rekordbox)
         || !str_list(json_get(compat, "ort_sha256"), payload_is_sha256, (char *)m->win_ort_sha256, sizeof(payload_sha), PAYLOAD_LIST_MAX,
                      &m->n_win_ort_sha256)
         || !str_list(json_get(compat, "stems_engine"), plain_name, (char *)m->win_stems_engine, PAYLOAD_NAME_MAX, PAYLOAD_LIST_MAX,
-                     &m->n_win_stems_engine))
+                     &m->n_win_stems_engine)
+        || !win_ort_bindings(compat, m))
         return 0;
 
     const jval *rp = opt(w, "resampler_proved");

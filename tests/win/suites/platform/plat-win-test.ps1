@@ -1,6 +1,8 @@
 # MQ4 (models2-rr1's VM cases 1-2): common/tests/plat_win.c's plat-win-test, unelevated, on NTFS
 # (every case: MT1's ENOTEMPTY, ESTALE, ELOOP on a junction, ENOTDIR, delete-pending) and on the
-# exFAT VHDX in fat mode (the same without the junction), for each architecture here
+# exFAT VHDX in fat mode (the same without the junction), for each architecture here.
+# NTFS also exercises deleting a running image and replacing an enumerated folder with a junction.
+# Both file systems report whether the file ID changes on delete-and-recreate.
 $letterFile = 'C:\rbtest\vhd\exfat.letter'
 $fat = if (Test-Path -LiteralPath $letterFile) { (Get-Content -LiteralPath $letterFile -TotalCount 1).Trim() } else { $null }
 $ran = $false

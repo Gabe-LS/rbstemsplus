@@ -95,10 +95,10 @@ WARN="-Wall -Wextra -Wpedantic -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 SRCS="arena core dialog dialog_texts dump flow flows helper_lines ids json lights mask menus model prepare_tab schema selftest state status_tab text view watcher words"
 WIN_SRCS="win native"   # Windows-only (CORE_WIN_POLICY): in the test, fuzz and dll builds, never in lib's Mac archive
 # the dll build only: the "native" backend and the win/c and common/ code it calls (repository paths)
-DLL_WINC="win/c/core_native win/c/core_native_admin win/c/native_admin win/c/core_native_steps win/c/native_steps win/c/update_win win/c/helper_proc win/c/helper_proc_win win/c/admin win/c/admin_win
-  win/c/admin_proto win/c/update win/c/update_rules win/c/unzip win/c/compat win/c/compat_win win/c/payload win/c/payload_store win/c/fs_write win/c/sig
-  win/c/sig_bcrypt win/c/sha_memo win/c/native_facts win/c/native_config win/c/models common/marker win/c/volumes win/c/core_native_life win/c/lifecycle win/c/lifecycle_win win/c/osversion_win win/c/shell win/c/afterexit win/c/afterexit_win win/c/afterexit_self_win win/c/host_facts win/c/native_location common/cfg_ini common/path_rules common/plat_win"
-TESTS="tests/unit.c tests/vectors.c tests/pure.c tests/dfuzz.c tests/flows_test.c tests/view_test.c tests/win_texts.c tests/win_front.c"      # the unit tests' sources, relative to core/
+DLL_WINC="win/c/core_native win/c/core_native_admin win/c/native_admin win/c/core_native_steps win/c/native_steps win/c/native_choice_win win/c/update_win win/c/helper_proc win/c/helper_proc_win win/c/admin win/c/admin_win win/c/core_shell_files
+  win/c/admin_proto win/c/update win/c/update_rules win/c/unzip win/c/compat win/c/compat_win win/c/inventory win/c/receipt win/c/pe_code win/c/core_win_refresh win/c/payload win/c/payload_store win/c/fs_write win/c/dismissed win/c/sig
+  win/c/sig_bcrypt win/c/sha_memo win/c/native_facts win/c/native_config win/c/models common/marker win/c/volumes win/c/volumes_win win/c/core_native_life win/c/lifecycle win/c/lifecycle_win win/c/osversion_win win/c/shell win/c/afterexit win/c/afterexit_win win/c/afterexit_self_win win/c/host_facts win/c/native_location win/c/report win/c/report_build win/c/report_win win/c/notify_win common/cfg_ini common/path_rules common/plat_win"
+TESTS="tests/unit.c tests/vectors.c tests/pure.c tests/dfuzz.c tests/flows_test.c tests/view_test.c tests/win_texts.c tests/win_menus.c tests/win_front.c"      # the unit tests' sources, relative to core/
 
 usage() { echo "usage: $0 lib OUT [--test-hooks [--broken-selftest]] | dll OUT [--test-hooks [--test-key PEM]] | test OUT plain|asan|asanrel|tsan|tsanrel mac|win | fuzz OUT mac|win | swift OUT | ids OUT | tables OUT | srcs | tests | vectors OUT" >&2; exit 2; }
 # relative names, compiled from core/ (the repository's path has spaces)
@@ -314,8 +314,9 @@ dll)
     done
     # core_win.h's entry points (the WPF shell's one copy, process start time, CriticalWork and cheap
     # facts) and the stub copy's after-exit (update_shell.h, release.md T11) are exported
-    for e in core_win_one_take core_win_one_window core_win_one_window_close core_win_one_close core_win_process_start \
-             core_win_critical_running core_win_critical_wait core_win_critical_close core_win_after_exit core_win_cheap_facts core_win_warm_facts; do
+    for e in core_win_one_take core_win_one_window core_win_one_window_close core_win_one_close core_win_process_start core_win_token_check \
+             core_win_critical_running core_win_critical_wait core_win_critical_close core_win_after_exit core_win_cheap_facts core_win_warm_facts \
+             core_win_rekordbox_generation; do
       printf '%s\n' "$dump" | sed -n '/^Export Table:/,/^$/p' | grep -qE " $e\$" || { echo "core/build.sh: $dll doesn't export $e" >&2; exit 1; }
     done
     # a test-hooks DLL takes the harness's fake helper (core_win.h); a release one can't (below)

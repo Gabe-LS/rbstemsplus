@@ -1,0 +1,19 @@
+# W13b N1's real-fact negative fixtures. Run from a reverted snapshot and a matching
+# Prepare-enabled TEST payload (bootstrap installs the app without changing Stems Cache).
+# The VM operator selects the expected case with a single line in C:\rbtest\prepare-facts.txt:
+#   facts-speed    the closed fixture rekordbox saved "Prioritize speed" in its real settings
+#   facts-unlisted verified rekordbox 7.2.19, TEST compat list omits it, Stems Cache ORT present
+#   facts-entry    verified/listed rekordbox, entry-only Stems Cache bridge without kept=1
+# Run once per case. No probe.conf or launch of rekordbox. Never answer an OS prompt.
+include lib/vmlib.ps1
+include uninstall/cases/unlib.ps1
+include shell-ui/shelllib.ps1
+include worker/rblib.ps1
+include prepare/app-lib.ps1
+need http
+need vm
+need file repo/core/texts.def
+need file dist-test/bootstrap.ps1
+need file vm/uia/rbui/rbui.exe
+user 600 install bootstrap/install.ps1
+user 180 negative-fact prepare/fact-fixture.ps1

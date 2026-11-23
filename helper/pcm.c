@@ -1,8 +1,8 @@
 /* pcm.c: WAV, AIFF and FLAC for the Windows helper, and the dispatch by content (pcm.h). What
  * AudioToolbox does on the Mac (decode.c's probe and decode_pcm), done from the file's bytes:
- *  - WAV (RIFF and RF64): PCM 8 (unsigned), 16, 24, 32 bits, IEEE float 32 and 64, both also as
+ *  - WAV (RIFF and RF64): PCM 8 (unsigned), 16, 24, 32 bits and IEEE float 32, also as
  *    WAVE_FORMAT_EXTENSIBLE (a smaller valid width in a wider container reads as the container:
- *    the samples are left-justified there). Other encodings are refused.
+ *    the samples are left-justified there). IEEE float 64 is refused (T2, PC session 1).
  *  - AIFF and AIFF-C: rekordbox's own parser takes only NONE, twos, sowt and in24 (helper.md §0
  *    1, from its code): every other compression is refused, as there.
  *  - FLAC: libFLAC's stream decoder, on the file's handle (no path handed to libFLAC, so a long
@@ -80,18 +80,6 @@ int pcm_put_f32(pcm_out *o, const float *x, size_t frames) {
     return 0;
 }
 
-int pcm_put_f64(pcm_out *o, const double *x, size_t frames) {
-    if (pcm_room(o, frames)) return 1;
-    size_t ch = (size_t)o->ch, c1 = ch > 1 ? 1 : 0;
-    float *l = o->s + o->got, *r = o->s + o->cap + o->got;
-    for (size_t i = 0; i < frames; i++) {
-        l[i] = (float)x[i * ch];
-        r[i] = (float)x[i * ch + c1];
-    }
-    o->got += frames;
-    return 0;
-}
-
 /* ---------------------------------------------------------------- reading */
 
 int pcm_pread_all(plat_file f, void *buf, size_t n, int64_t off) {
@@ -131,20 +119,20 @@ int pcm_probe_wav(plat_file f, int64_t size, pcm_info *p, char *why, size_t whyn
     uint32_t rate = 0;
     /* every chunk, in any order: a later fmt or data chunk replaces an earlier one (AudioToolbox
      * takes the last of each); a data chunk that runs to the file's end ends the scan */
-    for (int64_t off = 12; off + 8 <= size;) {
+    for (int64_t off = 12; off <= size - 8;) {
         unsigned char c[8];
-        if (pcm_pread_all(f, c, 8, off)) break;
+        if (pcm_pread_all(f, c, 8, off)) goto read_error;
         uint64_t clen = le32(c + 4);
         int64_t body = off + 8;
         if (!memcmp(c, "ds64", 4) && rf64 && clen >= 16) {
             unsigned char d[16];
-            if (pcm_pread_all(f, d, 16, body)) break;
+            if (size - body < 16 || pcm_pread_all(f, d, 16, body)) goto read_error;
             ds64_data = le64(d + 8);
         } else if (!memcmp(c, "fmt ", 4) && clen >= 16) {
             unsigned char d[40] = {0};
             ext = 0;
             size_t k = clen < sizeof d ? (size_t)clen : sizeof d;
-            if (pcm_pread_all(f, d, k, body)) break;
+            if (k > (uint64_t)(size - body) || pcm_pread_all(f, d, k, body)) goto read_error;
             tag = le16(d);
             ch = le16(d + 2);
             rate = le32(d + 4);
@@ -165,7 +153,9 @@ int pcm_probe_wav(plat_file f, int64_t size, pcm_info *p, char *why, size_t whyn
             have_data = 1;
             if (len < clen) break;                          /* it runs to the end: nothing after it */
         }
-        off = body + (int64_t)clen + (int64_t)(clen & 1);   /* chunks are padded to an even size */
+        uint64_t padded = clen + (clen & 1);               /* chunks are padded to an even size */
+        if (padded > (uint64_t)(size - body)) break;
+        off = body + (int64_t)padded;
     }
     if (!have_fmt || !have_data) { snprintf(why, whyn, "a WAV file without its format or data"); return 1; }
     if (tag != WAV_PCM && tag != WAV_FLOAT) {
@@ -173,19 +163,23 @@ int pcm_probe_wav(plat_file f, int64_t size, pcm_info *p, char *why, size_t whyn
         else snprintf(why, whyn, "a WAV encoding rekordbox doesn't read (format %d)", tag);
         return 1;
     }
-    /* plain format 3 at a width other than 32 or 64 bits: AudioToolbox reads it as integer PCM
-     * (the same samples as format 1), but refuses 16 and 24 bits (measured) */
-    if (!ext && tag == WAV_FLOAT && bits != 32 && bits != 64) {
-        if (bits == 16 || bits == 24) { snprintf(why, whyn, "a %d-bit float WAV: rekordbox can't load it", bits); return 1; }
-        tag = WAV_PCM;
-    }
     /* A sample's bytes. Extensible: the container (block align / channels), a smaller valid width
      * left-justified in it. Plain format 1 and 3: the declared width in whole bytes, packed, the
      * block align ignored (AudioToolbox's rule: mono 24-bit with block align 4, 2 or 0 reads 3
      * bytes a frame). */
     int cbytes = ext ? (ch > 0 ? align / ch : 0) : (bits + 7) / 8;
-    if (ch < 1 || rate < 1 || cbytes < 1 || cbytes > 8 || bits < 1 || bits > cbytes * 8 || (ext && cbytes * ch != align)
-        || (tag == WAV_FLOAT && cbytes != 4 && cbytes != 8) || (tag == WAV_PCM && cbytes > 4)) {
+    if (tag == WAV_FLOAT) {
+        int float_bits = ext && cbytes == 8 ? 64 : bits;
+        /* T2 PC session 1: rekordbox for Windows refuses float64 WAV. For other plain format 3
+         * widths, AudioToolbox refuses 16 and 24 bits and reads non-float widths as integer PCM. */
+        if (float_bits == 64 || (!ext && (bits == 16 || bits == 24))) {
+            snprintf(why, whyn, "a %d-bit float WAV: rekordbox can't load it", float_bits);
+            return 1;
+        }
+        if (!ext && bits != 32) tag = WAV_PCM;
+    }
+    if (ch < 1 || rate < 1 || cbytes < 1 || cbytes > 4 || bits < 1 || bits > cbytes * 8 || (ext && cbytes * ch != align)
+        || (tag == WAV_FLOAT && cbytes != 4)) {
         snprintf(why, whyn, "a WAV header that doesn't add up (%d channels, %d-bit, block %d)", ch, bits, align);
         return 1;
     }
@@ -195,10 +189,13 @@ int pcm_probe_wav(plat_file f, int64_t size, pcm_info *p, char *why, size_t whyn
     p->rate = (int)rate;
     p->ch = ch;
     p->bits = cbytes * 8;
-    p->flt = tag == WAV_FLOAT ? cbytes * 8 : 0;
+    p->flt = tag == WAV_FLOAT ? 32 : 0;
     p->frames = len / ((uint64_t)cbytes * (uint64_t)ch);
     set_length(p);
     return 0;
+read_error:
+    snprintf(why, whyn, "the WAV file can't be read");
+    return 1;
 }
 
 /* ---------------------------------------------------------------- AIFF */
@@ -286,14 +283,12 @@ static int decode_raw(plat_file f, const pcm_info *p, pcm_out *o, char *why, siz
     /* frames a block: 32768, fewer when a frame is wide (many channels), so a block's buffers stay
      * within about 4 MB each */
     enum { BLOCK = 32768 };
-    size_t per = ch * (p->flt == 64 ? 8 : 4), blk;    /* the wider of a frame read and converted */
-    if (per < frame) per = frame;
-    blk = ((size_t)4 << 20) / per;
+    size_t blk = ((size_t)4 << 20) / (ch * 4);
     if (blk > BLOCK) blk = BLOCK;
     if (blk > n) blk = n;
     if (blk < 1) blk = 1;
     unsigned char *buf = malloc(blk * frame);
-    void *conv = malloc(blk * ch * (p->flt == 64 ? 8 : 4));
+    void *conv = malloc(blk * ch * 4);
     int rc = 1;
     if (!buf || !conv) { snprintf(why, whyn, "out of memory"); goto done; }
     int64_t off = p->data_off;
@@ -310,10 +305,6 @@ static int decode_raw(plat_file f, const pcm_info *p, pcm_out *o, char *why, siz
             float *x = conv;
             for (size_t i = 0; i < m; i++) { uint32_t u = le32(buf + 4 * i); memcpy(&x[i], &u, 4); }
             bad = pcm_put_f32(o, x, want);
-        } else if (p->flt == 64) {
-            double *x = conv;
-            for (size_t i = 0; i < m; i++) { uint64_t u = le64(buf + 8 * i); memcpy(&x[i], &u, 8); }
-            bad = pcm_put_f64(o, x, want);
         } else {
             int32_t *x = conv;
             const unsigned char *b = buf;
@@ -353,6 +344,8 @@ static int64_t id3_skip(plat_file f, int64_t size) {
     return at;
 }
 
+static int read_flac(plat_file f, const pcm_info *p, pcm_out *o, uint64_t *frames, char *why, size_t whyn);
+
 int pcm_probe_flac(plat_file f, int64_t size, pcm_info *p, char *why, size_t whyn) {
     memset(p, 0, sizeof *p);
     p->kind = PCM_FLAC;
@@ -378,12 +371,12 @@ int pcm_probe_flac(plat_file f, int64_t size, pcm_info *p, char *why, size_t why
         mb += 4 + ((int64_t)bh[1] << 16 | bh[2] << 8 | bh[3]);
     }
     if (mb >= size) { snprintf(why, whyn, "a FLAC file without audio frames"); return 1; }
-    if (!total) { snprintf(why, whyn, "a FLAC file that doesn't give its length"); return 1; }
     p->rate = (int)rate;
     p->ch = ch;
     p->bits = bits;
     p->frames = total;
     p->data_off = at;                                     /* the fLaC, past any ID3v2 tags */
+    if (!total && read_flac(f, p, NULL, &p->frames, why, whyn)) return 1;
     set_length(p);
     return 0;
 }
@@ -394,7 +387,9 @@ typedef struct {
     plat_file f;
     int64_t base, pos, size;
     pcm_out *o;
-    int bits, err, over;
+    const pcm_info *p;
+    uint64_t frames;
+    int err, over;
 } flac_io;
 
 static FLAC__StreamDecoderReadStatus fl_read(const FLAC__StreamDecoder *d, FLAC__byte b[], size_t *n, void *c) {
@@ -433,15 +428,24 @@ static FLAC__StreamDecoderWriteStatus fl_write(const FLAC__StreamDecoder *d, con
     flac_io *io = c;
     pcm_out *o = io->o;
     size_t want = fr->header.blocksize;
-    if (fr->header.bits_per_sample != (unsigned)io->bits || (int)fr->header.channels != o->ch) {
+    if (fr->header.bits_per_sample != (unsigned)io->p->bits || fr->header.channels != (unsigned)io->p->ch ||
+        fr->header.sample_rate != (unsigned)io->p->rate) {
         io->err = 1;                    /* a frame unlike STREAMINFO */
         return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
+    }
+    if (!o) {                           /* length of a stream written without a sample count */
+        if (want > SIZE_MAX / (2 * sizeof(float)) - 1 - io->frames) {
+            io->over = 1;
+            return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
+        }
+        io->frames += want;
+        return FLAC__STREAM_DECODER_WRITE_STATUS_CONTINUE;
     }
     int room = pcm_room(o, want);
     if (room) { io->over = room == 1; io->err = room != 1; return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT; }
     /* as pcm_put_i32, from libFLAC's planar right-justified samples */
     const float k = 1.0f / 2147483648.0f;
-    int sh = 32 - io->bits;
+    int sh = 32 - io->p->bits;
     const FLAC__int32 *a = buf[0], *b = buf[o->ch > 1 ? 1 : 0];
     float *l = o->s + o->got, *r = o->s + o->cap + o->got;
     for (size_t i = 0; i < want; i++) {
@@ -457,10 +461,10 @@ static void fl_error(const FLAC__StreamDecoder *d, FLAC__StreamDecoderErrorStatu
     ((flac_io *)c)->err = 1;
 }
 
-static int decode_flac(plat_file f, const pcm_info *p, pcm_out *o, char *why, size_t whyn) {
+static int read_flac(plat_file f, const pcm_info *p, pcm_out *o, uint64_t *frames, char *why, size_t whyn) {
     plat_stat st;
     if (plat_file_stat(f, &st)) { snprintf(why, whyn, "the file can't be read"); return 1; }
-    flac_io io = {f, p->data_off, 0, st.size - p->data_off, o, p->bits, 0, 0};
+    flac_io io = {f, p->data_off, 0, st.size - p->data_off, o, p, 0, 0, 0};
     FLAC__StreamDecoder *d = FLAC__stream_decoder_new();
     if (!d) { snprintf(why, whyn, "out of memory"); return 1; }
     int rc = 1;
@@ -468,11 +472,14 @@ static int decode_flac(plat_file f, const pcm_info *p, pcm_out *o, char *why, si
         != FLAC__STREAM_DECODER_INIT_STATUS_OK) {
         snprintf(why, whyn, "libFLAC can't start");
     } else if (!FLAC__stream_decoder_process_until_end_of_stream(d) || io.err) {
-        if (io.over) snprintf(why, whyn, "longer than its stated length");
+        if (io.over) snprintf(why, whyn, "%s", o ? "longer than its stated length" : "a FLAC file that's too long");
         else snprintf(why, whyn, "decoding stopped with an error");
-    } else if (o->got != (size_t)p->frames) {
+    } else if (o && o->got != (size_t)p->frames) {
         snprintf(why, whyn, "decoded %zu samples, the file says %zu", o->got, (size_t)p->frames);
+    } else if (!o && !io.frames) {
+        snprintf(why, whyn, "a FLAC file without audio frames");
     } else {
+        if (frames) *frames = io.frames;
         rc = 0;
     }
     FLAC__stream_decoder_delete(d);
@@ -488,8 +495,14 @@ int pcm_probe(plat_file f, const char *ext, pcm_info *p, char *why, size_t whyn)
     if (!strcmp(ext, ".mp3")) return mp3_probe(f, st.size, p, why, whyn);
     unsigned char h[12] = {0};
     if (st.size >= 12 && pcm_pread_all(f, h, 12, 0)) { snprintf(why, whyn, "the file can't be read"); return 1; }
-    if ((!memcmp(h, "RIFF", 4) || !memcmp(h, "RF64", 4)) && !memcmp(h + 8, "WAVE", 4)) return pcm_probe_wav(f, st.size, p, why, whyn);
-    if (!memcmp(h, "FORM", 4) && (!memcmp(h + 8, "AIFF", 4) || !memcmp(h + 8, "AIFC", 4))) return pcm_probe_aiff(f, st.size, p, why, whyn);
+    int wav = (!memcmp(h, "RIFF", 4) || !memcmp(h, "RF64", 4)) && !memcmp(h + 8, "WAVE", 4);
+    int aiff = !memcmp(h, "FORM", 4) && (!memcmp(h + 8, "AIFF", 4) || !memcmp(h + 8, "AIFC", 4));
+    if (wav || aiff) {
+        int rc = wav ? pcm_probe_wav(f, st.size, p, why, whyn) : pcm_probe_aiff(f, st.size, p, why, whyn);
+        if (rc) return rc;
+        if (!p->frames) { snprintf(why, whyn, "no audio"); return 1; }
+        return 0;
+    }
     if (!memcmp(h, "fLaC", 4)) return pcm_probe_flac(f, st.size, p, why, whyn);
     /* fLaC after ID3v2 tags, whatever the extension (AudioToolbox reads it as .flac, .wav, .m4a) */
     int64_t at = id3_skip(f, st.size);
@@ -497,7 +510,7 @@ int pcm_probe(plat_file f, const char *ext, pcm_info *p, char *why, size_t whyn)
     if (at > 0 && at <= st.size - 4 && !pcm_pread_all(f, g, 4, at) && !memcmp(g, "fLaC", 4)) return pcm_probe_flac(f, st.size, p, why, whyn);
     static const char *const boxes[] = {"ftyp", "moov", "mdat", "free", "skip", "wide"};
     for (size_t i = 0; i < sizeof boxes / sizeof *boxes; i++)
-        if (!memcmp(h + 4, boxes[i], 4)) return m4a_probe(f, st.size, p, why, whyn);
+        if (!memcmp(h + 4, boxes[i], 4)) return m4a_probe(f, st.size, ext, p, why, whyn);
     snprintf(why, whyn, "no audio stream RB Stems Plus can read");
     return 1;
 }
@@ -508,7 +521,7 @@ int pcm_decode(plat_file f, const pcm_info *p, pcm_out *o, char *why, size_t why
     switch (p->kind) {
     case PCM_WAV:
     case PCM_AIFF: rc = decode_raw(f, p, o, why, whyn); break;
-    case PCM_FLAC: rc = decode_flac(f, p, o, why, whyn); break;
+    case PCM_FLAC: rc = read_flac(f, p, o, NULL, why, whyn); break;
     case PCM_ALAC: {
         plat_stat st;
         rc = plat_file_stat(f, &st) ? (snprintf(why, whyn, "the file can't be read"), 1) : alac_decode(f, st.size, p, o, why, whyn);

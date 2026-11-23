@@ -13,6 +13,9 @@
 
 #ifdef CORE_WIN_POLICY
 
+/* The Windows admin client timed out before its worker connected (Win32 ERROR_TIMEOUT). */
+enum { ROOT_WIN_START_TIMEOUT = 1460 };
+
 /* The DLL's own code for the entries "native" lists. Each entry has core_host's contract (core.h:
  * the same threads, blocking, results and return values), with the backend's state st first
  * instead of the shell's ctx. An entry the backend leaves NULL stays "not provided": the core's
@@ -45,6 +48,10 @@ const char *native_core_version(const core *c);
  * whose core_new fails without it); valid while c is */
 const char *native_core_programs(const core *c);
 void native_core_log(core *c, const char *line);
+
+/* The Windows resident watcher's session callback, on the thread that created this watcher
+ * core. It runs only the prepared-playlists check, synchronously, through the host's steps. */
+void core_watch_kept(core *c);
 
 /* For the backend's PAYLOAD "check" (manifestDue's blocked part): blockedByVersionList
  * (Compat.swift), whether a feature is off only because a version isn't listed yet, decided by the

@@ -50,6 +50,9 @@ int main(int argc, char **argv) {
     snprintf(sub, sizeof sub, "%s/native_location", argv[2]);
     mkdir(sub, 0755);
     test_native_location(sub);
+    snprintf(sub, sizeof sub, "%s/location_choice", argv[2]);
+    mkdir(sub, 0755);
+    test_location_choice(sub);
     /* against Models.swift: none run only when Swift couldn't write (a sandbox), said on purpose */
     snprintf(sub, sizeof sub, "%s/model_fixtures", argv[2]);
     mkdir(sub, 0755);

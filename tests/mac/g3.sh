@@ -29,9 +29,11 @@
 #                                       one-liner installs it; build/gates/post-V.txt. The
 #                                       guest downloads from GitHub: run it while the owner is there
 #                                       (Little Snitch may ask)
-#   tests/mac/g3.sh smoke [TEMPLATE]    one fresh clone of TEMPLATE (default rb26-template): the
-#                                       guest's facts (macOS, SIP), the G3 Driver pushed and
-#                                       its Accessibility grant tried; the clone deleted
+#   tests/mac/g3.sh smoke [TEMPLATE]    one fresh clone of TEMPLATE (default rb26-template), headless
+#                                       as every clone: the guest's facts (macOS, SIP), the G3
+#                                       Driver pushed and its Accessibility grant tried, a dialog
+#                                       of macOS's own answered OK by the driver (g3-guest.sh
+#                                       dialog: the Accessibility press proven); the clone deleted
 #   tests/mac/g3.sh build               the G3 Driver (tests/mac/g3ax.swift) into build/harness/vm/
 #   tests/mac/g3.sh selftest            tests/mac/g3-test.sh (no VM)
 # OPTIONS
@@ -61,13 +63,22 @@
 # Clicks (R4.I98): the new app is driven through its probe (no click); App Management's Allow and
 # the password are emulated (DJ's TCC row, sudo without a password: recorded as emulated); the old
 # apps' buttons (no probe) are pressed through Accessibility by the G3 Driver when the clone allows
-# it, else the owner clicks in the VM's window when asked (each such step waits at most 10 minutes
+# it, else the owner clicks in the VM's screen when asked (each such step waits at most 10 minutes
 # and is recorded as an owner click). Every wait is at most 10 minutes.
+# Screens: every G3 and post-publish clone starts with tart's VNC server (vm.sh up --vnc), which
+# opens no window on the owner's Mac; nothing restarts. Where the owner must look or click, the
+# notice (G3_NOTIFY) names its vnc://HOST:PORT to open in Screen Sharing, its password only in
+# build/harness/vnc-url (0600): the core's update scenario (the watcher's notification prompt:
+# Allow), the old apps' clicks when the G3 Driver has no Accessibility, and a clone kept running
+# after a licence stop.
 # Smoke, 2026-11-12 (rb26-template, macOS 26.6.2): SIP is on and root can't write the system's
 # TCC.db ("readonly database"), so the driver's Accessibility can't be scripted: the old apps' two
 # clicks per update scenario (Install Stems Cache, Update) are the owner's, unless the owner allows
 # "G3 Driver" once in the template (the grant is for its ad-hoc code hash: a build from a changed
 # g3ax.swift or with another Swift toolchain, e.g. after an Xcode update, voids the grant).
+# Screenshots (2026-11-17): macOS's screencapture is denied in the guest, headless or not, over SSH
+# (as root, admin or DJ) and from a LaunchAgent in DJ's session alike: no Screen Recording grant
+# in the template (tccd: "kTCCServiceScreenCapture does not allow prompting; returning denied").
 set -uo pipefail
 # here: this checkout, the tools': vm.sh and its state (build/harness: the clone pointer, the
 # shared folder), the guest steps, the gate archive (one, in the tools checkout: release.md §6.2)
@@ -88,7 +99,7 @@ URL=http://192.168.64.1:8765/
 LIMIT="${G3_LIMIT:-600}"                                 # every wait, in seconds: at most 10 minutes
 [ "$LIMIT" -le 600 ] 2>/dev/null || { echo "g3.sh: G3_LIMIT must be at most 600 seconds" >&2; exit 2; }
 GITHUB=https://github.com/Gabe-LS/rbstemsplus/releases
-usage() { sed -n '2,70p' "$0"; exit 2; }
+usage() { sed -n '2,81p' "$0"; exit 2; }
 stop() { echo "g3.sh: $*" >&2; exit 2; }
 say() { echo "[$(date +%H:%M:%S)] $*"; }
 pj() { python3 -I -c 'import json, sys
@@ -169,7 +180,7 @@ licence_stop() {
   [ -n "$why" ] || why="rekordbox showed a licence text"
   KEEP_CLONE=1; ABORT=1
   [ -n "${rec:-}" ] && [ -f "$rec" ] && echo "stopped: $clone kept running: $why" >> "$rec"
-  notify_owner "G3 STOPPED in clone $clone (kept running, nothing clicked): $why"
+  notify_owner "G3 STOPPED in clone $clone (kept running, nothing clicked; open $VNC_URL in Screen Sharing, password: $STATE/vnc-url): $why"
   exit 4
 }
 # wait_cond SECS NAME ARGS…: polls the guest's condition every 5 s, at most SECS (≤ LIMIT): each
@@ -406,7 +417,7 @@ click_step() {
     fi
     [ $rc = 3 ] || { echo "FAIL $name: the G3 Driver couldn't press it (ax.log)" >> "$RUNH/result"; return 1; }
   fi
-  say "OWNER, in the VM's window ($clone): $what. Waiting up to $((LIMIT / 60)) minutes."
+  say "OWNER, in the VM's screen ($clone${VNC_URL:+, $VNC_URL in Screen Sharing, password: $STATE/vnc-url}): $what. Waiting up to $((LIMIT / 60)) minutes."
   # shellcheck disable=SC2086
   if wait_cond "$LIMIT" $cond; then echo "ok $name (the owner's click)" >> "$RUNH/result"; clicks+=("$name"); return 0; fi
   echo "FAIL $name: not done within $LIMIT s (owner click)" >> "$RUNH/result"; return 1
@@ -483,18 +494,17 @@ keep_fail_logs() {
 
 # ---- clones -------------------------------------------------------------------------------------
 
-clone=""; facts=""
-clone_up() {   # clone_up TEMPLATE: one VM at a time, a name never used before
+clone=""; facts=""; VNC_URL=""
+# clone_up TEMPLATE [clicks]: one VM at a time, a name never used before, with tart's VNC server
+# (no window; its vnc://HOST:PORT in VNC_URL); clicks: the old apps' buttons follow, so without the
+# G3 Driver's Accessibility the owner is sent the address to click there
+clone_up() {
   vms
   if [ -n "$RUNNING" ]; then echo "FAIL a VM is running ($RUNNING): one VM at a time; the run stops" >> "$RUNH/result"; ABORT=1; return 1; fi
   n_clone=$((${n_clone:-0} + 1)); local name="${G3_TEST_CLONE:-g3-$(date +%Y%m%d%H%M%S)-$$-$n_clone}"   # G3_TEST_CLONE: the selftest's
   if vm_names | grep -qx "$name"; then echo "FAIL a VM named $name exists already: the run stops" >> "$RUNH/result"; ABORT=1; return 1; fi
-  clone="$name"
-  # vm.sh up's exit 3: the template's MAC address (its one rekordbox seat) couldn't be held: the run stops
-  TEMPLATE="$1" bounded "$LIMIT" "$VM" up "$clone" > "$RUNH/vm-up.log" 2>&1; local urc=$?
-  if [ $urc = 3 ]; then echo "FAIL the clone $clone of $1 didn't come up with $1's MAC address ($(tail -1 "$RUNH/vm-up.log")): the run stops" >> "$RUNH/result"; ABORT=1; return 1; fi
-  [ $urc = 0 ] || { echo "FAIL the clone $clone of $1 didn't come up (vm-up.log)" >> "$RUNH/result"; return 1; }
-  ours || return 1
+  clone="$name"; VNC_URL=""
+  vm_up "$1" || return 1
   local p; p="$XFER/g3push-$(date +%s)$RANDOM"; rm -rf "$XFER"/g3push-*; mkdir -p "$p/bin"
   cp "$here/tests/harness/lib.sh" "$here/tests/harness/run.sh" "$here/tests/mac/g3-guest.sh" "$p/"
   [ -x "$STATE/vm/vmtool" ] && cp "$STATE/vm/vmtool" "$p/bin/"
@@ -508,6 +518,20 @@ clone_up() {   # clone_up TEMPLATE: one VM at a time, a name never used before
   grep -qx "accessibility yes" <<< "$facts" && AX=yes || AX=no
   printf '%s\n' "$facts" > "$RUNH/facts.txt"
   echo "note guest $1: $(tr '\n' ' ' <<< "$facts")" >> "$RUNH/result"
+  if [ "${2:-}" = clicks ] && { [ $AX = no ] || [ -n "${G3_NO_AX:-}" ]; }; then
+    notify_owner "G3: the old app's clicks are yours in clone $clone (the G3 Driver has no Accessibility): open $VNC_URL in Screen Sharing (password: $STATE/vnc-url)"
+  fi
+}
+# vm_up TEMPLATE: vm.sh up --vnc of the clone; VNC_URL its vnc://HOST:PORT, from vm.sh's
+# build/harness/vnc-url (the password left out)
+vm_up() {
+  # vm.sh up's exit 3: the template's MAC address (its one rekordbox seat) couldn't be held: the run stops
+  TEMPLATE="$1" bounded "$LIMIT" "$VM" up "$clone" --vnc > "$RUNH/vm-up.log" 2>&1; local urc=$?
+  if [ $urc = 3 ]; then echo "FAIL the clone $clone of $1 didn't come up with $1's MAC address ($(tail -1 "$RUNH/vm-up.log")): the run stops" >> "$RUNH/result"; ABORT=1; return 1; fi
+  [ $urc = 0 ] || { echo "FAIL the clone $clone of $1 didn't come up (vm-up.log)" >> "$RUNH/result"; return 1; }
+  ours || return 1
+  VNC_URL="$(sed -n 's|^vnc://[^@/]*@|vnc://|p' "$STATE/vnc-url" 2>/dev/null | head -1)"
+  [ -n "$VNC_URL" ] || { echo "FAIL the clone $clone of $1 came up without its VNC URL ($STATE/vnc-url)" >> "$RUNH/result"; return 1; }
 }
 # clone_down: the clone deleted, and gone from tart's list; else FAIL cleanup, its name into
 # $STATE/g3-leftover, and the run stops (exit 1). Never deletes a VM the pointer doesn't say is ours.
@@ -537,9 +561,13 @@ sc_bootstrap() {   # sc_bootstrap TEMPLATE
 }
 sc_update() {   # sc_update TEMPLATE FROM
   local g="$1" from="$2" fv; fv="$(app_of "$2")"
-  # the core's paths ask for the owner's one click (the watcher's notifications: Allow), in kept 1
-  [ "$from" = "$(core_from)" ] && notify_owner "G3: watch the tart window now; click Allow on RB Stems Plus Watcher when macOS asks (update-$from clone)"
-  clone_up "$g" || return 1
+  # the core's paths ask for the owner's one click (the watcher's notifications: Allow), in kept 1:
+  # its VNC address sent to the owner (with the old app's clicks first when there's no Accessibility)
+  if [ "$from" = "$(core_from)" ]; then
+    clone_up "$g" || return 1
+    local ax_note=""; { [ "$AX" = no ] || [ -n "${G3_NO_AX:-}" ]; } && ax_note="first the old app's clicks (no Accessibility): Install Stems Cache, then Update; then "
+    notify_owner "G3: open $VNC_URL in Screen Sharing now (password: $STATE/vnc-url); ${ax_note}click Allow on RB Stems Plus Watcher when macOS asks (update-$from clone)"
+  else clone_up "$g" clicks || return 1; fi
   stage_from "$from"
   gst prepare && serve "$(from_dir "$from")" && gst bootstrap "$URL" "$fv" && gst emulate || return 1
   click_step "$from: Stems Cache installed by the old app" "$(install_what "$from")" "cache-on" ax_install_cache "$from" || return 1
@@ -559,7 +587,7 @@ sc_update() {   # sc_update TEMPLATE FROM
 core_from() { local f l=""; for f in $froms; do l="$f"; done; echo "$l"; }
 sc_carried() {   # sc_carried TEMPLATE PREVIOUS: the new payload proven read, then its display
   local g="$1" from="$2"
-  clone_up "$g" || return 1
+  clone_up "$g" clicks || return 1
   stage_from "$from"
   gst prepare && serve "$(from_dir "$from")" && gst bootstrap "$URL" "$(app_of "$from")" && gst emulate || return 1
   click_step "$from: Stems Cache installed" "$(install_what "$from")" "cache-on" ax_install_cache "$from" || return 1
@@ -567,7 +595,7 @@ sc_carried() {   # sc_carried TEMPLATE PREVIOUS: the new payload proven read, th
 }
 sc_carried_update() {   # sc_carried_update TEMPLATE v1.0.0: its notice, and the update installs the carried app
   local g="$1" from="$2"
-  clone_up "$g" || return 1
+  clone_up "$g" clicks || return 1
   stage_from "$from"
   gst prepare && serve "$(from_dir "$from")" && gst bootstrap "$URL" "$(app_of "$from")" && gst emulate || return 1
   click_step "$from: Stems Cache installed" "$(install_what "$from")" "cache-on" ax_install_cache "$from" || return 1
@@ -727,7 +755,7 @@ smoke)
   vms; [ -z "$RUNNING" ] || stop "a VM is running ($RUNNING): one VM at a time"
   vm_session; build_driver
   RUNH="$XFER/g3-smoke-$(date +%s)"; GRUN="$VX/${RUNH##*/}"; mkdir -p "$RUNH"; : > "$RUNH/result"
-  clone_up "$g"; rc=$?
+  clone_up "$g" && if [ "$AX" = yes ]; then gst dialog; else echo "note dialog skipped: no Accessibility for the G3 Driver (the old apps' clicks are the owner's)" >> "$RUNH/result"; fi; rc=$?
   clone_down || rc=1
   cat "$RUNH/result"
   cp "$RUNH/result" "$STATE/g3-smoke.txt"
@@ -747,7 +775,7 @@ post-publish)
   # 1. the real published 1.3.0 (its own bootstrap and zip from the v1.3.0 release) updates in-app
   # from the real releases/latest (a release build: no probe; App Management and sudo emulated)
   RUNH="$XFER/g3-$stamp/post-1.3.0"; GRUN="$VX/g3-$stamp/post-1.3.0"; mkdir -p "$RUNH"; : > "$RUNH/result"
-  { clone_up "$g" && gst prepare && gst bootstrap "$GITHUB/download/v1.3.0/" 1.3.0 && gst emulate \
+  { clone_up "$g" clicks && gst prepare && gst bootstrap "$GITHUB/download/v1.3.0/" 1.3.0 && gst emulate \
     && gst switch && wait_cond 120 notice "$pubapp" \
     && click_step "the published 1.3.0: Update" "$(update_what v1.3.0)" "version $pubapp" ax_update; } || rc=1
   clone_down || rc=1

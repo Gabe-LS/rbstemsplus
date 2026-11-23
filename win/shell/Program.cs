@@ -20,6 +20,7 @@ namespace RbStemsPlus.Shell
     internal static class Program
     {
         private const int OffScreenSeconds = 30;   // the off-screen window's first frame, at most
+        private static volatile bool coreReady;
 
         [STAThread]
         private static int Main(string[] args)
@@ -34,14 +35,16 @@ namespace RbStemsPlus.Shell
             {
                 why = "rbsp-core.dll isn't this app's (" + e.GetType().Name + ": " + e.Message + ")";
             }
+            coreReady = why == null;
             string version = Version();
             string support = SupportDir();
             string appDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\');
-            var log = new LogSink(new LogBuffer(Path.Combine(support, "Logs", "app.log")));
+            var log = new LogSink(new LogBuffer(support, coreReady: coreReady));
             var update = new UpdateNative(support, appDir, version, log);
 #if SHELL_TEST
             // the TEST build's own download server, before anything can download (release.md T12)
-            if (why == null) TestHooks.SetUpdateBase(update.Log);
+            string updateBaseLine = null;
+            if (why == null) TestHooks.SetUpdateBase(line => updateBaseLine = line);
 #endif
             if (why == null) update.SetAumid();   // before the first window, the off-screen one included
 
@@ -51,8 +54,18 @@ namespace RbStemsPlus.Shell
             Marshal.Prelink(typeof(Win32).GetMethod(nameof(Win32.TerminateProcess)));
             var guard = new SwapGuard(update, () => Win32.TerminateProcess(self, 1));
             // `why` reaches the sequence: under --swap a refused core restarts the old app (no dialog)
-            StartOutcome start = StartSequence.Run(swap, why, update, () => OffScreen(ref app), guard, out int exit, out bool swapping);
-            if (start == StartOutcome.Refuse) { Refuse(why); return 1; }
+            // ...and the token first (app.md §5.9, I35): an elevated start, UAC off or a service account
+            // is refused before anything is written, the mutex taken or a --swap goes on (failed swap)
+            StartOutcome start = StartSequence.Run(swap, why, update, () => OffScreen(ref app), guard, out int exit, out bool swapping, out CoreText? refusal);
+            if (start == StartOutcome.Refuse)
+            {
+                if (why != null) Refuse(why);
+                else RefuseStart(refusal ?? CoreText.T_CANT_OPEN);
+                return 1;
+            }
+#if SHELL_TEST
+            if (updateBaseLine != null) update.Log(updateBaseLine);
+#endif
             if (start == StartOutcome.Exit) return exit;
             // the update's real start, up to its first good frame, is guarded too (Shell finishes it)
             if (swapping) guard.Arm(SwapGuard.StageMs);
@@ -82,7 +95,7 @@ namespace RbStemsPlus.Shell
                     app = new App();
                     app.InitializeComponent();
                 }
-                shell = new Shell(app.Dispatcher, log, Path.Combine(support, "window"), version, update, swapping ? guard : null, oneCopy);
+                shell = new Shell(app.Dispatcher, log, Path.Combine(support, "window"), update, swapping ? guard : null, oneCopy);
                 if (uninstall) shell.Uninstall = new UninstallOnce(true, shell.Host.Send, update.Log);
                 app.DispatcherUnhandledException += (s, e) => { shell.Host.Fail("the dispatcher", e.Exception); e.Handled = true; };
                 app.SessionEnding += (s, e) => e.Cancel = shell.QueryEndSession();
@@ -159,7 +172,7 @@ namespace RbStemsPlus.Shell
                                                 (s, e) => frame.Continue = false, app.Dispatcher);
                 w.Show();
 #if SHELL_TEST
-                TestHooks.MaybeHangOffScreen();
+                TestHooks.BeforeOffScreenFrame();
 #endif
                 if (!rendered) Dispatcher.PushFrame(frame);
                 timer.Stop();
@@ -192,14 +205,12 @@ namespace RbStemsPlus.Shell
         private static string SupportDir() =>
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "rbstemsplus");
 
-        // last-chance diagnostics: one line in app.log, whatever state the shell is in
+        // last-chance diagnostics: one line in app.log, including before the core is ready
         private static void LastChance(string line)
         {
             try
             {
-                string log = Path.Combine(SupportDir(), "Logs", "app.log");
-                Directory.CreateDirectory(Path.GetDirectoryName(log));
-                File.AppendAllText(log, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + line + "\n");
+                LogBuffer.Append(SupportDir(), DateTime.Now, line, coreReady);
             }
             catch (Exception) { }
         }
@@ -233,23 +244,17 @@ namespace RbStemsPlus.Shell
             return a != null && a.InformationalVersion.Length > 0 ? a.InformationalVersion : "0.0.0";
         }
 
-        /// core_new's config (core.h): the OS, the version, the paths of app.md §5.10 the shell
-        /// knows, and the entries the DLL runs itself. Nothing rooted in Program Files is computed
-        /// or written here (PF3): the DLL derives rekordbox's folder and ours from its one Program
-        /// Files rule (the prepare helper's --rekordbox and --ort are its own whatever the config
-        /// says), so "rekordbox" and "root_ort" stay out; "model" (rekordbox's, under %APPDATA%)
-        /// comes with models.c.
-        private static string Config(string version, string support, string native)
+        /// core_new's config (CoreConfig): this account's folders.
+        private static string Config(string version, string support, string native) =>
+            CoreConfig.Build(version, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), support,
+                             AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\'), Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                             Path.GetTempPath().TrimEnd('\\'), native);
+
+        // the start's one line under "can't open", as in the Mac's root refusal
+        private static void RefuseStart(CoreText t)
         {
-            string P(string k, string v) => Json.Quote(k) + ":" + Json.Quote(v);
-            string paths = string.Join(",",
-                P("home", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)),
-                P("support", support),
-                P("app", AppDomain.CurrentDomain.BaseDirectory.TrimEnd('\\')),
-                P("log", Path.Combine(support, "Logs")),
-                P("cache_default", Path.Combine(support, "Cache")),
-                P("tmp", Path.GetTempPath().TrimEnd('\\')));
-            return "{\"os\":\"win\",\"version\":" + Json.Quote(version) + ",\"paths\":{" + paths + "},\"native\":" + native + "}";
+            if (t == CoreText.T_CANT_OPEN) Refuse(Texts.Get(CoreText.T_CANT_OPEN));
+            else Refuse(Texts.Get(t), Texts.Get(CoreText.T_CANT_OPEN));
         }
 
         // Before the core's UI (app.md §4.4): one plain TaskDialog. With the core loaded its text

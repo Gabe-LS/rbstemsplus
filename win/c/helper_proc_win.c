@@ -26,6 +26,7 @@ NTSTATUS NTAPI NtResumeProcess(HANDLE process);
 
 struct helper_proc {
     HANDLE process, job, in_w, out_r, err_r, reader, err_reader;
+    HANDLE keeping;
     helper_tail tail;   /* the err thread's alone until the reader has waited for it */
     SRWLOCK lock;
     helper_state st;
@@ -34,6 +35,41 @@ struct helper_proc {
     helper_log_fn log;
     void *ctx;
 };
+
+/* One named event per kept set, held by its Prepare runs in this logon session. The event's
+ * lifetime follows those runs (Windows closes the handles on process exit as well). */
+static int keeping_name(const char *set, wchar_t name[128]) {
+    const wchar_t prefix[] = L"Local\\io.github.rbstemsplus.prepare.";
+    size_t n = strlen(set), at = sizeof prefix / sizeof *prefix - 1;
+    if (!n || n > 64) return 0;
+    memcpy(name, prefix, sizeof prefix);
+    for (size_t i = 0; i < n; i++) {
+        char c = set[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == '-')) return 0;
+        name[at++] = (wchar_t)c;
+    }
+    name[at] = 0;
+    return 1;
+}
+
+int helper_proc_keeping(const char *set) {
+    wchar_t name[128];
+    if (!keeping_name(set, name)) return 0;
+    HANDLE h = OpenEventW(SYNCHRONIZE, FALSE, name);
+    if (!h) return 0;
+    CloseHandle(h);
+    return 1;
+}
+
+static HANDLE keeping_event(const char *const *argv, int argc) {
+    for (int i = 0; i + 1 < argc; i++) {
+        if (strcmp(argv[i], "--keep")) continue;
+        wchar_t name[128];
+        if (keeping_name(argv[i + 1], name)) return CreateEventW(NULL, TRUE, FALSE, name);
+        break;
+    }
+    return NULL;
+}
 
 static wchar_t *wide(const char *s) {
     int n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s, -1, NULL, 0);
@@ -101,6 +137,7 @@ static DWORD WINAPI reader_main(LPVOID v) {
     /* its last lines are in; then stderr's end, then its exit */
     WaitForSingleObject(p->err_reader, INFINITE);
     WaitForSingleObject(p->process, INFINITE);
+    if (p->keeping) CloseHandle(p->keeping);
     DWORD code = 1;
     GetExitCodeProcess(p->process, &code);
     AcquireSRWLockExclusive(&p->lock);
@@ -181,6 +218,7 @@ int helper_proc_spawn(const char *exe, const char *const *argv, int argc, int ru
         goto fail;
     }
     p->process = pi.hProcess;
+    if (run) p->keeping = keeping_event(argv, argc);
     ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
     CloseHandle(in_r), in_r = NULL;
@@ -199,6 +237,7 @@ int helper_proc_spawn(const char *exe, const char *const *argv, int argc, int ru
     r = 0;
     goto done;
 fail:
+    if (p->keeping) CloseHandle(p->keeping);
     if (p->process) CloseHandle(p->process);
     if (p->job) CloseHandle(p->job);
     if (p->in_w) CloseHandle(p->in_w);

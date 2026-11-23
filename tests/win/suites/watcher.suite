@@ -1,0 +1,51 @@
+# N4's watcher rows (w6/native-step-audit: LAUNCH_AGENT_LOAD/_UNLOAD, review NS10, NS18) and N10's
+# (w6/r1-dont-ask: the native r1_dismiss step and the answer lock, review RD4's VM follow-up), from
+# "rekordbox 7.2.19 installed + stems model" (Demucs v4 copies rekordbox's model; rekordbox itself
+# is never started):
+#   tests/win/vm-run.sh stage
+#   tests/win/vm-run.sh run "rekordbox 7.2.19 installed + stems model" watcher
+# plus-install: Demucs v4 installed, the watcher's Run value and process. N10: r1-foreign makes the
+# live DLL foreign; r1-offer: the watcher opens the app, which offers Put Back and Don't Ask Again;
+# r1-dismiss: the click while this step holds the answer lock (the write waits), r1:7.2.19 written,
+# the other lines kept, the button gone; r1-foreign-2 deletes the live DLL (a new R1 state); r1-quiet: the
+# watcher's round says "not opening ... (Don't Ask Again for this version)" and opens nothing;
+# r1-restore puts Pioneer's DLL back. N4: plus-uninstall stops the watcher and removes its
+# records; plus-again brings it back; startup-off: Startup apps off, the watcher stopped, a
+# Reinstall Demucs v4 doesn't start it. The missing-live and missing-ort offers run before
+# dismissal. The ORT case installs and removes Stems Cache using worker.suite's unprompted
+# elevation fixture. sharing checks the directory operations of a rekordbox update and removal.
+# Needs a TEST build with both branches (main 90cd33f1 or later) in dist-test/. Not a
+# release.list row.
+include lib/vmlib.ps1
+include worker/rblib.ps1
+include uninstall/cases/unlib.ps1
+include uac/uaclib.ps1
+include watcher/wtlib.ps1
+need http
+need vm
+need file vm/uia/rbui/rbui.exe
+need file repo/core/texts.def
+need file dist-test/bootstrap.ps1
+need file dist-test/payload.json
+# MODE       SECS NAME              SCRIPT
+sys          120  prep              worker/prep.ps1
+user         600  install           bootstrap/install.ps1
+user         420  plus-install      watcher/plus.ps1
+sys          60   r1-missing-live  watcher/r1-foreign.ps1
+user         300  r1-offer-live    watcher/r1-offer.ps1
+sys          60   r1-restore-live  watcher/r1-restore.ps1
+user         600  r1-cache-install worker/cache-install.ps1
+sys          60   r1-missing-ort   watcher/r1-ort.ps1
+user         300  r1-offer-ort     watcher/r1-offer.ps1
+sys          60   r1-restore-ort   watcher/r1-ort.ps1
+user         420  r1-cache-remove  watcher/r1-cache-remove.ps1
+sys          240  sharing          watcher/sharing.ps1
+sys          60   r1-foreign       watcher/r1-foreign.ps1
+user         300  r1-offer          watcher/r1-offer.ps1
+user         180  r1-dismiss        watcher/r1-dismiss.ps1
+sys          60   r1-foreign-2      watcher/r1-foreign.ps1
+user         240  r1-quiet          watcher/r1-quiet.ps1
+sys          60   r1-restore        watcher/r1-restore.ps1
+user         420  plus-uninstall    watcher/plus.ps1
+user         420  plus-again        watcher/plus.ps1
+user         420  startup-off       watcher/plus.ps1

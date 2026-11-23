@@ -95,6 +95,8 @@ static void test_models_review(const char *scratch, models *m, const char *ours,
 static void test_models_vu1(const char *scratch, models *m, const char *ours, const char *pioneer);
 static void test_models_critical(const char *scratch, models *m, const char *ours, const char *pioneer);
 static void test_models_md3(const char *scratch, models *m, const char *ours, const char *pioneer);
+static void test_models_uninstall(const char *scratch, models *m);
+static void test_models_engine_tag(const char *scratch, models *m, const char *ours);
 
 void test_models(const char *scratch) {
     char ours[65], pioneer[65], pioneer2[65], other[65], why[128], p[1300];
@@ -303,6 +305,18 @@ static void m_corrupt(void *ctx) {
     put(model_path, "CORRUPTED AFTER THE RENAME");
 }
 
+static void m_move_restored_dir(void *ctx) {
+    char moved[1200];
+    snprintf(moved, sizeof moved, "%s.moved", dir);
+    if (rename(dir, moved)) abort();
+    if (ctx) {
+        if (symlink(moved, dir)) abort();
+    } else {
+        if (mkdir(dir, 0755)) abort();
+        put(model_path, "PIONEER");
+    }
+}
+
 /* MD3: the regular files in d named base or base.<digits>.<digits> (models.c's temporary names) */
 static int temps_of(const char *d, const char *base) {
     DIR *dp = opendir(d);
@@ -362,7 +376,6 @@ static void m_swap_support(void *ctx) {
 /* the review's cases (MD1, MD7, MD9): outcomes and files, never only codes */
 static void test_models_review(const char *scratch, models *m, const char *ours, const char *pioneer) {
     char why[128], p[1300], name[1300], before[1300];
-    (void)ours;
     /* MD1: install (ours live) and restore (ours live, Pioneer's saved): a failing first, last or
      * both looks: never OK, the live bytes and the originals unchanged */
     for (int op = 0; op < 2; op++)
@@ -530,6 +543,18 @@ static void test_models_review(const char *scratch, models *m, const char *ours,
     m->after_rename = m_corrupt;
     CHECK(models_restore(m, why) == MODELS_NOT_VERIFIED && same(model_path, "CORRUPTED AFTER THE RENAME"), "md9d: NOT_VERIFIED");
     m->after_rename = NULL;
+
+    for (int link = 0; link < 2; link++) {
+        layout(scratch, link ? "umr1-link" : "umr1-replacement", "0002");
+        put(model_path, "PIONEER");
+        CHECK(models_install_ours(m, payload, "model.onnx", ours, why) == MODELS_OK, "UMR1: installed");
+        m->after_rename = m_move_restored_dir;
+        m->ctx = link ? &link : NULL;
+        CHECK(models_restore(m, why) == MODELS_NOT_BACK && same(model_path, "PIONEER"),
+              "UMR1: NOT_BACK when the restored folder is replaced with %s", link ? "a link to the moved folder" : "a different folder with the same model");
+        m->after_rename = NULL;
+        m->ctx = NULL;
+    }
 
     /* J1: a saved copy that can't be read is never "none verified" (Remove Anyway keeps it) */
     layout(scratch, "j1", "0002");
@@ -722,34 +747,140 @@ static void test_models_vu1(const char *scratch, models *m, const char *ours, co
     CHECK(models_any_saved(m), "vu4: originals unreadable: saved (unknown)");
     chmod(originals, 0755);
     CHECK(!models_any_saved(m), "vu4: readable and empty: none saved");
+    test_models_uninstall(scratch, m);
     test_models_md3(scratch, m, ours, pioneer);   /* before the critical cases: they close mwork */
+    test_models_engine_tag(scratch, m, ours);
     test_models_critical(scratch, m, ours, pioneer);
+}
+
+/* the complete uninstall's MODEL_RESTORE in the start config's layout (VM bug c: the shell gave no
+ * paths.model, so every uninstall stopped there): rekordbox's folder under roaming AppData
+ * (Pioneer\rekordbox6\models\demucs3_model, hdemucs.onnx's folder as models_of takes it) and
+ * LocalAppData's rbstemsplus\originals. Nothing to put back is done (MODELS_OK, nothing made); a
+ * real "not back" stays a failure, which stops the uninstall (flows_test.c's restore_rc cases). */
+static void test_models_uninstall(const char *scratch, models *m) {
+    char why[128], root[1100], pioneer_dir[1200], rb6[1200], p[1300];
+    snprintf(root, sizeof root, "%s/uninstall", scratch);
+    mkdir(root, 0755);
+    snprintf(pioneer_dir, sizeof pioneer_dir, "%s/Roaming/Pioneer", root);
+    snprintf(rb6, sizeof rb6, "%s/rekordbox6", pioneer_dir);
+    snprintf(dir, sizeof dir, "%s/models/demucs3_model", rb6);
+    snprintf(model_path, sizeof model_path, "%s/hdemucs.onnx", dir);
+    snprintf(support_dir, sizeof support_dir, "%s/Local/rbstemsplus", root);
+    snprintf(originals, sizeof originals, "%s/originals", support_dir);
+    snprintf(p, sizeof p, "%s/Roaming", root);
+    mkdir(p, 0755);
+    snprintf(p, sizeof p, "%s/Local", root);
+    mkdir(p, 0755);
+    mkdir(support_dir, 0755);
+    meanwhile = NULL;
+
+    /* no rekordbox: no Pioneer folder at all */
+    logged[0] = 0;
+    CHECK(models_restore(m, why) == MODELS_OK && strstr(logged, "nothing to put back") && !exists(root, "Roaming/Pioneer")
+              && !exists(support_dir, "originals"),
+          "uninstall: no rekordbox: nothing to put back, nothing made (%s)", logged);
+    /* rekordbox without a stems model folder yet */
+    mkdir(pioneer_dir, 0755);
+    mkdir(rb6, 0755);
+    logged[0] = 0;
+    CHECK(models_restore(m, why) == MODELS_OK && strstr(logged, "nothing to put back") && !exists(rb6, "models"),
+          "uninstall: rekordbox, no model folder: nothing to put back (%s)", logged);
+    /* rekordbox with an empty model folder, ours never placed */
+    snprintf(p, sizeof p, "%s/models", rb6);
+    mkdir(p, 0755);
+    mkdir(dir, 0755);
+    logged[0] = 0;
+    CHECK(models_restore(m, why) == MODELS_OK && strstr(logged, "no stems model and none was saved") && !exists(dir, "hdemucs.onnx")
+              && !exists(support_dir, "originals"),
+          "uninstall: rekordbox, no model and none saved: left as it is (%s)", logged);
+    /* rekordbox with its own model, ours never placed (no originals\) */
+    put(model_path, "PIONEER");
+    snprintf(p, sizeof p, "%s/demucs3_ver.txt", dir);
+    put(p, "0002\n");
+    logged[0] = 0;
+    CHECK(models_restore(m, why) == MODELS_OK && strstr(logged, "already in place") && same(model_path, "PIONEER") && !exists(support_dir, "originals"),
+          "uninstall: rekordbox's own model, none of ours ever placed: already in place, untouched (%s)", logged);
+
+    /* a real "not back" still fails: ours in place and no saved copy of Pioneer's */
+    put(model_path, "OURS");
+    CHECK(models_restore(m, why) == MODELS_NO_SAVED_COPY && same(model_path, "OURS"), "uninstall: ours in place, nothing saved: NO_SAVED_COPY, ours stays");
+    /* ... or originals\ that can't be read */
+    mkdir(originals, 0755);
+    chmod(originals, 0);
+    int r = models_restore(m, why);
+    chmod(originals, 0755);
+    CHECK(r == MODELS_NOT_BACK && same(model_path, "OURS"), "uninstall: ours in place, originals unreadable: NOT_BACK, ours stays (%d)", r);
+}
+
+static void m_save_and_close(void *ctx) {
+    m_save_check(ctx);
+    critical_close(&mwork);
+}
+
+static void m_close_on_replace(void *ctx) {
+    critical_work *w = ctx;
+    critical_close(w);
+    CHECK(!critical_wait_idle(w, 0), "wc1: the admitted copy still counts after closing admission");
+}
+
+static void test_models_inflight(const char *scratch, const models *m, const char *ours) {
+    critical_work install, restore;
+    critical_init(&install);
+    critical_init(&restore);
+    models active = *m;
+    active.will_replace = m_close_on_replace;
+    active.will_save = NULL;
+    active.log = NULL;
+    active.critical = &install;
+    active.ctx = &install;
+    layout(scratch, "wc1-inflight", "0002");
+    put(model_path, "PIONEER");
+
+    char why[128];
+    int r = models_install_ours(&active, payload, "model.onnx", ours, why);
+    CHECK(r == MODELS_OK && same(model_path, "OURS") && !critical_admit(&install) && critical_wait_idle(&install, 0),
+          "wc1: install admitted before close finishes the rename and releases its count (%d)", r);
+
+    active.critical = &restore;
+    active.ctx = &restore;
+    active.will_replace = NULL;
+    active.after_rename = m_close_on_replace;
+    r = models_restore(&active, why);
+    CHECK(r == MODELS_OK && same(model_path, "PIONEER") && !critical_admit(&restore) && critical_wait_idle(&restore, 0),
+          "wc1: restore admitted before close finishes the rename and releases its count (%d)", r);
 }
 
 /* review MC3/MC4: the copy through the rename in CriticalWork, the save outside; a closed
  * admission begins neither (MODELS_STOPPED), nothing changed; NULL means the process's one */
 static void test_models_critical(const char *scratch, models *m, const char *ours, const char *pioneer) {
-    char why[128], name[1300];
+    char why[128], name[1300], stale[1300];
     CHECK(replace_calls > 0 && !replace_outside, "mc: every replace ran inside CriticalWork (%d of %d outside)", replace_outside, replace_calls);
     CHECK(save_calls > 0 && !save_inside, "mc: every save ran outside it (%d of %d inside)", save_inside, save_calls);
     CHECK(!critical_running(&mwork), "mc: after every install and restore above, none left running");
-    /* closed: install over Pioneer's model saves it (outside), then stops before the copy */
+    test_models_inflight(scratch, m, ours);
+    /* Closing during the save refuses the copy, including cleanup of a stale temporary file. */
     layout(scratch, "mc1", "0002");
     put(model_path, "PIONEER");
-    critical_close(&mwork);
+    snprintf(stale, sizeof stale, "%s/.hdemucs.new.123.456", dir);
+    put(stale, "LEFTOVER");
+    m->will_save = m_save_and_close;
     int saves = save_calls, replaces = replace_calls;
     int r = models_install_ours(m, payload, "model.onnx", ours, why);
+    m->will_save = m_save_check;
     snprintf(name, sizeof name, "%s/%s.onnx", originals, pioneer);
-    CHECK(r == MODELS_STOPPED && same(model_path, "PIONEER") && !exists(dir, ".hdemucs.new") && !critical_running(&mwork)
+    CHECK(r == MODELS_STOPPED && same(model_path, "PIONEER") && same(stale, "LEFTOVER") && temps_of(dir, ".hdemucs.new") == 1 && !critical_running(&mwork)
               && strstr(logged, "Demucs v4: not copied: the app is quitting") && replace_calls == replaces,
-          "mc: closed: install STOPPED (%d), rekordbox's model as it was, no temp file, nothing running", r);
-    CHECK(save_calls == saves + 1 && same(name, "PIONEER"), "mc: the save before the copy still ran, outside (as on the Mac)");
+          "wc1: close during the save: install STOPPED (%d), model and stale file untouched, nothing running", r);
+    CHECK(save_calls == saves + 1 && !save_inside && same(name, "PIONEER"), "mc: the save before the copy still ran, outside (as on the Mac)");
     /* closed: restore stops before the candidates, ours stays */
     put(model_path, "OURS");
+    snprintf(stale, sizeof stale, "%s/.hdemucs.restore.123.456", dir);
+    put(stale, "LEFTOVER");
     r = models_restore(m, why);
-    CHECK(r == MODELS_STOPPED && same(model_path, "OURS") && !exists(dir, ".hdemucs.restore") && !critical_running(&mwork)
+    CHECK(r == MODELS_STOPPED && same(model_path, "OURS") && same(stale, "LEFTOVER") && temps_of(dir, ".hdemucs.restore") == 1 && !critical_running(&mwork)
               && strstr(logged, "not put back: the app is quitting") && replace_calls == replaces,
-          "mc: closed: restore STOPPED (%d), ours stays, no temp file, nothing running", r);
+          "wc1: closed: restore STOPPED (%d), model and stale file untouched, nothing running", r);
     /* the default: m->critical NULL is the process's CriticalWork (closed last: the tests after
      * this one use their own) */
     m->critical = NULL;
@@ -908,4 +1039,64 @@ static void test_models_md3(const char *scratch, models *m, const char *ours, co
     snprintf(name, sizeof name, "%s/%s.onnx", originals, pioneer);
     CHECK(r11 == MODELS_NOT_PLACED_WHY && same(model_path, "PIONEER") && same(name, "PIONEER") && temps_of(dir, ".hdemucs.new") == 0,
           "wf11: the rename failing: NOT_PLACED_WHY (%d, %s), nothing changed, no temp left", r11, why);
+}
+
+/* review b-a2a-F1: the saved model's <sha>.engine. Its write failing makes the save NOT_SAVED
+ * (the copy removed, ours not placed), never an untagged copy that an older engine's tagged one
+ * outranks at restore; an untagged copy "already saved" gets its tag (or the save fails) */
+static int engine_faults;
+static int f_engine_fault(void) {
+    engine_faults++;
+    return ENOSPC;
+}
+static void test_models_engine_tag(const char *scratch, models *m, const char *ours) {
+    (void)ours;
+    char why[128], p[1300], e1[65], e2[65], part_base[80];
+    sha_of("PIONEER_ENGINE1", e1);
+    sha_of("PIONEER_ENGINE2", e2);
+    snprintf(part_base, sizeof part_base, "%s.onnx.part", e2);
+    /* engine 0001's model saved and tagged earlier; rekordbox now has engine 0002 and its model */
+    layout(scratch, "et", "0002\n");
+    mkdir(originals, 0755);
+    snprintf(p, sizeof p, "%s/%s.onnx", originals, e1);
+    put(p, "PIONEER_ENGINE1");
+    snprintf(p, sizeof p, "%s/%s.engine", originals, e1);
+    put(p, "0001\n");
+    put(model_path, "PIONEER_ENGINE2");
+    char onnx2[80], engine2[80];
+    snprintf(onnx2, sizeof onnx2, "%s.onnx", e2);
+    snprintf(engine2, sizeof engine2, "%s.engine", e2);
+    models_test_engine_fault = f_engine_fault;
+    engine_faults = 0;
+    int r = models_install_ours(m, payload, "model.onnx", ours, why);
+    models_test_engine_fault = NULL;
+    CHECK(r == MODELS_NOT_SAVED && engine_faults == 1 && same(model_path, "PIONEER_ENGINE2") && !exists(originals, onnx2) && !exists(originals, engine2)
+              && temps_of(originals, part_base) == 0,
+          "et: the engine file not written: NOT_SAVED (%d), rekordbox's model untouched, no untagged copy, no part left (%s)", r, logged);
+    /* the fault gone: the copy is saved with its tag, ours placed */
+    logged[0] = 0;
+    r = models_install_ours(m, payload, "model.onnx", ours, why);
+    snprintf(p, sizeof p, "%s/%s", originals, engine2);
+    CHECK(r == MODELS_OK && same(model_path, "OURS") && exists(originals, onnx2) && same(p, "0002\n"), "et: the next install tags the copy (%d, %s)", r, logged);
+    /* restore with engines 0001 and 0002 saved: 0002's model */
+    logged[0] = 0;
+    r = models_restore(m, why);
+    CHECK(r == MODELS_OK && same(model_path, "PIONEER_ENGINE2") && strstr(logged, "STEMS Engine 0002"), "et: restore puts engine 0002's model back (%d, %s)", r, logged);
+
+    /* an untagged copy left by an older run (the live model's sha): "already saved" writes the tag */
+    snprintf(p, sizeof p, "%s/%s", originals, engine2);
+    unlink(p);
+    logged[0] = 0;
+    models_test_engine_fault = f_engine_fault;
+    engine_faults = 0;
+    r = models_install_ours(m, payload, "model.onnx", ours, why);
+    models_test_engine_fault = NULL;
+    CHECK(r == MODELS_NOT_SAVED && engine_faults == 1 && same(model_path, "PIONEER_ENGINE2") && !exists(originals, engine2),
+          "et: already saved, its tag not writable: NOT_SAVED (%d), rekordbox's model untouched (%s)", r, logged);
+    logged[0] = 0;
+    r = models_install_ours(m, payload, "model.onnx", ours, why);
+    CHECK(r == MODELS_OK && same(model_path, "OURS") && same(p, "0002\n") && strstr(logged, "already saved"), "et: already saved, untagged: the tag written (%d, %s)", r,
+          logged);
+    r = models_restore(m, why);
+    CHECK(r == MODELS_OK && same(model_path, "PIONEER_ENGINE2"), "et: then restore picks engine 0002's model (%d)", r);
 }

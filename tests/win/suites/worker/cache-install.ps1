@@ -25,6 +25,20 @@ Check (Invoke-UiNamed $script:app.Id (Get-CoreText 'T_INSTALL') 60 'Button') 'it
 $cfg = Join-Path $l.Support 'config.ini'
 $on = Wait-Until { (Test-Path -LiteralPath $cfg) -and [bool](Select-String -LiteralPath $cfg -Pattern '^\s*rekordbox_model\s*=\s*1\s*$' -Quiet) } 420
 Check $on "the install ended with Stems Cache on (rekordbox_model=1 in config.ini) after $([int]$t.Elapsed.TotalSeconds) s"
+if (-not $on) {
+    # what shows instead (the window's texts) and the app's log, for the failure's reading
+    Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+    $A = [Windows.Automation.AutomationElement]
+    $cond = New-Object Windows.Automation.PropertyCondition($A::ProcessIdProperty, $script:app.Id)
+    foreach ($w in $A::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $cond)) {
+        foreach ($e in $w.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
+            if ($e.Current.Name) { "ui: $($e.Current.ControlType.ProgrammaticName) '$($e.Current.Name)'" }
+        }
+    }
+    Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq 'RB Stems Plus' -or $_.ProcessName -eq 'consent' } | ForEach-Object { "process: $($_.Id) $($_.ProcessName) '$($_.MainWindowTitle)'" }
+    $alog = Join-Path $l.Support 'Logs\app.log'
+    if (Test-Path -LiteralPath $alog) { Get-Content -LiteralPath $alog -Tail 60 | ForEach-Object { "app.log: $_" } }
+}
 $live = Get-Sha $RbOrt
 Check ($live -eq $bridge) "rekordbox 7.2.19's onnxruntime.dll is the TEST payload's bridge ($live)"
 Check ($live -ne $f.PioneerSha) "and no longer Pioneer's ($($f.PioneerSha))"

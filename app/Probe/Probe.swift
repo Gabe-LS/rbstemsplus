@@ -33,6 +33,17 @@ func probeStart(watcher: Bool) { Probe.shared.start(watcher: watcher) }
 /// A timing point inside today's code (P3's trigger sites, the end of refresh()).
 @inline(__always) func probeMark(_ name: StaticString) { if Probe.shared.mode != .off { Probe.shared.mark(name) } }
 
+/// P14's shutdown steps: a timing point now, in perf mode only (never in a trace, whose records
+/// the scenarios compare, nor in perf-min). Main thread, or the thread that calls exit.
+@inline(__always) func probeExitPoint(_ name: StaticString) { if Probe.shared.mode == .perf { Probe.shared.mark(name) } }
+
+/// P14: the lines afterExit runs before its wait and right after it, in perf mode only ("" else).
+/// Each creates <out>/afterexit-<pid>-start or -work (pid: this process, the one waited for):
+/// tests/harness/run.sh copies their modification times (the VM's clock, ns) out as
+/// afterexit.txt, which tests/perf/stats.py joins with pids.txt. Shell builtins only: no process
+/// is started, so the script's own timing hardly changes.
+func probeAfterExitStamps() -> (start: String, work: String) { Probe.shared.afterExitStamps() }
+
 /// P7: the helper's line Prepare's reader just took (its reading thread). The estimate's last
 /// line ({"estimate":…}) is the timing point "estimate.lastline", stamped now, recorded on main.
 func probeHelperLine(_ line: Data) {
@@ -159,7 +170,9 @@ final class Probe {
         installObservers()
         installHooks()
         startCommands()
-        atexit { Probe.shared.flushPerf(); Probe.shared.writeQ.sync {} }
+        // P14: "exit.end", the last moment the process records (registered first, this handler
+        // runs after every atexit handler registered later), then the records are written
+        atexit { probeExitPoint("exit.end"); Probe.shared.flushPerf(); Probe.shared.writeQ.sync {} }
     }
 
     func now() -> UInt64 { (mach_absolute_time() - t0) * UInt64(timebase.numer) / UInt64(timebase.denom) }
@@ -253,6 +266,23 @@ final class Probe {
         case .perf, .perfMin: perfAdd(2, n)
         case .off: break
         }
+    }
+
+    fileprivate func afterExitStamps() -> (start: String, work: String) {
+        guard mode == .perf, !outDir.isEmpty else { return ("", "") }
+        let base = "'" + (outDir + "/afterexit-\(getpid())-").replacingOccurrences(of: "'", with: "'\\''")
+        return ("true 2>/dev/null > \(base)start'\n", "true 2>/dev/null > \(base)work'\n")
+    }
+
+    /// willTerminate (P14): the event, the records written (a quit that never reaches exit still
+    /// leaves them), then the shutdown's own points: "willTerminate.flushed" once written, and
+    /// "exit.begin" when exit starts (registered last, that atexit handler runs first).
+    private func willTerminate() {
+        event("willTerminate")
+        flushPerf()
+        guard mode == .perf else { return }
+        mark("willTerminate.flushed")
+        atexit { probeExitPoint("exit.begin") }
     }
 
     fileprivate func event(_ e: String, _ v: String = "") {
@@ -494,7 +524,7 @@ final class Probe {
         nc.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: nil) { _ in Probe.shared.event("didResignActive") }
         nc.addObserver(forName: NSWindow.didMiniaturizeNotification, object: nil, queue: nil) { _ in Probe.shared.event("didMiniaturize") }
         nc.addObserver(forName: NSWindow.didDeminiaturizeNotification, object: nil, queue: nil) { _ in Probe.shared.event("didDeminiaturize") }
-        nc.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in Probe.shared.event("willTerminate"); Probe.shared.flushPerf() }
+        nc.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in Probe.shared.willTerminate() }
     }
 
     private func beforeWaiting() {

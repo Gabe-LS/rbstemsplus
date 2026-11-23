@@ -136,7 +136,13 @@ let afterExitWait = "while /bin/kill -0 \"$1\" 2>/dev/null; do /bin/sleep \"$2\"
 /// (nothing will run after this process).
 @discardableResult
 func afterExit(poll: String, _ then: String, _ args: [String]) -> Bool {
+    #if TEST_BUILD
+    // the harness's probe (perf mode, P14): the script's start and the end of its wait, stamped
+    let stamps = probeAfterExitStamps()
+    let p = child("/bin/sh", ["-c", stamps.start + afterExitWait + stamps.work + then, "rbsp", String(ProcessInfo.processInfo.processIdentifier), poll] + args)
+    #else
     let p = child("/bin/sh", ["-c", afterExitWait + then, "rbsp", String(ProcessInfo.processInfo.processIdentifier), poll] + args)
+    #endif
     p.standardInput = FileHandle.nullDevice
     do { try p.run(); return true } catch { return false }
 }

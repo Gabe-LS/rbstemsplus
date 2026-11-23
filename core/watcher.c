@@ -110,6 +110,7 @@ void watcher_dialog_build(tbuf *m, watcher_dialog *d, int32_t model_off, int32_t
         return;
     }
     d->nbuttons = 3;
+    d->reinstall = model_off && !model_blocked ? (cache_off && !cache_blocked ? "model cache" : "model") : "cache";
     d->buttons[0] = T_W_REINSTALL_NOW;
     d->buttons[1] = T_W_REMIND_LATER;
     d->buttons[2] = T_W_DONT_ASK;

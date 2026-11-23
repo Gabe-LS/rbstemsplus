@@ -55,6 +55,10 @@ namespace RbStemsPlus.Shell
         [DllImport("user32.dll", ExactSpelling = true)] public static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
         [DllImport("user32.dll", ExactSpelling = true, CharSet = CharSet.Unicode)] public static extern int GetMonitorInfoW(IntPtr monitor, ref MONITORINFO mi);
         [DllImport("shcore.dll", ExactSpelling = true)] public static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint dpiX, out uint dpiY);
+
+        // repaint and render recovery
+        [DllImport("user32.dll", ExactSpelling = true)] public static extern int InvalidateRect(IntPtr hwnd, IntPtr rect, int erase);
+        [DllImport("user32.dll", ExactSpelling = true, CharSet = CharSet.Unicode)] public static extern int RegisterWindowMessageW(string name);
     }
 
     [StructLayout(LayoutKind.Sequential)]

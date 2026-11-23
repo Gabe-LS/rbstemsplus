@@ -1,0 +1,23 @@
+# UP9–UP12 (app.md §5.4). Start from "clean Windows" with update.suite's a/ and new/ TEST
+# releases and stage --build. Serve a/ throughout so the recovered app sees its own release.
+# The failure laps unpack new/ locally, then enter the real --swap with a planted pending
+# record. new/ must be a TEST build of this commit so the off-screen hooks are available.
+# After an interrupted run, clean dist-test/current/ as described in update.suite.
+include lib/vmlib.ps1
+include update/updatelib.ps1
+include update/rollbacklib.ps1
+need http
+need vm
+need file repo/core/texts.def
+need file vm/uia/rbui/rbui.exe
+need fixture dist-test/a/payload.json
+need candidate dist-test/new/payload.json
+# MODE  SECS  NAME                      SCRIPT
+sys     120   switch-a                  update/switch.ps1
+user    600   install                   update/install.ps1
+user    240   broken-current            update/broken-current.ps1
+user    600   rollback-xaml             update/rollback.ps1
+user    600   rollback-missing-dll      update/rollback.ps1
+user    600   rollback-offscreen-hang   update/rollback.ps1
+user    300   rollback-once-only        update/once-only.ps1
+sys     120   switch-clean              update/switch.ps1

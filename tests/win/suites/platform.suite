@@ -4,15 +4,26 @@
 # the x64 builds run under Prism too. From "clean Windows":
 #   tests/win/vm-run.sh stage --build       # outside the Mac sandbox (win/c's Swift fixtures)
 #   tests/win/vm-run.sh run "clean Windows" platform
+# For the release matrix, record the arm64 and prism-x64 runs with --arch ARCH --record.
 # stage --build builds winc-wintest, winc-app-wintest, plat-win-test, checked.dll,
 # location-win-test and fixtures.txt for both architectures. A step whose exe
 # (for an architecture) isn't staged SKIPs. The location step maps \\Mac\win as a drive in its
-# own session when none is there. The cases a run can't drive are in by-hand.md.
+# own session when none is there, else the VM's own SMB share \\127.0.0.1\rbnet (smb-share's);
+# net-remote maps the other (rbgone) and removes it under its mapping. winhttp: update_win.c's
+# WinHTTP downloads against the run's own HTTPS server (vm-run.sh's /w3/: redirects, Range, a PAC
+# proxy), app.md 5.4. The cases that need the owner's one-time setup (a USB stick, GitHub through
+# Little Snitch) are platform-owner.suite's; those a run can't drive are in by-hand.md.
 include lib/vmlib.ps1
+need http
 need vm
 # MODE       SECS NAME                SCRIPT
 sys          300  vhd                 platform/vhd.ps1
+sys          120  smb-share           platform/smb-share.ps1
 user         600  plat-win-test       platform/plat-win-test.ps1
+user         180  support-errors      platform/support-errors.ps1
 user         600  location            platform/location.ps1
+user-high    300  net-remote          platform/net-remote.ps1
 user         600  wintests            platform/wintests.ps1
+user         180  memo-stamp          platform/memo-stamp.ps1
 user-high    600  wintests-elevated   platform/wintests.ps1
+user         300  winhttp             platform/winhttp.ps1

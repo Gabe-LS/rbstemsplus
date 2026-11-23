@@ -1,0 +1,38 @@
+# J23/UP5, and A7.4's install-worker after the hold is released. From "rekordbox 7.2.19 installed".
+# Like update.suite, stage --build and provide dist-test/a and dist-test/new (with current/-based
+# TEST builds). Their app versions and worker hashes must differ. Use a release pair with the
+# same bridge hash, so checking the old app's own worker is independent of the bridge policy.
+# The old bin worker installs the genuine successor only after its check rejects the substitute.
+include lib/vmlib.ps1
+include worker/rblib.ps1
+include uninstall/cases/unlib.ps1
+include uac/uaclib.ps1
+include admin-paths/worker-trace.ps1
+include admin-paths/worker-action.ps1
+include admin-paths/worker-releases.ps1
+include update/updatelib.ps1
+need http
+need vm
+need file repo/core/texts.def
+need file vm/uia/rbui/rbui.exe
+need fixture dist-test/a/payload.json
+need candidate dist-test/new/payload.json
+sys   60  releases               admin-paths/worker-pair-prep.ps1
+sys  120  prep                   worker/prep.ps1
+sys  120  switch-a               update/switch.ps1
+user 600  install                update/install.ps1
+user 420  initial-worker         admin-paths/worker-update-action.ps1
+sys  120  switch-new             update/switch.ps1
+sys   60  trace-old-choice       admin-paths/worker-update-trace.ps1
+user 420  old-app-new-payload    admin-paths/worker-update-action.ps1
+sys  120  check-old-choice       admin-paths/worker-update-trace.ps1
+sys   60  trace-app-update       admin-paths/worker-update-trace.ps1
+user 480  update-app             admin-paths/worker-update-action.ps1
+sys  120  check-app-update       admin-paths/worker-update-trace.ps1
+sys  120  trace-replacement      admin-paths/worker-update-trace.ps1
+user 420  refuse-replaced-worker admin-paths/worker-update-action.ps1
+sys  120  check-replacement      admin-paths/worker-update-trace.ps1
+sys   60  trace-successor        admin-paths/worker-update-trace.ps1
+user 420  install-successor      admin-paths/worker-update-action.ps1
+sys  120  check-successor        admin-paths/worker-update-trace.ps1
+sys  120  switch-clean           update/switch.ps1

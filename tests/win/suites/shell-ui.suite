@@ -1,0 +1,103 @@
+# W2, by-hand automation plan rows 29-32 and 35-36, on the English "clean Windows" snapshot.
+#   tests/win/vm-run.sh stage --build
+#   tests/win/vm-run.sh run "clean Windows" shell-ui
+# Uses the two TEST releases dist-test/a and dist-test/new (see update.suite's header).
+# a must be older than new and support the same stable stub, AUMID and taskbar grouping.
+# new must have the kept-dialog and update paths under test. Stage both complete release folders
+# for the VM's server. As in update.suite, SYSTEM switches dist-test/current and cleans it up.
+# No Stems Cache or OS security prompts are needed. If a prompt appears, leave it unanswered.
+# Use the snapshot's local console account. Setup and restart follow uninstall-uac's logon pattern.
+# On ARM64 the native and x64 laps exercise both stubs; on x64 both lanes exercise its native stub.
+# Each delay gets its own install and swap. The timed click requests a launch even after Explorer
+# has grouped the new window under the pin. The other pin clicks exercise ordinary activation.
+include lib/vmlib.ps1
+include uninstall/cases/unlib.ps1
+include shell-ui/shelllib.ps1
+include shell-ui/a11y-lib.ps1
+need http
+need vm
+need file repo/core/texts.def
+need file vm/uia/rbui/rbui.exe
+need file vm/x64/sysdesk.exe
+need file vm/arm64/sysdesk.exe
+need file vm/x64/winc-app-wintest.exe
+need file vm/arm64/winc-app-wintest.exe
+need fixture dist-test/a/payload.json
+need candidate dist-test/new/payload.json
+# MODE       SECS NAME                    SCRIPT
+sys          120  setup                   shell-ui/setup.ps1
+sys          120  switch-new              update/switch.ps1
+user         600  install-un4             shell-ui/install.ps1
+user         240  a11y                    shell-ui/a11y.ps1
+user         240  one-copy                shell-ui/one-copy.ps1
+# The black window after session moves (owner's PC 2026-11-19, win/shell/Repaint.cs): the
+# simulated churn, then 2 x 10 real disconnects (WTSDisconnectSession) and console reconnects
+# (tscon as SYSTEM), the window minimized for the first 10 and restored for the last 10, then a
+# healthy lock and unlock; after each, the same app, its Manage tab on screen to UI Automation and
+# its client area not black after a short settle.
+user         240  churn-sim               shell-ui/churn-sim.ps1
+user         180  churn-start             shell-ui/churn-start.ps1
+sys          420  churn-minimized         shell-ui/churn.ps1
+user         180  churn-mid               shell-ui/churn-check.ps1
+sys          420  churn-restored          shell-ui/churn.ps1
+user         180  churn-check             shell-ui/churn-check.ps1
+user         120  churn-lock              shell-ui/churn-lock.ps1
+sys          120  churn-unlock            shell-ui/churn.ps1
+user         180  unlock-check            shell-ui/churn-check.ps1
+user         600  un4                     shell-ui/held.ps1
+user         480  retry-un4               shell-ui/retry.ps1
+user         600  install-un6             shell-ui/install.ps1
+user         480  un6                     shell-ui/defer-cleanup.ps1
+user         600  install-un2             shell-ui/install.ps1
+sys           60  block-cmd               shell-ui/cmd-block.ps1
+user         480  un2                     shell-ui/defer-cleanup.ps1
+user         600  install-k1              shell-ui/install.ps1
+user         600  k1-kept                 shell-ui/held.ps1
+sys           60  unblock-cmd             shell-ui/cmd-block.ps1
+sys          120  restart-kept            shell-ui/restart.ps1
+wait         600  signin                  logon
+user         240  logon-cleanup           shell-ui/logon.ps1
+user         480  k1-retry                shell-ui/retry.ps1
+# UP2 and WC6/WC7 for the machine's native stub and the x64 stub.
+sys          120  switch-a-native-0       update/switch.ps1
+user         600  install-native-0        shell-ui/install.ps1
+user         360  pin-native-0            shell-ui/pin.ps1
+sys          120  switch-new-native-0     update/switch.ps1
+user         600  update-native-0         shell-ui/update.ps1
+sys          120  switch-a-native-500     update/switch.ps1
+user         600  install-native-500      shell-ui/install.ps1
+user         360  pin-native-500          shell-ui/pin.ps1
+sys          120  switch-new-native-500   update/switch.ps1
+user         600  update-native-500       shell-ui/update.ps1
+sys          120  switch-a-native-1000    update/switch.ps1
+user         600  install-native-1000     shell-ui/install.ps1
+user         360  pin-native-1000         shell-ui/pin.ps1
+sys          120  switch-new-native-1000  update/switch.ps1
+user         600  update-native-1000      shell-ui/update.ps1
+sys          120  switch-a-native-2000    update/switch.ps1
+user         600  install-native-2000     shell-ui/install.ps1
+user         360  pin-native-2000         shell-ui/pin.ps1
+sys          120  switch-new-native-2000  update/switch.ps1
+user         600  update-native-2000      shell-ui/update.ps1
+sys          120  switch-a-x64-0          update/switch.ps1
+user         600  install-x64-0           shell-ui/install.ps1
+user         360  pin-x64-0               shell-ui/pin.ps1
+sys          120  switch-new-x64-0        update/switch.ps1
+user         600  update-x64-0            shell-ui/update.ps1
+sys          120  switch-a-x64-500        update/switch.ps1
+user         600  install-x64-500         shell-ui/install.ps1
+user         360  pin-x64-500             shell-ui/pin.ps1
+sys          120  switch-new-x64-500      update/switch.ps1
+user         600  update-x64-500          shell-ui/update.ps1
+sys          120  switch-a-x64-1000       update/switch.ps1
+user         600  install-x64-1000        shell-ui/install.ps1
+user         360  pin-x64-1000            shell-ui/pin.ps1
+sys          120  switch-new-x64-1000     update/switch.ps1
+user         600  update-x64-1000         shell-ui/update.ps1
+sys          120  switch-a-x64-2000       update/switch.ps1
+user         600  install-x64-2000        shell-ui/install.ps1
+user         360  pin-x64-2000            shell-ui/pin.ps1
+sys          120  switch-new-x64-2000     update/switch.ps1
+user         600  update-x64-2000         shell-ui/update.ps1
+sys          120  switch-clean            update/switch.ps1
+sys           60  teardown                shell-ui/teardown.ps1

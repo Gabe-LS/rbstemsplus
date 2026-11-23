@@ -43,12 +43,16 @@
 #   ... --windows                  also the Windows files (release.md §3.1, T12: scripts/build-windows.sh
 #                                  into the same folder) and payload.json's windows block: the app
 #                                  zip, the bridge, the worker's and the stubs' SHA-256, the
-#                                  Windows compatible lists, resampler_proved. Without it (and
+#                                  Windows compatible lists, resampler_proved.
+#                                  RBSTEMSPLUS_WIN_ORT_DIR optionally points to the directory
+#                                  with audited originals at VERSION/onnxruntime.dll for
+#                                  verification against the recorded hashes. Without --windows (and
 #                                  without a plan's windows.app new) no Windows file is built and
 #                                  the payload has no windows block (I81: a Mac fix never waits for
 #                                  the Windows build). With --test, --win-test WURL is the Windows
 #                                  TEST app's download server (https://: the core downloads over
-#                                  HTTPS only; the Parallels host, e.g. https://10.211.55.2:8766):
+#                                  HTTPS only; the Parallels host, e.g. https://10.211.55.2:8766, or
+#                                  a folder on it, https://10.211.55.2:8766/current for update.suite):
 #                                  the shell hands it to the core's TEST DLL (core_test_update_base),
 #                                  and a test TLS CA (name-constrained to WURL's host) and its
 #                                  server certificate are kept in build/test-keys/win-tls/: the
@@ -137,17 +141,18 @@ previous_models=""
 compat_rekordbox="7.2.17 7.2.18 7.2.19 7.2.20"
 compat_ort_prefix="1.18."
 compat_stems_engine="0002"
-# The windows block's (release.md §1.2): the rekordbox versions Stems Cache may be installed on
-# under Windows, the SHA-256 of AlphaTheta's onnxruntime.dll in each (the bridge's real library:
-# the VM's C:\rbtest\pristine\onnxruntime.dll, read by tests/harness/win's setup), the STEMS
-# Engine versions, and the builds the resampler proof covers ("PRODUCT_VERSION:REKORDBOX_SHA256",
-# none until helper.md T11 proves one). A --windows build refuses an empty ort list; a TEST build
-# may take RBSTEMSPLUS_TEST_WIN_ORT_SHA256 instead (another copy's, for a version not listed yet).
-# 7.2.19's onnxruntime.dll: the same SHA-256 on the VM and the owner's PC (2026-11-16).
-compat_win_rekordbox="7.2.19"
-compat_win_ort_sha256="e7a702e13bd3e487705204d518c96f1f116aa25b0ac584741838e20bc1ff6e9f"
+# Windows compatibility (release.md §1.2): VERSION=original SHA-256:PE code SHA-256.
+# Replace UNMEASURED_PE_CODE_SHA256 with each measured digest before a Windows release.
+# The original hashes were audited on the owner's PC (mv-decisions.md D2a). A TEST build can override them with
+# RBSTEMSPLUS_TEST_WIN_ORT_SHA256 (one hash per listed version, in the same order).
+# The PE code digest was measured on the owner's PC (scripts/win-ort-code.py's three-range
+# rule): both originals give the same one (17,729,456 bytes each, the certificate table at 17718784,
+# 10672 bytes, ending at EOF).
+compat_win_ort_bind="7.2.19=e7a702e13bd3e487705204d518c96f1f116aa25b0ac584741838e20bc1ff6e9f:c494de0389f8f36c1cd45b6ec0e32e2b083a4d5c2bb50d06fbef99f77a9cd8c2 7.2.20=3e55ab558136c0cf413c1e3873faff7c28807bf4b178712a2124e5efd4e03acd:c494de0389f8f36c1cd45b6ec0e32e2b083a4d5c2bb50d06fbef99f77a9cd8c2"
 compat_win_stems_engine="0002"
-resampler_proved=""
+# T11 proves 48 kHz on the owner's PC (2026-11-19); executable SHA-256 from its T2 preflight.
+# 7.2.20.0354: the PC's T2 matched 30/30 key rows at 48, 96 and 22.05 kHz.
+resampler_proved="7.2.19.0342:c9ed23e974c51c75e2ec069fbd2679a3dbe606be9e79e9cbbd13d6418ab11c37 7.2.20.0354:37d2b6a57770a42d9604d8872b1d8dae4f1fffa15483189a92ba58f9dd4de9ef"
 # ---------------------------------------------------------------------------------------------
 
 model_src="${RBSTEMSPLUS_MODEL:-$root/../Library Organizer/experiments/rekordbox-stems/runs/htdemucs_rb_v4xt.onnx}"
@@ -222,21 +227,25 @@ if [ -n "$plan" ]; then
   fi
   if [ "$app_plan$bridge_plan" != newnew ] || [ -n "$plan_wcarry" ]; then
     [ "$prev_tag" != none ] && [[ "$prev_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$plan carries a file, but names no previous release"
+    carry_given="$carry"
     if [ -z "$carry" ]; then
       # the previous release's TEST build, from the gate archive (its checksums first)
       archive="${GATES_ARCHIVE:-$root/gates-archive}"
-      [ -f "$archive/SHA256SUMS" ] || die "no gate archive at $archive (or no SHA256SUMS in it): the previous release's TEST build is kept there"
+      [ -f "$archive/SHA256SUMS" ] || die "no gate archive at $archive (or no SHA256SUMS in it): the previous release's TEST build is kept there. Point GATES_ARCHIVE at the gate archive: it is git-ignored, so a worktree or a fresh clone has none (the main checkout's gates-archive/, or its copy on the second disk)"
       (cd "$archive" && shasum -a 256 -c --quiet SHA256SUMS) || die "the gate archive doesn't match its SHA256SUMS: stop (never rebuild what it keeps)"
       carry="$archive/tag-$prev_tag"
     fi
-    [ -d "$carry" ] || die "no folder $carry with the previous release's files ($prev_tag)"
+    if [ ! -d "$carry" ]; then
+      [ -z "$carry_given" ] || die "no folder $carry with the previous release's files ($prev_tag): correct the --carry path, or put $prev_tag's files there"
+      die "no folder $carry with the previous release's files ($prev_tag). First follow \"Archive the release's TEST build\" in docs/RELEASING.md §6 for $prev_tag (dist-test/ must hold $prev_tag's TEST build)"
+    fi
     carry="$(cd "$carry" && pwd)"
   elif [ -n "$test_base" ] && [ "$prev_tag" != none ]; then
     # a TEST build that carries nothing is G3's too: tests/mac/g3.sh updates the gate archive's
     # TEST builds of earlier releases to it, and they trust only the test key archived with them
     # (one pair in every tag-*/test-keys/), so it is signed with that key, not build/test-keys/
     archive="${GATES_ARCHIVE:-$root/gates-archive}"
-    [ -f "$archive/SHA256SUMS" ] || die "no gate archive at $archive (or no SHA256SUMS in it): a TEST build in a plan's shape is signed with its test key (G3 updates its TEST builds)"
+    [ -f "$archive/SHA256SUMS" ] || die "no gate archive at $archive (or no SHA256SUMS in it): a TEST build in a plan's shape is signed with its test key (G3 updates its TEST builds). Point GATES_ARCHIVE at the gate archive: it is git-ignored, so a worktree or a fresh clone has none (the main checkout's gates-archive/, or its copy on the second disk)"
     (cd "$archive" && shasum -a 256 -c --quiet SHA256SUMS) || die "the gate archive doesn't match its SHA256SUMS: stop (never rebuild what it keeps)"
     archive_keys="$(cd "$archive" && pwd)/tag-$prev_tag/test-keys"
     [ -f "$archive_keys/test-key.pem" ] && [ -f "$archive_keys/test.pub.pem" ] \
@@ -249,11 +258,23 @@ fi
 for h in $previous_models; do [[ "$h" =~ ^[0-9a-f]{64}$ ]] || die "previous_models: '$h' isn't a SHA-256"; done
 if [ -n "$windows" ]; then
   [ -z "$test_base" ] || [ -n "$win_test" ] || die "--test with --windows needs --win-test WURL: the Windows TEST app's https:// server"
-  [ -z "$win_test" ] || [[ "$win_test" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || die "--win-test must be https://HOST[:PORT], not '$win_test'"
-  win_ort="$compat_win_ort_sha256"
-  [ -z "$test_base" ] || win_ort="${RBSTEMSPLUS_TEST_WIN_ORT_SHA256:-$win_ort}"
-  [ -n "$win_ort" ] || die "compat_win_ort_sha256 is empty: AlphaTheta's onnxruntime.dll SHA-256 for each listed rekordbox version (release.md §1.2)"
-  for h in $win_ort; do [[ "$h" =~ ^[0-9a-f]{64}$ ]] || die "compat_win_ort_sha256: '$h' isn't a SHA-256"; done
+  [ -z "$win_test" ] || [[ "$win_test" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._-]+)*$ ]] || die "--win-test must be https://HOST[:PORT][/DIR...], not '$win_test'"
+  [ -n "$compat_win_ort_bind" ] || die "compat_win_ort_bind is empty: bind each supported Windows rekordbox version to its original ORT SHA-256"
+  read -r -a win_bind <<< "$compat_win_ort_bind"
+  if [ -n "$test_base" ] && [ -n "${RBSTEMSPLUS_TEST_WIN_ORT_SHA256:-}" ]; then
+    read -r -a test_ort_hashes <<< "$RBSTEMSPLUS_TEST_WIN_ORT_SHA256"
+    [ "${#test_ort_hashes[@]}" = "${#win_bind[@]}" ] || die "RBSTEMSPLUS_TEST_WIN_ORT_SHA256 needs one hash per bound version"
+    for i in "${!win_bind[@]}"; do
+      binding="${win_bind[$i]}"
+      win_bind[$i]="${binding%%=*}=${test_ort_hashes[$i]}:${binding#*:}"
+    done
+  fi
+  ort_check=(--recorded)
+  if [ -n "$test_base" ]; then ort_check+=(--test); fi
+  if [ -n "${RBSTEMSPLUS_WIN_ORT_DIR:-}" ]; then ort_check+=(--originals "$RBSTEMSPLUS_WIN_ORT_DIR"); fi
+  win_ort_code="$(python3 -I "$root/scripts/win-ort-code.py" "${ort_check[@]}" -- "${win_bind[@]}")" \
+    || die "couldn't verify the Windows ORT bindings"
+  [[ "$win_ort_code" =~ ^[0-9a-f]{64}$ ]] || die "the Windows ORT check returned an invalid PE code digest"
   for r in $resampler_proved; do [[ "$r" =~ ^[0-9]+(\.[0-9]+)+:[0-9a-f]{64}$ ]] || die "resampler_proved: '$r' isn't PRODUCT_VERSION:SHA256"; done
 fi
 grep -qs "$model_sha256" "$root"/app/Sources/*.swift \
@@ -390,7 +411,7 @@ if [ -n "$windows" ]; then
     # the Windows TEST server's TLS: a test CA and its server certificate for WURL's host
     # (build/test-keys/win-tls/ always, even when the test key is the carry's: never in the sealed
     # carry archive, and never a release's), the CA's certificate beside the files for the VM
-    tls="$root/build/test-keys/win-tls"; host="${win_test#https://}"; host="${host%%:*}"
+    tls="$root/build/test-keys/win-tls"; host="${win_test#https://}"; host="${host%%/*}"; host="${host%%:*}"
     if [[ "$host" =~ ^[0-9.]+$ ]]; then san="IP:$host"; nc="IP:$host/255.255.255.255"; else san="DNS:$host"; nc="DNS:$host"; fi
     fresh() { /usr/bin/openssl x509 -checkend 2592000 -noout -in "$1" > /dev/null 2>&1; }   # 30 days left
     catext="$(/usr/bin/openssl x509 -in "$tls/ca.pem" -noout -text 2>/dev/null || true)"
@@ -469,6 +490,13 @@ echo "== payload.json"
 json_list() { local out="" v; for v in $1; do out+="${out:+, }\"$v\""; done; echo "[$out]"; }
 windows_json=""
 if [ -n "$windows" ]; then
+  win_versions=""; win_hashes=""; win_bindings=""
+  for binding in "${win_bind[@]}"; do
+    v="${binding%%=*}"; h="${binding#*=}"; h="${h%%:*}"
+    win_versions+="${win_versions:+ }$v"
+    win_hashes+="${win_hashes:+ }$h"
+    win_bindings+="${win_bindings:+, }{\"rekordbox\": \"$v\", \"sha256\": \"$h\"}"
+  done
   proved=""; for r in $resampler_proved; do proved+="${proved:+, }{\"product_version\": \"${r%%:*}\", \"rekordbox_sha256\": \"${r#*:}\"}"; done
   windows_json=$(cat <<EOF
 ,
@@ -478,8 +506,10 @@ if [ -n "$windows" ]; then
             "stub_sha256": {"x64": "$win_stub_x64_sha256", "arm64": "$win_stub_arm64_sha256"}},
     "bridge": {"file": "$win_bridge", "sha256": "$win_bridge_sha256"},
     "compatible": {
-      "rekordbox": $(json_list "$compat_win_rekordbox"),
-      "ort_sha256": $(json_list "$win_ort"),
+      "rekordbox": $(json_list "$win_versions"),
+      "ort_sha256": $(json_list "$win_hashes"),
+      "ort": [$win_bindings],
+      "ort_code_sha256": "$win_ort_code",
       "stems_engine": $(json_list "$compat_win_stems_engine")
     },
     "resampler_proved": [$proved]

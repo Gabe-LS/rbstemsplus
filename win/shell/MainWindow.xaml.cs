@@ -1,10 +1,11 @@
 // The main window's views: the core's texts on the controls, the lights drawn from the model's
 // looks, the status and notice lines' live regions, the log pane, the start size clamped to the
 // work area or the last size and position restored, and the aggregator's two window sources
-// (WM_ACTIVATEAPP, leaving Minimized). It holds view handles only; every click goes to the shell
-// as the core's event id.
+// (WM_ACTIVATEAPP, leaving Minimized), and the picture redrawn after a session or display change
+// (Repaint.cs). It holds view handles only; every click goes to the shell as the core's event id.
 using System;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
@@ -12,6 +13,7 @@ using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using RbStemsPlus.Core;
 using CoreText = RbStemsPlus.Core.Text;
 
@@ -22,6 +24,8 @@ namespace RbStemsPlus.Shell
         internal ManageModel Model { get; }
         /// a click: the {"ev":"click"} id (flows.c click_ids)
         internal event Action<string> Clicked;
+        /// R1's Don't Ask Again: the versions its button showed when clicked ({"ev":"r1_dismiss"})
+        internal event Action<string> R1Dismissed;
         /// WM_ACTIVATEAPP: our app activated (true) or another app (false); never our own windows
         internal event Action<bool> AppActivation;
         /// the window left Minimized
@@ -29,11 +33,13 @@ namespace RbStemsPlus.Shell
         /// set before Show: the last size and position, fitted to a connected monitor (Fitted)
         internal WindowPlace Place;
         private WindowState lastState;
+        private DispatcherTimer reportStatusTimer;
 
-        internal MainWindow(ManageModel model)
+        internal MainWindow(ManageModel model, Action<string> log = null)
         {
             Model = model;
             InitializeComponent();
+            renderRecovery = new RenderRecovery(this, log, () => sessionRenderResetPending || repaint.Away);
             DataContext = model;
             Title = Texts.Get(CoreText.T_APP_NAME);
             ManageTab.Header = DialogWindow.NoAccessKey(Texts.Get(CoreText.T_TAB_MANAGE));
@@ -46,22 +52,32 @@ namespace RbStemsPlus.Shell
             Wire(ReinstallCache, CoreText.T_BTN_REINSTALL_CACHE, "reinstall_cache");
             Wire(SettingsButton, CoreText.T_MENU_SETTINGS, "settings");
             Wire(UninstallCache, CoreText.T_BTN_UNINSTALL_CACHE, "uninstall_cache");
+            Wire(RestoreButton, CoreText.T_WIN_BTN_RESTORE, "restore_pioneer");
+            SetTitle(R1DismissButton, model.R1DismissTitle);
+            R1DismissButton.Click += (s, e) => R1Dismissed?.Invoke(Model.R1DismissVersions);
             AutomationProperties.SetLiveSetting(StatusLine, AutomationLiveSetting.Polite);
             AutomationProperties.SetLiveSetting(NoticeLine, AutomationLiveSetting.Polite);
-            AutomationProperties.SetName(LogView, Texts.Get(CoreText.T_MENU_SHOW_LOG));
+            AutomationProperties.SetName(LogView, Texts.Plain(CoreText.T_MENU_SHOW_LOG));
             AutomationProperties.SetName(LeftColumn, Texts.Get(CoreText.T_TAB_MANAGE));
             model.PropertyChanged += ModelChanged;
+            StatusLine.Text = model.StatusLine; // no binding: UpdateStatusLine sets it from here on
             SystemParameters.StaticPropertyChanged += (s, e) => { if (e.PropertyName == nameof(SystemParameters.HighContrast)) DrawLights(); };
             ClampToWorkArea();
             DrawLights();
         }
 
+        // a button's words, as the Mac's (Settings… is a menu title: its access key's "_" dropped)
         private void Wire(Button b, CoreText title, string id)
         {
-            string text = Texts.Get(title);
+            SetTitle(b, title);
+            b.Click += (s, e) => Clicked?.Invoke(id);
+        }
+
+        private static void SetTitle(Button b, CoreText title)
+        {
+            string text = Texts.Plain(title);
             b.Content = DialogWindow.NoAccessKey(text);
             DialogWindow.SetRawName(b, text);
-            b.Click += (s, e) => Clicked?.Invoke(id);
         }
 
         // the start size (1040×680 DIP), clamped to the work area (app.md §4.6)
@@ -145,14 +161,132 @@ namespace RbStemsPlus.Shell
         private IntPtr Hook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
             if (msg == Win32.WM_ACTIVATEAPP) AppActivation?.Invoke(wParam != IntPtr.Zero);
+            // never handled here: WPF's HwndTarget sees each of them too (it registered this window
+            // for its session's notifications)
+            RepaintCause cause = RepaintPlan.Classify(msg, (long)wParam);
+            if (cause != RepaintCause.None)
+            {
+                if (RepaintPlan.IsSessionReturn(msg, cause)) sessionRenderResetPending = true;
+                RepaintNote(cause);
+            }
             return IntPtr.Zero;
         }
 
         protected override void OnStateChanged(EventArgs e)
         {
             base.OnStateChanged(e);
-            if (lastState == WindowState.Minimized && WindowState != WindowState.Minimized) Restored?.Invoke();
+            if (lastState == WindowState.Minimized && WindowState != WindowState.Minimized)
+            {
+                Restored?.Invoke();
+                RepaintNote(RepaintCause.Restored);
+            }
+            else if (WindowState == WindowState.Minimized && lastState != WindowState.Minimized) RepaintNote(RepaintCause.Minimized);
             lastState = WindowState;
+        }
+
+        // ------------------------------------------------------------------ the picture (Repaint.cs)
+
+        /// TEST builds: each nudge, for the session trace
+        internal event Action<string> RepaintTrace;
+        private readonly RepaintPlan repaint = new RepaintPlan();
+        private readonly RenderRecovery renderRecovery;
+        private DispatcherTimer repaintTimer;
+        private bool sessionRenderResetPending;
+
+        private static long NowMs() => Stopwatch.GetTimestamp() / (Stopwatch.Frequency / 1000);
+
+        /// A session, power or display change, or the window's state (also the TEST hooks').
+        internal void RepaintNote(RepaintCause cause)
+        {
+            repaint.Note(cause, WindowState == WindowState.Minimized, NowMs());
+            RepaintArm();
+        }
+
+        private void RepaintArm()
+        {
+            long due = repaint.DueIn(NowMs());
+            if (due < 0) { repaintTimer?.Stop(); return; }
+            if (repaintTimer == null)
+            {
+                repaintTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher);
+                repaintTimer.Tick += (s, e) => RepaintTick();
+            }
+            repaintTimer.Stop();
+            repaintTimer.Interval = TimeSpan.FromMilliseconds(Math.Max(1, due));
+            repaintTimer.Start();
+        }
+
+        private void RepaintTick()
+        {
+            repaintTimer.Stop();
+            while (repaint.Take(NowMs()))
+            {
+                if (sessionRenderResetPending) ResetSessionRenderTarget();
+                Nudge();
+            }
+            RepaintArm();
+        }
+
+        private void ResetSessionRenderTarget()
+        {
+            if (!IsVisible || WindowState == WindowState.Minimized) return;
+            sessionRenderResetPending = false;
+            renderRecovery.Reset(RenderResetReason.SessionChange);
+        }
+
+        // WPF asked to lay out and draw the whole window again, as a resize would: the layout now
+        // (a window restored with its minimized layout has its controls offscreen to UI
+        // Automation) and the client area invalidated (WPF's WM_PAINT invalidates all it draws)
+        private void Nudge()
+        {
+            IntPtr h = new WindowInteropHelper(this).Handle;
+            if (h == IntPtr.Zero || !IsVisible || WindowState == WindowState.Minimized) return;
+            RepaintTrace?.Invoke("repaint-nudge");
+            if (Content is UIElement root)
+            {
+                root.InvalidateMeasure();
+                root.InvalidateVisual();
+            }
+            UpdateLayout();
+            Win32.InvalidateRect(h, IntPtr.Zero, 0);
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            // HwndSource removes the window hook and HwndTarget unregisters the WTS listener.
+            sessionRenderResetPending = false;
+            reportStatusTimer?.Stop();
+            RepaintNote(RepaintCause.Closed);
+            base.OnClosed(e);
+        }
+
+        private void UpdateStatusLine()
+        {
+            string text = Model.StatusLine;
+            if (reportStatusTimer?.IsEnabled == true || StatusLine.Text == text) return;
+
+            // Set the text before notifying UIA. Clients read it from the event source.
+            StatusLine.Text = text;
+            if (!AutomationPeer.ListenerExists(AutomationEvents.LiveRegionChanged)) return;
+            if (text == Texts.Get(CoreText.T_CREATING_REPORT))
+            {
+                // A fast report can restore the idle text before a UIA client reads the source.
+                // Keep the report text briefly. The timer then publishes the latest status.
+                if (reportStatusTimer == null)
+                {
+                    reportStatusTimer = new DispatcherTimer(DispatcherPriority.Background, Dispatcher)
+                    {
+                        Interval = TimeSpan.FromMilliseconds(500)
+                    };
+                    reportStatusTimer.Tick += (s, e) =>
+                    {
+                        reportStatusTimer.Stop();
+                        UpdateStatusLine();
+                    };
+                }
+                reportStatusTimer.Start();
+            }
+            UIElementAutomationPeer.CreatePeerForElement(StatusLine)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
         }
 
         private void ModelChanged(object sender, PropertyChangedEventArgs e)
@@ -163,8 +297,10 @@ namespace RbStemsPlus.Shell
                     Title = Model.WindowTitle.Length > 0 ? Model.WindowTitle : Texts.Get(CoreText.T_APP_NAME);
                     break;
                 case nameof(ManageModel.StatusLine):
-                    // the status line is a polite live region: Narrator reads each new text (§4.7)
-                    UIElementAutomationPeer.FromElement(StatusLine)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+                    UpdateStatusLine();
+                    break;
+                case nameof(ManageModel.R1DismissVersions):
+                    SetTitle(R1DismissButton, Model.R1DismissTitle);
                     break;
                 case nameof(ManageModel.Notice):
                     UIElementAutomationPeer.FromElement(NoticeLine)?.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
@@ -196,7 +332,7 @@ namespace RbStemsPlus.Shell
             AutomationProperties.SetName(light, ax);
             AutomationProperties.SetHelpText(light, tip);
             light.ToolTip = tip.Length > 0 ? tip : null;
-            AutomationProperties.SetHelpText(label, tip);
+            if (label != null) AutomationProperties.SetHelpText(label, tip);
         }
 
         /// The log pane: new lines at the end, scrolled to them (Controller.log).
@@ -211,19 +347,14 @@ namespace RbStemsPlus.Shell
         internal void ShowLogEnd()
         {
             // inside render: the switch is the core's, so no {"ev":"tab"} goes back (PT2)
-#if PREPARE_TABS || SHELL_TEST
             selectingTab = true;
             try { ManageTab.IsSelected = true; }
             finally { selectingTab = false; }
-#else
-            ManageTab.IsSelected = true;   // the Manage tab only: no SelectionChanged handler (I86)
-#endif
             LogView.ScrollToEnd();
         }
 
         // ------------------------------------------------------------------ the tabs
 
-#if PREPARE_TABS || SHELL_TEST
         /// the user chose a tab (core.h's CORE_TAB_*): input only, never the render's selection
         internal event Action<int> TabChosen;
         private bool selectingTab;
@@ -270,11 +401,47 @@ namespace RbStemsPlus.Shell
             }
             finally { selectingTab = false; }
         }
-#else
-        // the first release: the Manage tab only (I86)
-        internal bool HasTab(long tab) => tab == CoreApi.CORE_TAB_MANAGE;
-        internal int ShownTab => CoreApi.CORE_TAB_MANAGE;
-        internal void SelectTab(long tab) { }
-#endif
+    }
+
+    // Keep the version's text and automation ID visible to clients that walk Control View.
+    public sealed class RbVersionRowText : TextBlock
+    {
+        protected override AutomationPeer OnCreateAutomationPeer() => new RowPeer(this);
+
+        private sealed class RowPeer : TextBlockAutomationPeer
+        {
+            public RowPeer(RbVersionRowText owner) : base(owner) { }
+
+            protected override bool IsControlElementCore() => true;
+        }
+    }
+
+    // The version's text carries its automation name. The glyph is just the visual cue.
+    public sealed class RbVersionGlyph : TextBlock
+    {
+        public static readonly DependencyProperty LookProperty = DependencyProperty.Register(
+            nameof(Look), typeof(long), typeof(RbVersionGlyph),
+            new PropertyMetadata(ManageModel.LookOff, (element, _) => ((RbVersionGlyph)element).Paint()));
+
+        public long Look { get => (long)GetValue(LookProperty); set => SetValue(LookProperty, value); }
+
+        public RbVersionGlyph()
+        {
+            Loaded += (sender, args) =>
+            {
+                SystemParameters.StaticPropertyChanged += SystemParameterChanged;
+                Paint();
+            };
+            Unloaded += (sender, args) => SystemParameters.StaticPropertyChanged -= SystemParameterChanged;
+        }
+
+        protected override AutomationPeer OnCreateAutomationPeer() => null;
+
+        private void SystemParameterChanged(object sender, PropertyChangedEventArgs args)
+        {
+            if (args.PropertyName == nameof(SystemParameters.HighContrast)) Paint();
+        }
+
+        private void Paint() => MainWindow.Draw(this, null, Look, "", "");
     }
 }

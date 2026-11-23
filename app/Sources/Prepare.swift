@@ -25,14 +25,28 @@ let rbSettingsFile = rbSettingsDir + "/rekordbox3.settings"
 
 // MARK: - the checks before preparing (requirement 6)
 
+private let settingsAttribute = #"[ \t\r\n]+([^ \t\r\n=/<>\"']+)[ \t\r\n]*=[ \t\r\n]*(?:"([^"<]*)"|'([^'<]*)')"#
+private let settingsAttributeRegex = try! NSRegularExpression(pattern: settingsAttribute)
+private let settingsValueRegex = try! NSRegularExpression(pattern: "<VALUE((?:\(settingsAttribute))*)[ \t\r\n]*/>")
+
 /// PartAnalysisQuality in rekordbox's settings file: <VALUE name="PartAnalysisQuality" val="0"/>.
 func stemsQuality(_ file: String = rbSettingsFile) -> Int? {
     guard let d = FileManager.default.contents(atPath: file), d.count < 4 << 20 else { return nil }
-    let s = String(decoding: d, as: UTF8.self)
-    guard let r = s.range(of: "name=\"PartAnalysisQuality\"") else { return nil }
-    let rest = s[r.upperBound...].prefix(64)
-    guard let v = rest.range(of: "val=\"") else { return nil }
-    return Int(rest[v.upperBound...].prefix { $0.isNumber })
+    let s = String(decoding: d, as: UTF8.self) as NSString
+    for element in settingsValueRegex.matches(in: s as String, range: NSRange(location: 0, length: s.length)) {
+        var name: String?, value: String?
+        for attribute in settingsAttributeRegex.matches(in: s as String, range: element.range(at: 1)) {
+            let key = s.substring(with: attribute.range(at: 1))
+            let quoted = attribute.range(at: attribute.range(at: 2).location == NSNotFound ? 3 : 2)
+            if key == "name", name == nil { name = s.substring(with: quoted) }
+            if key == "val", value == nil { value = s.substring(with: quoted) }
+        }
+        guard name == "PartAnalysisQuality" else { continue }
+        guard let value else { return nil }
+        let digits = value.utf8.prefix { (48...57).contains($0) }
+        return Int32(String(decoding: digits, as: UTF8.self)).map(Int.init)
+    }
+    return nil
 }
 
 /// Whether the installed bridge keeps prepared playlists: kept=1 among the tokens before
@@ -74,7 +88,33 @@ func keptNameOK(_ s: String) -> Bool {
     !s.isEmpty && s.count <= 64 && s.unicodeScalars.allSatisfy { ("A"..."Z").contains($0) || ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" || $0 == "_" }
 }
 
-/// The kept sets in `dir` whose date hasn't passed (`now`), by name.
+/// Validate the entire file as helper/kept.c's parse does before trusting its expiry.
+private func keptContents(_ data: Data) -> (until: Date, entries: Int)? {
+    let header = "rbstemsplus-kept 1\nuntil ".utf8
+    return data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+        guard bytes.starts(with: header) else { return nil }
+        let first = header.count
+        var i = first
+        var seconds: Int64 = 0
+        while i < bytes.count, i - first < 12, (48...57).contains(bytes[i]) {
+            seconds = seconds * 10 + Int64(bytes[i] - 48)
+            i += 1
+        }
+        guard i > first, i < bytes.count, bytes[i] == 10, bytes[first] != 48 || i - first == 1 else { return nil }
+        i += 1
+        let rowSize = 130
+        guard (bytes.count - i) % rowSize == 0 else { return nil }
+        func isHex(_ byte: UInt8) -> Bool { (48...57).contains(byte) || (97...102).contains(byte) }
+        for row in stride(from: i, to: bytes.count, by: rowSize) {
+            guard bytes[row + 64] == 32, bytes[row + 129] == 10,
+                  bytes[row..<row + 64].allSatisfy(isHex),
+                  bytes[row + 65..<row + 129].allSatisfy(isHex) else { return nil }
+        }
+        return (Date(timeIntervalSince1970: Double(seconds)), (bytes.count - i) / rowSize)
+    }
+}
+
+/// The unexpired and unreadable kept sets in `dir`, by name.
 func keptSets(_ dir: String = keptDir, now: Date = Date()) -> [KeptSet] {
     let names = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
     var out: [KeptSet] = []
@@ -82,12 +122,10 @@ func keptSets(_ dir: String = keptDir, now: Date = Date()) -> [KeptSet] {
         let name = String(n.dropLast(5))
         guard keptNameOK(name), fileType(dir + "/" + n) == S_IFREG else { continue }
         var set = KeptSet(name: name)
-        if let d = FileManager.default.contents(atPath: dir + "/" + n), d.count <= 8 << 20 {
-            let lines = String(decoding: d, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false)
-            if lines.count >= 2, lines[0] == "rbstemsplus-kept 1", lines[1].hasPrefix("until "), let u = Double(lines[1].dropFirst(6)) {
-                set.until = Date(timeIntervalSince1970: u)
-                set.entries = lines.dropFirst(2).filter { $0.count == 129 }.count
-            }
+        if let d = FileManager.default.contents(atPath: dir + "/" + n), d.count <= 8 << 20,
+           let parsed = keptContents(d) {
+            set.until = parsed.until
+            set.entries = parsed.entries
         }
         if let u = set.until, u <= now { continue }
         if let m = FileManager.default.contents(atPath: dir + "/" + name + ".manifest") {

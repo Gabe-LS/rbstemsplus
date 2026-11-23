@@ -50,6 +50,7 @@ int test_model_fixtures(const char *fixtures, const char *scratch);   /* models.
 void test_sha_memo(const char *scratch);                    /* the core DLL's sha256 memo on plat_mac.c */
 void test_afterexit(const char *scratch);                   /* afterexit.c: the uninstall's after-exit on fakes */
 void test_native_location(const char *scratch);             /* native_location.c: CORE_SLOW_LOCATION's measure (HF5) */
+void test_location_choice(const char *scratch);             /* native_steps.c: the location choice's steps (plan N3) */
 void test_afterexit_win(void);                              /* afterexit_self_win.c on Windows' own folders (wintest.c) */
 /* native_steps_test.c: a folder under scratch (its path about 780 bytes) holding one folder with a
  * 250-byte name, whose full path doesn't fit 1024 bytes. 0 and its path in out, or -1 */

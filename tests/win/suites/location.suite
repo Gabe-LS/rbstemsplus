@@ -1,0 +1,49 @@
+# The location's native code on real volumes (plan N3; the NL rulings' wintest rows, the location
+# choice's steps): winc-location-wintest.exe (win/c/tests/location_wintest.c) for each architecture
+# this VM runs, on VHDX "sticks" (a VHDX is a file-backed virtual disk, so LOCATION_PROBE refuses it
+# as internal: the external rule's real-hardware rows stay J28's, on the owner's PC). From "clean
+# Windows":
+#   tests/win/vm-run.sh stage --build
+#   tests/win/vm-run.sh run "clean Windows" location
+# Both measure modes use the release gate and bounded worker. The fixture supplies the bridge's
+# location=1 answer. The PC still covers the sleeping USB disk and hung mapped drive.
+# Rows: a labelled stick by its letter and its GUID path (the label, "S:"), an unlabelled one
+# ("T:"), a zero GUID and an unassigned letter (no volume), a 300+ character path (the label);
+# the choice's create, write (cache_dir in the volume-GUID form), measure (AVAILABLE, the label
+# remembered once), discover (itself, through the hint); a location on the unlabelled stick
+# (AVAILABLE by its letter); the measure through the DLL's own nl_rekordbox_running and
+# nl_process_start with a stand-in rekordbox.exe (a live bridge-state; start=-1 at a live pid and at
+# a pid with no process: none live; review N3R5); the label renamed while plugged (the hint
+# follows); both sticks unplugged with A's letter free (NOT_CONNECTED by the hinted label; the
+# unlabelled one "", its location NOT_CONNECTED with ""; a letter config NOT_CONNECTED by its hinted
+# label), then another stick given A's letter (both configs NOT_CONNECTED; the letter config keeps
+# its hint, NR4; the other stick's GUID path reaches MARKER_MISSING_OR_WRONG); A back on another
+# letter (AVAILABLE by its GUID path, discover finds the current folder, REMOVE_LOCATION by the
+# GUID path, Use This PC); A mounted in a folder with no letter (letter "", the saved GUID path
+# through the mount probes LINK); the choice's junction, marker ancestor, cache folder ancestor,
+# and mount point refusals; a mapped share (NETWORK, the choice refused as a network drive);
+# a SUBST default cache (the 50 GB floor). The wintest's --internal-ok lets the picker and saved
+# checks reach these paths on internal volumes with supported filesystems. Deletion still requires
+# a GUID path. Not a release.list row.
+include lib/vmlib.ps1
+include location/llib.ps1
+need vm
+# MODE       SECS NAME              SCRIPT
+user         60   letters           location/letters.ps1
+sys          300  attach            location/attach.ps1
+user         600  plugged           location/plugged.ps1
+user         300  bridge-live       location/bridge-live.ps1
+sys          120  rename            location/rename.ps1
+user         300  renamed           location/renamed.ps1
+sys          300  unplug            location/unplug.ps1
+user         300  unplugged         location/unplugged.ps1
+sys          300  stick-c           location/stick-c.ps1
+user         300  stick-c-on-a      location/stick-c-on-a.ps1
+sys          300  replug            location/replug.ps1
+user         300  remove-held       location/remove-held.ps1
+user         300  replugged         location/replugged.ps1
+sys          120  folder-mount      location/folder-mount.ps1
+user         300  folder-mounted    location/folder-mounted.ps1
+user         300  internal-ok       location/internal-ok.ps1
+sys          120  share             location/share.ps1
+user         300  network-subst     location/network-subst.ps1

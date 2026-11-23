@@ -276,12 +276,15 @@ typedef enum core_slow {
     CORE_SLOW_SIZE_WALK = 3,    /* key: the cache root. Its own policy (§3.5) */
     CORE_SLOW_ALPHATHETA = 4    /* key: the path checked. SecStaticCode on the Mac. Memoised */
 #ifdef CORE_WIN_POLICY
-    /* Windows only (W-core): R1's check (app.md §5.2), key: the current rekordbox version folder.
-     * FACT_R1_STATE (facts.def): what the live onnxruntime.dll and ort\'s copy are. Read at start,
-     * at activation and on the watcher's notifications, as the drive state is; the answer is never
+    /* Windows only (W-core): R1's check (app.md §5.2), key: the current rekordbox version folder,
+     * or "" (the app's ask, review WR1): the host finds the current one itself (the core DLL's
+     * discovery, as BRIDGE_SHA and STATE_LINE do); no folder is no answer (-1).
+     * FACT_R1_STATE (facts.def): what the live onnxruntime.dll and ort\'s copy are. Asked at start,
+     * at activation, on the watcher's notifications and when an action ends; the answer is never
      * cached (computed on each ask) from compat.c's file facts, memoised by path, size, mtime and
      * identity as the watcher reads them (compat.h: for R1's offer only; the restore worker reads
-     * fresh) */
+     * fresh). With a non-zero state, FACT_R1_DISMISSED (N10): that folder's version is in
+     * dismissed (R1's "Don't Ask Again for This Version", CORE_STEP_WIN_R1_DISMISS) */
     , CORE_SLOW_R1 = 5
 #endif
     /* added (M4): LocationMonitor's cheap state, measured now (measureCheapState: config.ini, the
@@ -377,6 +380,14 @@ typedef enum core_step {
     CORE_STEP_WATCH_KEPT = 59,
     CORE_STEP_WATCH_HELPER = 60,
     CORE_STEP_REPORT_FACTS = 61
+#ifdef CORE_WIN_POLICY
+    /* Windows only (N10, review WCM3): R1's "Don't Ask Again for This Version" (below) */
+    , CORE_STEP_WIN_R1_DISMISS = 62
+    /* Windows only (multi-version rekordbox, .orchestration/mv-spec.md §2.4): an action's scope
+     * over every installed rekordbox, and the last admin run's per-version outcome (below) */
+    , CORE_STEP_WIN_SCOPE = 63
+    , CORE_STEP_WIN_ADMIN_TARGETS = 64
+#endif
 } core_step;
 
 /* The flows' steps (M6): arguments, results, and what each one does today (the Swift function
@@ -414,9 +425,31 @@ typedef enum core_step {
  *                    the cheap sheet carries them (FACT_LOC_MEASURED, _KIND, _PROBE, _STATUS_DRIVE,
  *                    _BRIDGE_*, _DRIVE, FACT_REKORDBOX_RUNNING) with FACT_LOC_PAUSED_FLOOR the floor
  *                    the folder in use is under now (-1 none). Nonzero: not measured (no report)
+ *   WIN_R1_DISMISS   (Windows only, N10) R1's "Don't Ask Again for This Version" / "for These
+ *                    Versions" (app.md §5.2, §5.7): args[0] the versions its button showed at the
+ *                    click (F_WIN_R1_DISMISS_VERSIONS, comma-separated). For each one whose folder
+ *                    R1 still holds now, the line "r1:<version>" added to dismissed, its other
+ *                    lines kept (the reinstall question's writer, under the answer lock); a version
+ *                    not named is never written. 0 written; 1 nothing to dismiss (none named, or
+ *                    nothing to put back now in those); 2 not written (FACT_STEP_CODE the errno).
+ *                    FACT_STEP_TEXT the versions written, ", "-joined ("" none). Any worker
+ *   WIN_SCOPE        (Windows only, multi-version rekordbox) args[0] "install" | "reinstall" |
+ *                    "uninstall" | "restore": the rows that action covers now, by inventory.c's
+ *                    target rule over a fresh inventory (the worker computes the same set again).
+ *                    FACT_WIN_SCOPE the scope token for host->admin's version, FACT_WIN_SCOPE_VERSIONS
+ *                    its versions, FACT_WIN_SCOPE_AFFECTED (uninstall, restore) the versions holding
+ *                    our bridge or needing repair. FACT_STEP_CODE 0 ok, 1 the inventory is
+ *                    incomplete (nothing may be changed now; for uninstall only when no folder
+ *                    holds our bridge with its receipt: those are put back, the root stays, D3).
+ *                    Nonzero: couldn't be checked. Flow
+ *   WIN_ADMIN_TARGETS (Windows only, multi-version rekordbox) the last admin run's @target records:
+ *                    FACT_STEP_TEXT one line per target, version, code ("-" not started) and what
+ *                    (installed, already, put-back, kept, not-started, refused), tab-separated, each
+ *                    ending in "\n"; FACT_STEP_FLAG the shared root was kept (@root-kept). Flow
  *   REPORT_ZIP       buildReport, with the lights the core decided from REPORT_FACTS: args[0] the
  *                    Demucs v4 light's look ("0" on, "1" limited, "2" off), args[1] its text, args[2]
- *                    and args[3] the Stems Cache light's, args[4] "1" when the Stems Cache light's
+ *                    and args[3] the Stems Cache light's (on Windows the core measures R1 itself,
+ *                    CORE_SLOW_R1, so the light matches the window's), args[4] "1" when the Stems Cache light's
  *                    text is the location's (the issue's link names the location's state instead:
  *                    it names a drive). 0 made: FACT_STEP_PATH the zip, FACT_STEP_TEXT the zip as
  *                    the log and the dialog show it (redact), FACT_STEP_URL the issue's URL ("" none);
@@ -430,7 +463,9 @@ typedef enum core_step {
  *                    one found becomes the flow's); "saved": savedManifest() (becomes the flow's);
  *                    "check" (the launch's checkForUpdate, any worker): savedManifest() and
  *                    noteShownVersion, FACT_STEP_FLAG manifestDue; "fetch" (its background
- *                    download, any worker): fetchManifest, not the flow's. Every payload.json found
+ *                    download, any worker): fetchManifest, not the flow's. Windows "refresh-compat"
+ *                    is the same background fetch, only for an untried unsupported version/list pair.
+ *                    Every payload.json found
  *                    is recorded by manifestSeen (the version shown). FACT_PAYLOAD_FETCH (0
  *                    downloaded and verified, 1 not verified, 2 offline or not downloaded),
  *                    FACT_PAYLOAD_FOUND, FACT_PAYLOAD_AGE (manifestAge in whole seconds; not set
@@ -446,7 +481,8 @@ typedef enum core_step {
  *                    (dylibVersion; not set when unreadable), FACT_ORT_PREFIX. Windows:
  *                    FACT_ORT_LISTED in place of FACT_ORT_PREFIX (Pioneer's ORT's sha256 in the
  *                    verified payload's windows.compatible.ort_sha256), decided by
- *                    cache_blocked_win. The core decides (plus_blocked / cache_blocked) with the
+ *                    cache_blocked_win. FACT_REKORDBOX_VERSION is the version checked in this read,
+ *                    FACT_STEP_TEXT is its X.Y.Z folder identity for elevation. The core decides (plus_blocked / cache_blocked) with the
  *                    cheap facts
  *   SPACE            flow: args[0] "1" the model is copied, args[1] "1" Stems Cache: spaceShort's
  *                    measure. home's need (the model: its missing download, its copy and Pioneer's
@@ -486,11 +522,14 @@ typedef enum core_step {
  *                    with the core's location memo (CORE_SLOW_LOCATION), args[0] is the memo's
  *                    folder in use ("" none) and "the same folder" is that one: FACT_LOC_SIZE_KIND
  *                    4 then means "the core's size" (its own walk), which the core fills in
+ *                    Windows also sets FACT_LOC_MEASURED (0 when there was no drive measure)
+ *                    and FACT_STEP_PATH with the opened folder's identity when giving a gate.
  *   REMOVE_LOCATION  args[0] dir, args[1] id, args[2] "1" the whole folder: removeInLocation. 0 ok;
  *                    else FACT_STEP_CODE why (1 not connected, 2 the drive can't be opened, 3 it
  *                    can't be read, 4 an entry couldn't be opened: FACT_STEP_TEXT2 its name,
  *                    FACT_STEP_TEXT the OS error, 5 an entry is on another drive: FACT_STEP_TEXT2,
- *                    6 the marker isn't the one expected, 7 some files couldn't be deleted).
+ *                    6 the marker or folder identity isn't the one expected, 7 some files couldn't be deleted).
+ *                    Windows requires args[3], the identity returned with the confirmed gate.
  *                    Progress: core_flow_progress(DELETE, files, 0)
  *   REMOVE_OWN_FOLDERS  args[0] "1" keep the originals: removeOwnFolders. 0 all went
  *   APP_FATE         FACT_STEP_CODE 0 deleted (FACT_STEP_PATH the app), 1 another account's,
@@ -500,8 +539,10 @@ typedef enum core_step {
  *   LEFTOVER         leftoverAction(); when there is one, also `sudo -k`. FACT_STEP_TEXT its id
  *                    ("" none), FACT_STEP_TEXT2 its label
  *   REQUEST          args[0] "take": takeReinstallRequest; else reinstallRequestAge. FACT_STEP_CODE
- *                    the age in seconds, -1 none
- *   BRIDGE_SHA       FACT_STEP_TEXT sha256(rbLib), "" unreadable
+ *                    the age in seconds, -1 none. On read, FACT_STEP_TEXT is the request's line
+ *                    ("model\n", "cache\n" or "model cache\n"; omitted, empty or "reinstall\n" is legacy).
+ *   BRIDGE_SHA       FACT_STEP_TEXT sha256(rbLib), "" unreadable. Windows "outdated" and the
+ *                    payload's bridge digest return a differing receipt-backed bridge digest or "".
  *   UPDATE_CHECK     flow ("saved"): ownBundle and its folder writable. FACT_STEP_CODE 0 ok, 1 not
  *                    in its own place, 2 the folder isn't writable
  *   UPDATE_SWAP      flow: the app's zip downloaded (progress as DOWNLOAD), unpacked and checked,
@@ -519,15 +560,20 @@ typedef enum core_step {
  *                    without the log; the Settings sheet's facts now (the snapshot, settingsStems):
  *                    FACT_SET_GB and FACT_SET_DAYS (configNumber of config.ini's values),
  *                    FACT_SET_UNREADABLE, FACT_SET_CAN_CHOOSE (!installed || bridgeSaysLocation),
+ *                    FACT_STEP_FLAG (Windows: this build disables the drive chooser),
  *                    FACT_SET_SIZE_KIND (as FACT_LOC_SIZE_KIND, 4 included; -1 none) and FACT_SET_SIZE (bytes),
  *                    FACT_SET_CLEAR (0 nothing, 1 this Mac's folder, 2 this Mac without its folder,
  *                    3 the chosen folder: FACT_LOC_DIR and FACT_LOC_GATE_ID its gate, FACT_LOC_DRIVE
- *                    the snapshot's drive or its name, FACT_STEP_PATH redact of it),
+ *                    the snapshot's drive or its name, FACT_STEP_PATH redact of it,
+ *                    on Windows FACT_STEP_TEXT2 the opened folder's identity),
  *                    FACT_SET_LOCATION (0 This Mac, 1 a chosen folder, 2 config.ini unreadable, 3
  *                    set wrongly) with FACT_SET_LABEL_PATH for 1 (the folders between the volume's
  *                    mount point and the chosen folder's parent, '/'-separated, "" none; the core
  *                    joins the drive and them with " › " as locationLabel does), FACT_STEP_TEXT
  *                    driveName of config.ini's chosen folder ("" none)
+ *                    Windows kind 4 binds the memo's size to the measured FACT_LOC_IN_USE.
+ *                    Windows "config" (review N3R18): only FACT_SET_LOCATION, FACT_SET_LABEL_PATH
+ *                    and FACT_STEP_TEXT (the remembered drive name), without a measure.
  *   CLEAR_THIS_MAC   safeRemove(defaultCacheDir, whole). 0 ok; FACT_STEP_FLAG cacheIsLink()
  *   LOCATION_REMEASURE  LocationMonitor.invalidateSize(), then update(size: true) (the core's memo,
  *                    when it keeps one, does the same itself)
@@ -600,8 +646,8 @@ typedef enum core_step {
  *                    (one a line, as unsupportedKey joins them), FACT_STEP_TEXT dismissed's text,
  *                    FACT_STEP_TEXT2 the run line's version (versionText(shown:)). Nonzero: not read
  *   WATCH_REMEMBER   args[0] dismissed's new text, written whole (remember). Nonzero: not written
- *   WATCH_REINSTALL  "Reinstall Now": writeReinstallRequest(), then the app opened once this
- *                    process has exited (afterExit)
+ *   WATCH_REINSTALL  "Reinstall Now": args[0] the offered features ("model", "cache" or "model cache").
+ *                    Write the request, then open the app once this process has exited (afterExit).
  *   WATCH_KEPT       the prepared playlists' check as rekordbox's session gets under way
  *                    (watcherSettle's inSession; Watcher.swift's checkKeptSets until M7's switch-over:
  *                    the core decides, the host reads and writes). args[0]:
@@ -670,7 +716,14 @@ typedef enum core_model_outcome {
  * app's own worker in bin\ (the core runs the attempt once more, unless the host already did);
  * 1223 (ERROR_CANCELLED, UAC declined) or < 0: the user stopped, no alert. A worker that
  * couldn't be started (ShellExecuteEx failed for another reason) or crashed returns 1, never
- * < 0: the action failed, and the host's log has its result line with the raw code. */
+ * < 0: the action failed, and the host's log has its result line with the raw code.
+ * Multi-version rekordbox (Windows, .orchestration/mv-spec.md §2.2, §2.4): version carries
+ * CORE_STEP_WIN_SCOPE's token (FACT_WIN_SCOPE), not one rekordbox's version (no ABI change), and
+ * admin also returns 15 the worker's fresh scope differs (nothing changed: the core scopes again
+ * and asks once more), 16 some targets done, one failed (CORE_STEP_WIN_ADMIN_TARGETS says
+ * which) and 17 an install refused whose undo couldn't restore everything in the root (the core
+ * says so, never "nothing changed"): pure.h's ROOT_WIN_SCOPE_CHANGED, ROOT_WIN_PARTIAL,
+ * ROOT_WIN_UNDO_INCOMPLETE. */
 typedef enum core_admin_kind {
     CORE_ADMIN_CACHE_INSTALL = 0,      /* cacheInstallScript with CACHE_PREPARE's bridge, worded "install" */
     CORE_ADMIN_CACHE_REINSTALL = 1,    /* the same, worded "reinstall" */
@@ -808,8 +861,8 @@ typedef struct core_host {
  * sha256 key and the prepare helper's --model), root_ort (rootOrt), rekordbox (rbApp; on Windows: the current rekordbox version folder) and kept
  * (keptDir), the prepare helper's arguments; cache_default is defaultCacheDir. Under CORE_WIN_POLICY only: "os":"win" and "native":["post_work","slow_fact","step",
  * "admin","helper"]; added (W8b), with "os":"win" only: "prepare_tabs":true when the shell shows
- * the Status and Prepare tabs (the Prepare release, a TEST build's prepare scenarios); false or
- * absent (the first release, I10, I86): core_menu_state answers CORE_MENU_HIDDEN, not enabled, for
+ * the Status and Prepare tabs (the 1.5.0 release, a TEST build's prepare scenarios); false or
+ * absent (a Manage-only host): core_menu_state answers CORE_MENU_HIDDEN, not enabled, for
  * View > Status, View > Prepare, the Prepare menu and its items, so their shortcuts and
  * {"ev":"menu"} events do nothing. Unknown keys are refused. Returns NULL on a bad host table or config (the
  * reason goes to host->log). The calling thread becomes the core's main thread. */

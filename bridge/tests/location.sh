@@ -400,6 +400,19 @@ images() {
   mount | grep -q " on $mp (" || hdiutil attach -quiet -nobrowse -mountpoint "$mp" "$scratch/img-exfat.dmg" > /dev/null 2>&1
   expect '[ "$out" = "a model stored 1 a cache " ] && state_is available ""' \
     "exfat attached read-only: unavailable (read-only), not served; mounted read-write again, used without a restart: got \"$out\""
+
+  # an ancestor swapped for a link to another volume after the walk, before the folder is opened
+  # (BW3, common/location.c's TC1): the folder opened is on the other volume, which holds a folder
+  # with our marker too; it is refused ("folder"), and nothing is stored there
+  local other="$scratch/vol-apfs/DJ-$arch-swap" up="$mp/DJ-$arch-swap"
+  fresh img-swap; rm -rf "$up" "$up.old" "$other"; chosen_at "$up"
+  mkdir -p "$other/$FOLDER"; marker "$other/$FOLDER"
+  # (the steps start once the check is in its pause, after the walk: the swap comes during it)
+  out="$(RBSTEMS_TEST_OPEN_DELAY=3 RBSTEMS_HARNESS_WAIT_FOR="test: pause RBSTEMS_TEST_OPEN_DELAY" outcome "$m" \
+         "sh=mv '$up' '$up.old' && ln -s '$other' '$up'" "sh=sleep 4" a sleep | tr '\n' ' ')"
+  expect 'state_is unavailable folder && [ "$(flacs "$other/$FOLDER")" = 0 ] && [[ "$out" != *FAIL* ]] && has "test: pause RBSTEMS_TEST_OPEN_DELAY" && ! has "cache: using"' \
+    "a folder whose ancestor became a link to another volume after the walk: unavailable (folder), nothing stored there: got \"$out\""
+  rm -rf "$up" "$up.old" "$other"
 }
 
 # ---------------------------------------------------------------- faults at chosen moments (test hooks)

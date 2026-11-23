@@ -12,6 +12,19 @@
 
 typedef struct kept kept;
 
+#if defined(_WIN32) || defined(RBSP_TEST_PREPARE_CACHE_AT)
+#include "plat.h"
+#define KEPT_CACHE_AT 1
+typedef plat_dir kept_cache;
+/* Open <model>/<key[0:2]> under the open cache root, making missing folders if CREATE. */
+int kept_prefix_dir(kept_cache cache, const char *model, const char *key, int create, plat_dir *out);
+/* Touch the entry's FLAC and return the entry size, or -1 when its FLAC isn't there. */
+long long kept_touch_entry(kept_cache cache, const char *model, const char *key);
+#else
+#define KEPT_CACHE_AT 0
+typedef const char *kept_cache;
+#endif
+
 /* ~/Library/Application Support/rbstemsplus/kept (the account's home from the user database, as
  * the bridge's: plat_home; Windows: LocalAppData's rbstemsplus\kept); "" when there is no home */
 void kept_default_dir(char *buf, size_t n);
@@ -22,8 +35,9 @@ void kept_default_dir(char *buf, size_t n);
  * is this set's own earlier file: a run that stops leaves its entries in the set, and they count
  * towards the share only as a track holds them (kept_hold, kept_add). NAME NULL: no set
  * of this run's, the others only (none without the folder). CACHE: the folder holding the model
- * folders (for the sizes; "" for none: every size 0). NULL and *why on failure. */
-kept *kept_open(const char *dir, const char *name, time_t until, const char *cache, char *why, size_t n);
+ * folders (for the sizes; an empty path or unopened handle for none: every size 0). A cache
+ * handle remains owned by the caller. NULL and *why on failure. */
+kept *kept_open(const char *dir, const char *name, time_t until, kept_cache cache, char *why, size_t n);
 void kept_close(kept *k);
 
 /* entry MODEL/KEY (64 hex digits each) becomes this set's; its disk space (BYTES) counts towards
@@ -50,7 +64,7 @@ void kept_release(kept *k);
 
 /* entry MODEL/KEY's disk space in CACHE (its .flac, .desc and their companions), or -1 when its
  * FLAC isn't there */
-long long kept_entry_bytes(const char *cache, const char *model, const char *key);
+long long kept_entry_bytes(kept_cache cache, const char *model, const char *key);
 
 /* whether entry KEY (64 hex digits) is in a kept set already (another set's, this set's earlier
  * file, or this run's): keeping it again adds nothing */
@@ -66,6 +80,6 @@ int kept_write(kept *k, int all_done, char *why, size_t n);
 /* entries in no kept set, least recently used first, are removed from CACHE until it takes at
  * most TARGET bytes (*used: its size now, updated). K may be NULL (no set is kept). Returns the
  * number of entries removed. Only <model>/<xx>/<key>.flac|.desc and their "._" companions. */
-long long make_room(const char *cache, const kept *k, long long *used, long long target);
+long long make_room(kept_cache cache, const kept *k, long long *used, long long target);
 
 #endif

@@ -63,6 +63,14 @@ enum {
 #include "schema.def"
     CN_T_PREP_TRACKS
 };
+#ifdef CORE_WIN_POLICY
+#define CORE_EQ_T_WIN_RB_VERSIONS_T_WIN_RB_VERSIONS CORE_PROBE
+enum {
+#define COLUMN(id, table, kind, os, doc) CORE_KEEP_##os(CORE_IF(CORE_EQ(table, T_WIN_RB_VERSIONS))(CI_##id,))
+#include "schema.def"
+    CN_T_WIN_RB_VERSIONS
+};
+#endif
 
 /* every field is in one section's numbering, every column in one table's */
 _Static_assert(0

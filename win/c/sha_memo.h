@@ -51,6 +51,10 @@ typedef struct {
     long hashed;
 } sha_memo;
 
+#ifdef _WIN32
+int sha_memo_win_stamp(void *ctx, plat_file f, sha_memo_stamp *out);
+#endif
+
 void sha_memo_init(sha_memo *m);
 void sha_memo_free(sha_memo *m);
 /* path's sha256, hex, into out[65] (from the memo when its stamp still matches): 0, or nonzero

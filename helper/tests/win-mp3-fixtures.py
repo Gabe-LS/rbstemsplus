@@ -219,6 +219,11 @@ fr128 = frames(cbrt)
 cut = [p for p, _ in fr128 if p >= third][0]
 put("joined-128-192-128-t.mp3", cbrt[:cut] + c192 + cbrt[cut:])
 put("joined-vbr-xing-cbr.mp3", vbr + cbrt)                            # a Xing count of the first part only
+stale_xing = bytearray(vbr[:frames(vbr)[419][0]])
+assert len(stale_xing) > 65536 and stale_xing[36:40] == b"Xing" and stale_xing[43] & 3 == 3
+# 419 mapped frames cross the first chunk boundary. With this tag the old probe counted 418.
+stale_xing[44:52] = struct.pack(">II", 417, len(stale_xing))
+put("stale-xing-chunk-boundary.mp3", stale_xing)
 
 # short files: rekordbox's scanner wants three frames in a row
 for k in (1, 2, 3, 4, 5, 8):

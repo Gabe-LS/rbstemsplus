@@ -3,7 +3,7 @@
 # app (vm/install.ps1) and w13b-fixture.ps1's sheets. It drives the probe through its pipe
 # (\\.\pipe\rbstemsplus-probe, acks in <Out>\acks: Probe.cs's commands, status.* fields, select-set
 # and doubleclick-set) and, for what the probe can't do, real input from outside the app: UI
-# Automation (Windows' own UIAutomationClient: scroll, select, focus) and SendInput/SendKeys.
+# Automation for scroll and focus, and rbui for PT8's physical mouse and key input.
 #   -Part spike: the 5,000-row spike, perf mode, -Status big: launch to the window drawn and to
 #      5,000 sets shown; scrolling them (UIA and the wheel) sends nothing; a select-set and a UIA
 #      select each send exactly one select; doubleclick-set opens the set's playlist on the Prepare
@@ -16,8 +16,7 @@
 #      "err disabled" in a launch without it, and no shell.prepare_mismatch mark in either.
 #   -Part all: both in one job, the spike first (run-w13b.sh runs them as two jobs).
 #   -Part dog: the watchdog, started by the runner itself (Arm): not for a caller.
-# Every step runs in its own try/catch: a step that throws is a FAIL and the next one runs. Lines
-# tagged MANUAL or VISUAL are what this run can't decide: the owner's or the VM lane's eyes.
+# A step that throws records a failure and the next step runs. Screenshots are retained.
 # Results (records, acks, screenshots) go to -Results. Exit code: the number of failed checks.
 # Every wait is bounded: the probe's own (3 min at most), each command's ack (30 s by default),
 # and the dog: 9 minutes per job (below winps.sh's 10), after which it ends the app, restores high
@@ -38,7 +37,10 @@ param(
     [int]$DogPid = 0,
     [long]$DogTicks = 0,
     [int]$DogMs = 0,
-    [int]$HcStart = 0
+    [int]$HcStart = 0,
+    [string]$Rbui = '\\Mac\win\vm\uia\rbui\rbui.exe',
+    [string]$MacTrace = (Join-Path $PSScriptRoot 'prepare-choose-estimate.jsonl'),
+    [ValidateSet('', 'arm64', 'x64')][string]$Native = ''
 )
 # PowerShell's variable names ignore case: no $script: name below may match a parameter's
 # (App, Out, Results, Sets, Part, DogPid, DogTicks, DogMs, HcStart), or it would overwrite it
@@ -79,13 +81,16 @@ if ($Part -eq 'dog') {
     try { $ticks = $r.StartTime.Ticks } catch { exit 0 }
     if ($ticks -ne $DogTicks) { exit 0 }
     if ($r.WaitForExit($DogMs)) { exit 0 }
-    Stop-Process -Name 'RB Stems Plus' -Force -ErrorAction SilentlyContinue
+    $ownExe = Join-Path $App 'RB Stems Plus.exe'
+    Get-Process 'RB Stems Plus' -ErrorAction SilentlyContinue | Where-Object Path -EQ $ownExe |
+        Stop-Process -Force -ErrorAction SilentlyContinue
     try { if ([W13bContrast]::On() -ne (($HcStart -band 1) -ne 0)) { [W13bContrast]::Set(($HcStart -band 1) -ne 0, $HcStart) | Out-Null } } catch { }
     try { & $fixture -App $App -Clean | Out-Null } catch { }
     try { $r.Kill() } catch { }
     exit 3
 }
 
+. (Join-Path $PSScriptRoot 'w13b-checks.ps1')
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes, System.Drawing, System.Windows.Forms
 Add-Type @"
 using System; using System.Runtime.InteropServices;
@@ -93,14 +98,13 @@ public static class W13bInput {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint flags, int dx, int dy, int data, UIntPtr extra);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-  public static void Click(int x, int y) { SetCursorPos(x, y); mouse_event(2, 0, 0, 0, UIntPtr.Zero); mouse_event(4, 0, 0, 0, UIntPtr.Zero); }
+  [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   public static void Wheel(int x, int y, int notches) { SetCursorPos(x, y); mouse_event(0x0800, 0, 0, notches * 120, UIntPtr.Zero); }
 }
 "@
 
 $fail = 0
 function Check($ok, $what) { if ($ok) { "PASS $what" } else { "FAIL $what"; $script:fail++ } }
-function Manual($what) { "MANUAL $what" }
 # a step: its own try/catch, a throw is a FAIL and the run goes on
 function Step([string]$Name, [scriptblock]$Body) {
     try { & $Body } catch { Check $false ("$Name stopped: " + $_.Exception.Message) }
@@ -114,8 +118,6 @@ $ellipsis = [string][char]0x2026
 $stopName = 'Stop Keeping' + $ellipsis
 $againName = 'Prepare Again'
 
-# the shots taken (a VISUAL line lists only these); a required one not taken is a FAIL
-$script:shots = New-Object System.Collections.Generic.List[string]
 function Shot([string]$Name) {
     try {
         $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
@@ -124,7 +126,6 @@ function Shot([string]$Name) {
         $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
         $bmp.Save((Join-Path $Results "$Name.png"), [System.Drawing.Imaging.ImageFormat]::Png)
         $g.Dispose(); $bmp.Dispose()
-        $script:shots.Add("$Name.png")
         return $true
     } catch { Write-Host "  (shot $($Name): $($_.Exception.Message))"; return $false }
 }
@@ -148,18 +149,28 @@ function Arm([int]$Minutes = 9) {
 # ---------------------------------------------------------------- the app and the probe's pipe
 
 $script:proc = $null; $script:pipe = $null; $script:writer = $null; $script:n = 0; $script:sw = $null
-function Start-App([string]$Mode, [string]$Status, [switch]$NoPrepare) {
-    Get-Process 'RB Stems Plus' -ErrorAction SilentlyContinue | Stop-Process -Force
-    Start-Sleep -Milliseconds 500
-    & $fixture -App $App -Out $Out -Mode $Mode -Status $Status -Sets $Sets
+function Start-App([string]$Mode, [string]$Status, [switch]$NoPrepare, [switch]$Clock) {
+    if (Get-Process 'RB Stems Plus' -ErrorAction SilentlyContinue) { throw 'an RB Stems Plus process is already running' }
+    & $fixture -App $App -Out $Out -Mode $Mode -Status $Status -Sets $Sets -Native $Native
     if ($LASTEXITCODE -ne 0) { throw "w13b-fixture.ps1 failed ($LASTEXITCODE)" }
     New-Item -ItemType Directory -Force -Path $Out | Out-Null
     Get-ChildItem -LiteralPath $Out -File | Remove-Item -Force
-    # the Status and Prepare tabs shown (Shell.PrepareShown); -NoPrepare: the first release's window
-    if (-not $NoPrepare) { $env:RBSP_SHELL_TEST = 'prepare' }
-    $script:sw = [Diagnostics.Stopwatch]::StartNew()
-    $script:proc = Start-Process -FilePath $exe -PassThru
-    Remove-Item Env:\RBSP_SHELL_TEST -ErrorAction SilentlyContinue
+    $prevPrepare = $env:RBSP_SHELL_TEST
+    $prevClock = $env:RBSP_TEST_PICKER_DAY
+    try {
+        $env:RBSP_SHELL_TEST = if ($NoPrepare) { '' } else { 'prepare' }
+        $env:RBSP_TEST_PICKER_DAY = if ($Clock) {
+            $script:clockDay = (Get-Date).Date
+            $p = Join-Path $Out 'picker-day.txt'
+            Write-PickerDay $p $script:clockDay
+            $p
+        } else { '' }
+        $script:sw = [Diagnostics.Stopwatch]::StartNew()
+        $script:proc = Start-Process -FilePath $exe -PassThru
+    } finally {
+        $env:RBSP_SHELL_TEST = $prevPrepare
+        $env:RBSP_TEST_PICKER_DAY = $prevClock
+    }
     $script:pipe = New-Object System.IO.Pipes.NamedPipeClientStream('.', 'rbstemsplus-probe', [System.IO.Pipes.PipeDirection]::Out)
     $script:pipe.Connect(30000)
     $script:writer = New-Object System.IO.StreamWriter($script:pipe, (New-Object System.Text.UTF8Encoding($false)))
@@ -169,7 +180,7 @@ function Stop-App([string]$Tag) {
     if ($script:proc -and -not $script:proc.HasExited) {
         Cmd 'flush' 10 | Out-Null
         Cmd 'quit' 5 | Out-Null
-        if (-not $script:proc.WaitForExit(15000)) { $script:proc.Kill() }
+        if (-not $script:proc.WaitForExit(15000)) { $script:proc.Kill(); [void]$script:proc.WaitForExit(5000) }
     }
     try { $script:writer.Dispose(); $script:pipe.Dispose() } catch { }
     $script:writer = $null; $script:pipe = $null
@@ -219,7 +230,7 @@ function SentAfter([string]$VerbArg) {
 
 function Main {
     $c = [System.Windows.Automation.PropertyCondition]::new($AE::ProcessIdProperty, [int]$script:proc.Id)
-    $AE::RootElement.FindAll($TS::Children, $c) | Where-Object { $_.Current.ControlType -eq $CT::Window } | Select-Object -First 1
+    $AE::RootElement.FindAll($TS::Children, $c) | Where-Object { $_.Current.ControlType -eq $CT::Window -and (First $_ $CT::Tab) } | Select-Object -First 1
 }
 function First($root, $type) { if ($null -eq $root) { return $null }; $root.FindFirst($TS::Descendants, [System.Windows.Automation.PropertyCondition]::new($AE::ControlTypeProperty, $type)) }
 function All($root, $type) { if ($null -eq $root) { return @() }; @($root.FindAll($TS::Descendants, [System.Windows.Automation.PropertyCondition]::new($AE::ControlTypeProperty, $type))) }
@@ -236,13 +247,19 @@ function TabRoot {
 # a ListView with a GridView is a DataGrid to UIA (GridViewAutomationPeer), its rows DataItems
 function TabTable { First (TabRoot) $CT::DataGrid }
 function Centre($el) { $r = $el.Current.BoundingRectangle; @([int]($r.X + $r.Width / 2), [int]($r.Y + $r.Height / 2)) }
-function Front { $m = Main; if ($m) { [W13bInput]::SetForegroundWindow([IntPtr]$m.Current.NativeWindowHandle) | Out-Null; Start-Sleep -Milliseconds 200 } }
-# a tree row's own line: its bounds' top line (a folder's bounds take its open children too); dx 9
-# is the expander's column (19 px in WPF's TreeViewItem template), dx 31 the glyph and title
-function RowPoint($el, [int]$Dx) { $r = $el.Current.BoundingRectangle; @([int]($r.X + $Dx), [int]($r.Y + [Math]::Min(10, $r.Height / 2))) }
-function ClickAt($p) { Front; [W13bInput]::Click($p[0], $p[1]) }
-function DoubleClickAt($p) { Front; [W13bInput]::Click($p[0], $p[1]); Start-Sleep -Milliseconds 60; [W13bInput]::Click($p[0], $p[1]) }
-function Keys([string]$k) { Front; [System.Windows.Forms.SendKeys]::SendWait($k) }
+function Front {
+    $m = Main
+    if (-not $m) { throw 'the test app has no window' }
+    $h = [IntPtr]$m.Current.NativeWindowHandle
+    [W13bInput]::SetForegroundWindow($h) | Out-Null
+    Start-Sleep -Milliseconds 200
+    if ([W13bInput]::GetForegroundWindow() -ne $h) { throw 'another window has input focus' }
+}
+function PrepareInput([string]$Action, [string]$Target) {
+    Front
+    & $Rbui prepare-input $Action $Target --pid $script:proc.Id --timeout 6 | Write-Host
+    if ($LASTEXITCODE -ne 0) { throw "rbui $Action failed for $Target (exit $LASTEXITCODE)" }
+}
 # a list's or tree's scroll, by UIA's ScrollPattern, then by the wheel: each step's time to quiet,
 # its percent checked (within 1 of the target; the wheel from 0 moves it). Returns the pass flag:
 # no ScrollPattern, a refused step, a wrong percent or a step that didn't settle is a fail.
@@ -280,6 +297,59 @@ function ScrollAll($el, [string]$What, [switch]$Tree) {
     if (-not ((AllTrue $t[0]) -and $after -gt 0)) { $ok = $false }
     Write-Host "  $What by the wheel (30 x 3 notches down from 0%): $($t[1]) ms to quiet, at $([Math]::Round($after, 1))%"
     return $ok
+}
+
+# Read two cell interiors from the same screenshot. The ordinary first cell supplies
+# the selection's actual foreground for this theme, DPI and focus state.
+function Get-CellPixels($Image, $Screen, $Row, $Header) {
+    $left = [int][Math]::Ceiling([Math]::Max($Row.Left, $Header.Left)) + 3
+    $right = [int][Math]::Floor([Math]::Min($Row.Right, $Header.Right)) - 3
+    $top = [int][Math]::Ceiling($Row.Top) + 2
+    $bottom = [int][Math]::Floor($Row.Bottom) - 2
+    if ($left -ge $right -or $top -ge $bottom -or $left -lt $Screen.Left -or
+        $right -gt $Screen.Right -or $top -lt $Screen.Top -or $bottom -gt $Screen.Bottom) {
+        throw 'the selected cell interior is outside the captured desktop'
+    }
+    for ($y = $top; $y -lt $bottom; $y++) {
+        for ($x = $left; $x -lt $right; $x++) {
+            $Image.GetPixel($x - $Screen.Left, $y - $Screen.Top).ToArgb() -band 0xFFFFFF
+        }
+    }
+}
+function Check-CellInk($Row, [string]$FirstColumn, [string]$LastColumn, [string]$ShotName) {
+    Front
+    $grid = TabTable
+    $headers = @(All $grid $CT::HeaderItem)
+    $first = $headers | Where-Object { $_.Current.Name -ceq $FirstColumn } | Select-Object -First 1
+    $last = $headers | Where-Object { $_.Current.Name -ceq $LastColumn } | Select-Object -First 1
+    if (-not ($first -and $last)) { throw "could not locate the $FirstColumn and $LastColumn columns" }
+    $r = $Row.Current.BoundingRectangle
+    $screen = [System.Windows.Forms.Screen]::FromPoint([Drawing.Point]::new([int]$r.Left, [int]$r.Top)).Bounds
+    $bmp = New-Object System.Drawing.Bitmap $screen.Width, $screen.Height
+    $graphics = [Drawing.Graphics]::FromImage($bmp)
+    try {
+        $graphics.CopyFromScreen($screen.Location, [Drawing.Point]::Empty, $screen.Size)
+        $bmp.Save((Join-Path $Results "$ShotName.png"), [Drawing.Imaging.ImageFormat]::Png)
+        $reference = @(Get-CellPixels $bmp $screen $r $first.Current.BoundingRectangle)
+        $gray = @(Get-CellPixels $bmp $screen $r $last.Current.BoundingRectangle)
+        Check (Test-W13bCellInk $reference $gray) "${ShotName}: $LastColumn uses the selected row foreground"
+    } finally {
+        $graphics.Dispose()
+        $bmp.Dispose()
+    }
+}
+function Check-CellFocus($Row, $Other, [string]$FirstColumn, [string]$LastColumn, [string]$Tab) {
+    if (-not ($Row -and $Other)) { throw "the $Tab row or focus target is missing" }
+    $selection = $Row.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern)
+    $selection.Select()
+    $Row.SetFocus()
+    Start-Sleep -Milliseconds 400
+    Check ($selection.Current.IsSelected -and $Row.Current.HasKeyboardFocus) "$Tab row selected and focused"
+    Check-CellInk $Row $FirstColumn $LastColumn "pt-st3-$Tab-focused"
+    $Other.SetFocus()
+    Start-Sleep -Milliseconds 400
+    Check ($selection.Current.IsSelected -and -not $Row.Current.HasKeyboardFocus) "$Tab row still selected after focus moved"
+    Check-CellInk $Row $FirstColumn $LastColumn "pt-st3-$Tab-unfocused"
 }
 
 # ================================================================ the spike
@@ -380,15 +450,17 @@ function CollapseChecks([string]$Marker, [int]$S0, [int]$F0, [string]$How) {
     $sel = (Count 'sent:select') - $S0
     $fol = (Count 'sent:folder') - $F0
     $after = @(SentAfter $Marker | Where-Object { $_.ev -eq 'select' -or $_.ev -eq 'folder' })
-    $s = @($after | Where-Object { $_.ev -eq 'select' }); $f = @($after | Where-Object { $_.ev -eq 'folder' })
-    $same = $s.Count -eq 1 -and $f.Count -eq 1 -and $s[0].gen -eq $f[0].gen -and $s[0].row -eq $f[0].row -and $f[0].open -eq $false
-    Check ($sel -eq 1 -and $fol -eq 1 -and $same) "$How collapses the folder holding the selection: one select (its row) and one folder (open false) at one gen ($(($after | ForEach-Object { $_.ev + ':' + $_.row + '@' + $_.gen }) -join ' '))"
-    Check ((WaitFor 3000 'prepare.info.str=A folder: choose one of its playlists.') -and (WaitFor 3000 'prepare.tracksTable.rows=0') -and (WaitFor 3000 'prepare.prepareBtn.en=0')) "after it ($How): the folder's line, no tracks, Prepare off"
+    Check ($sel -eq 1 -and $fol -eq 1 -and (Test-W13bCollapse $after 0)) "${How}: one select and one closed-folder event for Sets, at one generation"
+    $mac = Get-W13bMacFolder $MacTrace
+    $matches = foreach ($key in $mac.Keys) { WaitFor 3000 "$key=$($mac[$key])" }
+    Check ((AllTrue $matches) -and (WaitFor 3000 'prepare.outline.sel=0') -and
+        (WaitFor 3000 'prepare.outline.r0=> Sets')) "${How}: closed Sets selected, same summary, track count and Prepare state as the Mac A trace"
+
 }
 
 function PT {
     "== the PT review's cases (trace mode)"
-    Start-App 'trace' 'small'
+    Start-App 'trace' 'small' -Clock
     Step 'launch' {
         Check (Ok 'event 30000 windowDrawn 1' 40) "the window drawn"
         Check (Quiet 800 15000) "the app settles"
@@ -435,35 +507,42 @@ function PT {
             Check ((Quiet 400 5000) -and (WaitFor 3000 'prepare.until.days=10')) "a cleared day field snaps back to the core's"
         }
     }
-    Manual "the calendar opened after midnight starts at the new tomorrow: with the app open, move the VM's clock past midnight, open the picker's calendar, see the new tomorrow as its first day"
+    Step 'calendar after midnight' {
+        Invoke-W13bMidnight (Join-Path $Out 'picker-day.txt') $script:clockDay
+    }
 
     Step 'real input on the outline' {
         $tree = First (TabRoot) $CT::Tree
         $friday = Item $tree $CT::TreeItem 'Friday'
-        Check ($null -ne $friday) "Friday's row found by UIA"
-        if (-not $friday) { return }
-        $f0 = Count 'sent:folder'
-        DoubleClickAt (RowPoint $friday 31)
-        Check ((Quiet 500 5000) -and (Count 'sent:folder') -eq $f0) "a double click on a leaf playlist sends no folder"
         $warm = Item $tree $CT::TreeItem 'Warm-up'
-        $s0 = Count 'sent:select'; $f0 = Count 'sent:folder'
-        ClickAt (RowPoint $warm 31)
-        Check ((Quiet 500 5000) -and (Count 'sent:select') -eq $s0 + 1 -and (Count 'sent:folder') -eq $f0) "a click on Warm-up: exactly one select, no folder"
-        Keys '{UP}'
-        Check ((Quiet 500 5000) -and (Count 'sent:select') -eq $s0 + 2 -and (Count 'sent:folder') -eq $f0) "Up from Warm-up: exactly one more select, no folder"
-        # the selection is now inside Sets (Late): a real expander click on Sets collapses the folder that holds it
         $setsRow = Item $tree $CT::TreeItem 'Sets'
-        Check ($null -ne $setsRow) "Sets' row found by UIA (its expander)"
-        if (-not $setsRow) { return }
-        $exp = RowPoint $setsRow 9
-        Ok 'mark expander-collapse' | Out-Null
+        if (-not ($friday -and $warm -and $setsRow)) { throw 'the Prepare fixture rows are not visible' }
+        $f0 = Count 'sent:folder'
+        PrepareInput 'double-click' $friday.Current.Name
+        Check ((Quiet 500 5000) -and $f0 -ge 0 -and (Count 'sent:folder') -eq $f0) 'double-clicking a leaf sends no folder'
+
+        if (-not (Ok 'mark warm-up')) { throw 'could not mark the trace' }
+        PrepareInput 'click' $warm.Current.Name
+        $q = Quiet 500 5000
+        $events = @(SentAfter 'mark warm-up' | Where-Object { $_.ev -in 'select', 'folder' })
+        Check ($q -and (Test-W13bOutlineSelection $events 3)) 'click on Warm-up sends exactly one outline selection'
+        if (-not (Ok 'mark up')) { throw 'could not mark the trace' }
+        PrepareInput 'up' $warm.Current.Name
+        $q = Quiet 500 5000
+        $events = @(SentAfter 'mark up' | Where-Object { $_.ev -in 'select', 'folder' })
+        Check ($q -and (Test-W13bOutlineSelection $events 2)) 'Up from Warm-up sends exactly one outline selection of Late'
+
+        if (-not (Ok 'mark expander-collapse')) { throw 'could not mark the trace' }
         $s0 = Count 'sent:select'; $f0 = Count 'sent:folder'
-        ClickAt $exp
-        Check (Quiet 600 5000) "the expander click settles"
-        CollapseChecks 'mark expander-collapse' $s0 $f0 'a real expander click'
-        $s0 = Count 'sent:select'; $f0 = Count 'sent:folder'
-        ClickAt $exp
-        Check ((Quiet 600 5000) -and (Count 'sent:folder') -eq $f0 + 1 -and (Count 'sent:select') -eq $s0) "the expander clicked again: exactly one folder (open), no select"
+        PrepareInput 'expander' $setsRow.Current.Name
+        Check (Quiet 600 5000) 'expander collapse settles'
+        CollapseChecks 'mark expander-collapse' $s0 $f0 'FlaUI expander click'
+        if (-not (Ok 'mark expander-open')) { throw 'could not mark the trace' }
+        PrepareInput 'expander' $setsRow.Current.Name
+        $q = Quiet 600 5000
+        $events = @(SentAfter 'mark expander-open' | Where-Object { $_.ev -in 'select', 'folder' })
+        Check ($q -and $events.Count -eq 1 -and $events[0].ev -ceq 'folder' -and
+            $events[0].row -eq 0 -and $events[0].open -is [bool] -and $events[0].open) 'reopening Sets sends one open event and no selection'
     }
     Step 'the collapse by the probe' {
         Ok 'expand 1' 5 | Out-Null
@@ -474,7 +553,6 @@ function PT {
         CollapseChecks 'collapse 1' $s0 $f0 'the probe'
         Ok 'expand 1' | Out-Null
     }
-    "VISUAL the same collapse in a Mac A trace ends with the same fields (folder before select there, allowed): compare $Results\pt-app-*.jsonl with the A trace (trace.py)"
 
     Step 'ST2 tab order' {
         Ok 'tab Status' | Out-Null
@@ -486,45 +564,36 @@ function PT {
         Check ($null -ne $row) "a set's row found by UIA (a DataItem in the Status tab)"
         if ($row) {
             $row.SetFocus()
-            Keys '{TAB}'
+            PrepareInput 'tab' '#Tabs'
             $f1 = $AE::FocusedElement.Current.Name
-            Keys '{TAB}'
+            PrepareInput 'tab' '#Tabs'
             $f2 = $AE::FocusedElement.Current.Name
             Check ($f1 -eq $stopName -and $f2 -eq $againName) "Tab: the table, then Stop Keeping, then Prepare Again (ST2: '$f1', '$f2')"
         }
     }
     Step 'ST3 high contrast' {
         $hc = [W13bContrast]::Set($true, $script:hc0)
-        Start-Sleep -Seconds 3
-        Check ($hc -and [W13bContrast]::On()) "high contrast on"
-        $row = All (TabTable) $CT::DataItem | Select-Object -First 1
-        Check ($null -ne $row) "a set's row for ST3's Status shots"
-        if ($row) {
-            $row.SetFocus(); Start-Sleep -Milliseconds 400
-            Check (Shot 'pt-st3-status-focused') "shot pt-st3-status-focused"
+        try {
+            Start-Sleep -Seconds 3
+            if (-not ($hc -and [W13bContrast]::On())) { throw 'could not enable high contrast' }
+            Front
+            $row = All (TabTable) $CT::DataItem | Select-Object -First 1
             $again = Item (TabRoot) $CT::Button $againName
-            if ($again) { $again.SetFocus() }
-            Start-Sleep -Milliseconds 400
-            Check ($null -ne $again -and (Shot 'pt-st3-status-unfocused')) "shot pt-st3-status-unfocused"
+            Check-CellFocus $row $again 'Playlist' 'State' 'status'
+
+            if (-not ((Ok 'tab Prepare') -and (Ok 'select 2') -and (WaitFor 15000 'prepare.tracksTable.rows=3') -and
+                (WaitFor 15000 'prepare.prepareBtn.en=1') -and (Quiet 600 10000))) {
+                throw 'Friday and its estimated tracks did not appear'
+            }
+            $row = All (TabTable) $CT::DataItem | Where-Object { $_.Current.Name -like '*friday-b*' } | Select-Object -First 1
+            $tree = First (TabRoot) $CT::Tree
+            Check-CellFocus $row $tree 'Track' 'Note' 'prepare'
+        } finally {
+            if ([W13bContrast]::On() -ne $script:contrast0) {
+                Check ([W13bContrast]::Set($script:contrast0, $script:hc0)) 'restored original contrast mode'
+                Start-Sleep -Seconds 3
+            }
         }
-        Ok 'tab Prepare' | Out-Null
-        Check ((Ok 'select 2') -and (WaitFor 15000 'prepare.tracksTable.rows=3') -and (Quiet 600 10000)) "Friday chosen for ST3's Prepare shots"
-        # friday-b: a row with a Note ("about 5 min"), the gray cell ST3 is about
-        $trow = All (TabTable) $CT::DataItem | Select-Object -Skip 1 -First 1
-        $parts = if ($trow) { @($trow.Current.Name -split ', ') } else { @() }
-        Check ($trow -and $parts.Count -ge 3 -and $parts[0] -like '*friday-b*' -and $parts[-1].Length -gt 0) "friday-b's row has a Note ($(if ($trow) { $trow.Current.Name }))"
-        if ($trow) {
-            $trow.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-            $trow.SetFocus(); Start-Sleep -Milliseconds 400
-            Check (Shot 'pt-st3-prepare-focused') "shot pt-st3-prepare-focused"
-            $t2 = First (TabRoot) $CT::Tree; if ($t2) { $t2.SetFocus() }
-            Start-Sleep -Milliseconds 400
-            Check (Shot 'pt-st3-prepare-unfocused') "shot pt-st3-prepare-unfocused"
-        }
-        if ([W13bContrast]::On() -ne $script:contrast0) { [W13bContrast]::Set($script:contrast0, $script:hc0) | Out-Null }
-        Start-Sleep -Seconds 3
-        $st3 = @($script:shots | Where-Object { $_ -like 'pt-st3-*' })
-        "VISUAL ST3: in high contrast a selected row's gray cell (the Status tab's State, the Prepare tab's Note) reads in the row's own highlight colour, focused and not: $(if ($st3.Count) { ($st3 | ForEach-Object { "$Results\$_" }) -join ', ' } else { 'no shot taken' })"
     }
     Step 'Return presses Prepare' {
         # last: a run starts, the fake's run-default waits until stopped
@@ -535,14 +604,13 @@ function PT {
         $friday.SetFocus()
         Ok 'mark return' | Out-Null
         $k0 = Count 'sent:click'
-        Keys '{ENTER}'
+        PrepareInput 'enter' $friday.Current.Name
         $e = Ok "event 5000 sent:click $($k0 + 1)"
         $q = Quiet 400 5000
         $clicks = @(SentAfter 'mark return' | Where-Object { $_.ev -eq 'click' })
         Check ($e -and $q -and (Count 'sent:click') -eq $k0 + 1 -and $clicks.Count -eq 1 -and $clicks[0].id -eq 'prepare') "Return presses Prepare, exactly once ($(($clicks | ForEach-Object { $_.id }) -join ','))"
         Check (Shot 'pt-return') "shot pt-return"
     }
-    if ($script:proc -and -not $script:proc.HasExited) { $script:proc.Kill() }
     Stop-App 'pt'
     "== the prepare menus without the tabs (PM1: the first release's window, a TEST exe)"
     Start-App 'trace' 'small' -NoPrepare
@@ -554,7 +622,6 @@ function PT {
         Check ((Count 'shell.prepare_mismatch') -eq 0) "the core's Prepare menu agrees with the window's tabs without them (no shell.prepare_mismatch)"
     }
     Stop-App 'pt-first'
-    Manual "PT8's FlaUI suite (W13a's driver): the counts above come from SendInput, SendKeys and UIA patterns, not FlaUI; the FlaUI run repeats them when its driver lands"
 }
 
 # ================================================================ the run
@@ -565,7 +632,7 @@ try {
     if ($Part -eq 'all' -or $Part -eq 'spike') { Step 'the spike' { Spike } }
     if ($Part -eq 'all' -or $Part -eq 'pt') { Step 'the PT cases' { PT } }
 } finally {
-    try { if ($script:proc -and -not $script:proc.HasExited) { $script:proc.Kill() } } catch { }
+    try { if ($script:proc -and -not $script:proc.HasExited) { $script:proc.Kill(); [void]$script:proc.WaitForExit(5000) } } catch { }
     try { if ([W13bContrast]::On() -ne $script:contrast0) { [W13bContrast]::Set($script:contrast0, $script:hc0) | Out-Null } } catch { }
     try { & $fixture -App $App -Clean | Out-Null } catch { }
     Disarm

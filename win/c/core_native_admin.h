@@ -5,6 +5,7 @@
 #ifndef RBSP_WIN_CORE_NATIVE_ADMIN_H
 #define RBSP_WIN_CORE_NATIVE_ADMIN_H
 
+#include "admin.h"
 #include "native.h"
 #include "sig.h"
 
@@ -20,10 +21,18 @@ void nw_admin_close(nw_admin *a);
  * source folder. path NULL: none. 0, or ENOMEM. Any worker thread. */
 int nw_admin_set_bridge(nw_admin *a, const char *path, const char *name);
 
-/* host->admin (core.h): kind (core_admin_kind), rekordbox's version ("" for remove-root-folder),
- * the bridge's sha256 as the flow checked it (NULL: not checked here), force. Flow thread only;
- * blocks for the run. */
+/* host->admin (core.h): kind (core_admin_kind); version: on Windows the scope token FACT_WIN_SCOPE
+ * (multi-version rekordbox), passed as --targets for install and restore (native_admin_targets:
+ * an invalid one isn't run, 4), "*" for the other verbs; the bridge's sha256 as the flow checked it
+ * (NULL: not checked here); force. --manifest is the copied payload.json's sha256. Flow thread
+ * only; blocks for the run. */
 int32_t nw_admin_run(nw_admin *a, int32_t kind, const char *version, const char *bridge_sha, int32_t force);
+
+/* CORE_STEP_WIN_ADMIN_TARGETS (multi-version contract, mv-spec §2.4): the last run's @target
+ * records, copied into out (at most max, in the order written), and *root_kept its @root-kept.
+ * How many, or -1 when no run has ended in this process. Any worker thread. Each nw_admin_run
+ * clears them first, so a call that didn't run the worker leaves none. */
+int nw_admin_last_targets(nw_admin *a, admin_target_result *out, int max, int *root_kept);
 
 /* CORE_SLOW_R1 for the rekordbox version folder `folder` (native_facts.c's native_r1): our
  * bridges' list from the app's verified saved payload (support\payload, its floor) and verified

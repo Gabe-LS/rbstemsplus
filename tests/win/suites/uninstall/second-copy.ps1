@@ -24,8 +24,25 @@ Check $seen "the --uninstall start (a new process of the current version) shows 
 if (-not $second) { Stop-App; Done }
 $said = Get-CoreText 'T_ALREADY_OPEN'
 Check (Find-UiText $second.Id ('^' + [regex]::Escape($said) + '$') 20) "its dialog says $said"
-[void]$second.CloseMainWindow()
-Check ($second.WaitForExit(15000)) 'dismissed, the second start ends'
+# its OK, as the user dismisses it: a TaskDialog with only an OK button ignores WM_CLOSE
+# (CloseMainWindow), having no Cancel; WM_COMMAND IDOK is its OK button's click (whatever the
+# button's name in the system's language)
+Add-Type -Namespace RbspT -Name Msg -MemberDefinition '[DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);'
+$second.Refresh()
+$hwnd = $second.MainWindowHandle
+Check ($hwnd -ne [IntPtr]::Zero -and [RbspT.Msg]::PostMessageW($hwnd, 0x0111, [IntPtr]1, [IntPtr]::Zero)) "its OK pressed (WM_COMMAND IDOK to $hwnd)"
+$ended = $second.WaitForExit(15000)
+if (-not $ended) {
+    Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+    $A = [Windows.Automation.AutomationElement]
+    $cond = New-Object Windows.Automation.PropertyCondition($A::ProcessIdProperty, $second.Id)
+    foreach ($w in $A::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $cond)) {
+        foreach ($e in $w.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
+            "ui: $($e.Current.ControlType.ProgrammaticName) '$($e.Current.Name)'"
+        }
+    }
+}
+Check $ended 'dismissed, the second start ends'
 Check ($null -ne (Get-Process -Id $first.Id -ErrorAction SilentlyContinue)) "the open copy (pid $($first.Id)) lives on"
 Check ((Get-AppTree) -ceq $before) 'no uninstall: nothing changed'
 Stop-App

@@ -420,18 +420,37 @@ func locationLight(_ s: LocationStatus, bridge: BridgeState?, rekordboxRunning: 
 /// The size of the stems in `folder` as the bridge counts them for its limit: per entry the space
 /// its files take on the disk (st_blocks), `<key>.flac` and `.desc` and their "._" companions,
 /// under `<64 hex>/<2 hex>/`. Folders, the marker, memos and temporary files aren't counted
-/// ("about"). nil if the folder can't be read; 0 if it isn't there.
+/// ("about"). Returns nil if the size can't be determined, or 0 if the cache folder is absent.
 func entriesSize(_ folder: String) -> Int64? {
-    guard fileType(folder) != nil else { return 0 }
-    guard fileType(folder) == S_IFDIR, let models = dirNames(folder) else { return nil }
+    switch fileLookup(folder) {
+    case .missing: return 0
+    case .type(S_IFDIR): break
+    case .type, .unreadable: return nil
+    }
+    guard let models = dirNames(folder) else { return nil }
+
+    func subdirectoryNames(_ path: String) -> [String]? {
+        switch fileLookup(path) {
+        case .type(S_IFDIR): return dirNames(path)
+        case .missing, .type: return []
+        case .unreadable: return nil
+        }
+    }
+
     var total: Int64 = 0
-    for m in models where m.count == 64 && isLowerHex(m) && fileType(folder + "/" + m) == S_IFDIR {
-        for x in dirNames(folder + "/" + m) ?? [] where x.count == 2 && isLowerHex(x) {
-            let dir = folder + "/" + m + "/" + x
-            guard fileType(dir) == S_IFDIR else { continue }
-            for name in dirNames(dir) ?? [] where countsInEntrySize(name, prefix: x) {
+    for m in models where m.count == 64 && isLowerHex(m) {
+        let model = folder + "/" + m
+        guard let prefixes = subdirectoryNames(model) else { return nil }
+        for x in prefixes where x.count == 2 && isLowerHex(x) {
+            let dir = model + "/" + x
+            guard let names = subdirectoryNames(dir) else { return nil }
+            for name in names where countsInEntrySize(name, prefix: x) {
                 var st = stat()
-                if lstat(dir + "/" + name, &st) == 0 && st.st_mode & S_IFMT == S_IFREG { total += Int64(st.st_blocks) * 512 }
+                guard lstat(dir + "/" + name, &st) == 0 else {
+                    if errno == ENOENT { continue }
+                    return nil
+                }
+                if st.st_mode & S_IFMT == S_IFREG { total += Int64(st.st_blocks) * 512 }
             }
         }
     }

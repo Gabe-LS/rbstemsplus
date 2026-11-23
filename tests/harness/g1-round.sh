@@ -1,8 +1,8 @@
 #!/bin/bash
 # G1 item 1 (mac-core.md §9) from an UNMODIFIED tag TEST build: the owner's round. Those builds have
-# no probe, so the owner clicks in the VM's window (tests/harness/g1-round.md, step by step);
-# everything else is done here (lane L1, tart). One fresh clone of rb26-template per starting
-# point. Run outside the sandbox. Every check runs as root in the VM (DJ's Library is 700).
+# no probe, so the owner clicks in the VM's window, step by step from the owner's checklist (kept
+# with the private docs); everything else is done here (lane L1, tart). One fresh clone of
+# rb26-template per starting point. Run outside the sandbox. Every check runs as root in the VM (DJ's Library is 700).
 #
 #   tests/harness/g1-round.sh stage FROM          FROM: v1.0.0 | v1.3.0. A fresh clone (its window),
 #                                                 DJ's screen saver off, rekordbox's file tree
@@ -71,12 +71,13 @@ stage)
   if curl -s -o /dev/null --max-time 2 http://192.168.64.1:8765/; then die "something already serves 192.168.64.1:8765"; fi
   : > "$out"
   echo "G1 item 1 from $from to $(cat "$root/build/g1-core.commit" 2>/dev/null || echo "build/g1-core") ($(date '+%F %T'))" >> "$out"
-  "$vm" up "g1-$from-$(date +%m%d%H%M)" || die "the VM didn't come up"
+  # the owner clicks through the round: tart's window (vm.sh up is headless by default)
+  "$vm" up "g1-$from-$(date +%m%d%H%M)" --window || die "the VM didn't come up"
   tree > "$st/rekordbox-before.txt" || die "rekordbox's tree couldn't be read"
   serve "$old"
   as_dj 'curl -fsSL http://192.168.64.1:8765/bootstrap.sh | RBSTEMSPLUS_BASE_URL=http://192.168.64.1:8765/ bash' > "$st/bootstrap.log" 2>&1 || die "the bootstrap failed (see $st/bootstrap.log)"
   check "[ -d \"$APPP\" ] && ! xattr -r \"$APPP\" | grep -q quarantine" "$from installed by its bootstrap, no quarantine"
-  verdict "staged" "The owner's checklist 1 now (tests/harness/g1-round.md)" ;;
+  verdict "staged" "The owner's checklist 1 now" ;;
 switch)
   check "sudo launchctl print $agent" "$from's watcher registered before the update"
   "$vm" sh "sudo launchctl print $agent" > "$st/watcher-before.txt" 2>&1

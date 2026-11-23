@@ -331,6 +331,87 @@ static inline long wr_nt_path(const char *p, uint16_t *out, size_t cap) {
     return (long)k;
 }
 
+/* A UNC server or share name for a track's path (wr_track_nt_path): 1 to 255 bytes, not "." or
+ * ".." (and so never the device namespaces "\\.\" and "\\?\": "?" isn't allowed either), no
+ * separator, no control character or DEL, none of :*?"<>| */
+static inline int wr_unc_name_ok(const char *s, size_t l) {
+    if (l == 0 || l > 255 || (l == 1 && s[0] == '.') || (l == 2 && s[0] == '.' && s[1] == '.')) return 0;
+    for (size_t i = 0; i < l; i++) {
+        unsigned char c = (unsigned char)s[i];
+        if (c < 0x20 || c == 0x7F || c == '\\' || c == '/' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') return 0;
+    }
+    return 1;
+}
+
+/* the shares that are a server's IPC endpoints, never files: pipe, mailslot and IPC$ (any case) */
+static inline int wr_unc_ipc_share(const char *s, size_t l) {
+    static const char *const ipc[] = {"pipe", "mailslot", "ipc$"};
+    for (size_t i = 0; i < 3; i++) {
+        size_t k = strlen(ipc[i]), j = 0;
+        if (k != l) continue;
+        while (j < l && (s[j] >= 'A' && s[j] <= 'Z' ? (char)(s[j] | 0x20) : s[j]) == ipc[i][j]) j++;
+        if (j == l) return 1;
+    }
+    return 0;
+}
+
+/* A track's NT path (helper.md T13, the UNC ruling: option B), for the helper's read-only track
+ * input only: never a cache location, the bridge's or the core's paths, which keep wr_path_kind
+ * and wr_nt_path and so refuse UNC. wr_nt_path's paths as wr_nt_path gives them, and a UNC path:
+ * "\\server\share\..." with '\' or '/' (mixed too), or "\\?\UNC\server\share\..." (backslashes,
+ * as Win32 takes it); the server and the share wr_unc_name_ok's, then at least one component, each
+ * as wr_nt_path's rest (none empty, "." or ".."; a trailing separator allowed); the shares pipe,
+ * mailslot and IPC$ refused (a server's IPC endpoints, wr_unc_ipc_share). Out:
+ * "\??\UNC\server\share\..." with every separator '\' (cap units, NUL included); the units without
+ * the NUL, or -1 (a device path, traversal, a bad name, invalid UTF-8, too long). */
+static inline long wr_track_nt_path(const char *p, uint16_t *out, size_t cap) {
+    long n = wr_nt_path(p, out, cap);
+    if (n >= 0) return n;
+    const char *s;
+    if (!strncmp(p, "\\\\?\\", 4)) {
+        if (!((p[4] | 0x20) == 'u' && (p[5] | 0x20) == 'n' && (p[6] | 0x20) == 'c' && p[7] == '\\')) return -1;
+        s = p + 8;
+    } else if ((p[0] == '\\' || p[0] == '/') && (p[1] == '\\' || p[1] == '/')) s = p + 2;
+    else return -1;
+    const char *e = s;
+    while (*e && *e != '\\' && *e != '/') e++;                /* the server */
+    if (!*e || !wr_unc_name_ok(s, (size_t)(e - s))) return -1;
+    const char *h = e + 1, *f = h;
+    while (*f && *f != '\\' && *f != '/') f++;                /* the share */
+    if (!*f || !f[1] || !wr_unc_name_ok(h, (size_t)(f - h)) || wr_unc_ipc_share(h, (size_t)(f - h))) return -1;
+    size_t k = 0;
+    static const char pre[] = "\\??\\UNC\\";
+    if (cap < sizeof pre) return -1;
+    for (size_t i = 0; i + 1 < sizeof pre; i++) out[k++] = (uint16_t)pre[i];
+    long u = wr_utf8_to_16(s, (size_t)(e - s), out + k, cap - k);
+    if (u < 0 || k + (size_t)u + 1 >= cap) return -1;
+    k += (size_t)u;
+    out[k++] = '\\';
+    u = wr_utf8_to_16(h, (size_t)(f - h), out + k, cap - k);
+    if (u < 0 || k + (size_t)u + 1 >= cap) return -1;
+    k += (size_t)u;
+    out[k++] = '\\';
+    for (const char *c = f + 1; *c;) {                        /* the rest, as wr_nt_path's */
+        const char *x = c;
+        while (*x && *x != '\\' && *x != '/') x++;
+        size_t l = (size_t)(x - c);
+        if (l == 0 || (l == 1 && c[0] == '.') || (l == 2 && c[0] == '.' && c[1] == '.')) {
+            if (!*x && l == 0) break;
+            return -1;
+        }
+        u = wr_utf8_to_16(c, l, out + k, cap - k);
+        if (u < 0) return -1;
+        k += (size_t)u;
+        if (!*x) break;
+        if (k + 1 >= cap) return -1;
+        out[k++] = '\\';
+        c = x + 1;
+    }
+    if (k >= cap || k > WR_NT_MAX) return -1;
+    out[k] = 0;
+    return (long)k;
+}
+
 /* whether s (n units) starts with "\\?\" (Win32's no-folding prefix) or "\??\" (an NT path) */
 static inline int wr_prefixed16(const uint16_t *s, size_t n) {
     return n >= 4 && s[0] == '\\' && (s[1] == '\\' || s[1] == '?') && s[2] == '?' && s[3] == '\\';

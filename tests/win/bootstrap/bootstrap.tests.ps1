@@ -2,7 +2,8 @@
 # (ASCII, no BOM, no exit), its texts against the core's, versions, the DER signature and ECDSA
 # check with keys made here, plainJSONKeys, payload.json's windows block, the layout and the
 # records the updater reads (current, installed-release\, payload\, payload-version), the unpacked
-# app's checks on a zip made here, and the install on a temp folder with a fake Windows ($sys).
+# app's checks on a zip made here (its entry names first, the version resource through $sys), and
+# the install on a temp folder with a fake Windows ($sys).
 #
 #   pwsh -NoProfile -File tests/win/bootstrap/bootstrap.tests.ps1     (tests/win/bootstrap/run.sh)
 #
@@ -287,7 +288,9 @@ $fakeSys = @{
         [void]$script:calls.Add("lnk $lnk|$target|$aumid")
     }
     Start = { param($exe, $argv) [void]$script:calls.Add("start $exe|$($argv -join ' ')") }
+    ProductInfo = { param($exe) [void]$script:calls.Add("info $exe"); return $script:productInfo }
 }
+$script:productInfo = @{ Version = '1.5.0'; Name = 'RB Stems Plus' }
 $keys = @($pub1)
 $layout = Get-RbspLayout ([IO.Path]::Combine($tmpRoot, 'Local')) ([IO.Path]::Combine($tmpRoot, 'Programs'))
 Check ($layout.Apps.EndsWith([IO.Path]::Combine('Local', 'Programs', 'RB Stems Plus')) -and $layout.Support.EndsWith([IO.Path]::Combine('Local', 'rbstemsplus'))) 'the layout'
@@ -351,8 +354,21 @@ Check ($starts.Count -eq 2 -and $starts[0] -eq "start $($layout.Stub)|--watcher"
 # a watcher running: stopped first, started again; a reinstall of the version `current` names
 $script:calls.Clear()
 $script:watcherRunning = $true
+$updateDir = [IO.Path]::Combine($layout.Support, 'update')
+[void][IO.Directory]::CreateDirectory($updateDir)
+$updateFiles = @('pending', 'started', 'payload.json', 'payload.json.sig', 'watcher', 'result') |
+    ForEach-Object { [IO.Path]::Combine($updateDir, $_) }
+$otherFile = [IO.Path]::Combine($updateDir, 'unrelated')
+foreach ($f in $updateFiles + @($otherFile)) { [IO.File]::WriteAllText($f, 'left by an earlier run') }
+$recordingSys = $fakeSys.Clone()
+$recordingSys.Start = {
+    param($exe, $argv)
+    foreach ($f in $updateFiles) { Check (-not [IO.File]::Exists($f)) "a reinstall clears $([IO.Path]::GetFileName($f)) before starting the stub" }
+    & $fakeSys.Start $exe $argv
+}
 $un = Stage 'staging3' 'two'
-Install-RbspApp $layout (New-P '1.6.0' '1.6.0' 'two') $json16 $sig $un 'x64' $fakeSys $keys
+Install-RbspApp $layout (New-P '1.6.0' '1.6.0' 'two') $json16 $sig $un 'x64' $recordingSys $keys
+Check ([IO.File]::Exists($otherFile)) 'a reinstall keeps unrelated files in the update folder'
 $c = @($script:calls)
 Check ($c[0] -like 'stop *' -and $c -contains "start $($layout.Stub)|--watcher") 'the running watcher stopped first and started again'
 Check ([IO.File]::Exists([IO.Path]::Combine($layout.Apps, '1.6.0', $AppExe)) -and -not [IO.Directory]::Exists($un)) 'a reinstall: the version folder replaced'
@@ -402,10 +418,13 @@ $script:shortcutThrows = $true
 $un = Stage 'staging7' 'three'
 $json17 = B (New-Payload '1.7.0' '1.7.0')
 $threw = $null
+$oldResult = [IO.Path]::Combine($updateDir, 'result')
+[IO.File]::WriteAllText($oldResult, 'left by an earlier run')
 try { Install-RbspApp $layout (New-P '1.7.0' '1.7.0' 'three') $json17 $sig $un 'x64' $fakeSys $keys } catch { $threw = $_.Exception.Message }
 $starts = Starts
 Check ($threw -eq 'no shortcut' -and (Text $layout.Current) -ceq "1.7.0`n") 'an update stopped at the shortcut: current names the new version'
 Check ($starts.Count -eq 1 -and $starts[0] -eq "start $($layout.Stub)|--watcher") 'an update stopped late: the watcher started, the app not'
+Check ([IO.File]::Exists($oldResult)) 'an install stopped at the shortcut keeps the previous update result'
 
 # a first install that stops late: the Apps & features entry is there, the watcher started
 $layout2 = Get-RbspLayout ([IO.Path]::Combine($tmpRoot, 'Local2')) ([IO.Path]::Combine($tmpRoot, 'Programs2'))
@@ -437,18 +456,151 @@ Check ((Starts).Count -eq 0) 'and nothing started (no stub)'
 Remove-RbspTemp $layout3 $tmp3 $false
 Check ([IO.Directory]::Exists($layout3.Apps)) 'an app folder this run did not make: kept'
 
+# the install lock (audit b-a2b-F2): afterexit.c's AX_INSTALL_LOCK, taken before .bootstrap-<pid> is
+# made and held until after the app's start; while an uninstall's after-exit holds it the install
+# waits, then refuses with nothing made. The holder here: another thread (a mutex is per thread)
+$afterH = [IO.File]::ReadAllText([IO.Path]::Combine($root, 'win', 'c', 'afterexit.h'))
+Check ($afterH -match ('#define AX_INSTALL_LOCK "' + [regex]::Escape($InstallLock.Replace('\', '\\')) + '"')) 'the install lock is afterexit.h''s AX_INSTALL_LOCK'
+$mainSrc = (Get-Command Invoke-RbspMain).ScriptBlock.ToString()
+$versionAt = $mainSrc.IndexOf('Test-RbspAppVersion $unpacked $p $sys')
+Check ($versionAt -gt $mainSrc.IndexOf('Test-RbspUnpacked $unpacked $p') -and $versionAt -lt $mainSrc.IndexOf('Install-RbspApp $layout')) 'IN3: the unpacked app version is checked before installation'
+$lockAt = $mainSrc.IndexOf('Open-RbspInstallLock')
+Check ($lockAt -ge 0 -and $lockAt -lt $mainSrc.IndexOf('.bootstrap-$PID') -and $lockAt -lt $mainSrc.IndexOf('CreateDirectory($layout.Apps)')) 'the lock taken before the app folder and .bootstrap-<pid> are made'
+Check ($mainSrc.IndexOf('Close-RbspInstallLock') -gt $mainSrc.IndexOf('Install-RbspApp')) 'and released after the install (the app started)'
+$lockName = "Local\rbsp-test-lock-$PID"
+$ready = New-Object Threading.ManualResetEvent($false)
+$release = New-Object Threading.ManualResetEvent($false)
+$holder = [PowerShell]::Create()
+[void]$holder.AddScript({
+    param($n, $ready, $release)
+    $m = New-Object Threading.Mutex($false, $n)
+    [void]$m.WaitOne()
+    try {
+        [void]$ready.Set()
+        [void]$release.WaitOne(30000)
+        Start-Sleep -Milliseconds 300
+    } finally { $m.ReleaseMutex(); $m.Dispose() }
+}).AddArgument($lockName).AddArgument($ready).AddArgument($release)
+$async = $holder.BeginInvoke()
+try {
+    Check ($ready.WaitOne(30000)) 'the holder took the lock'
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $result = @(& {
+        try { $l = Open-RbspInstallLock $lockName 700; Close-RbspInstallLock $l } catch { $_.Exception.Message }
+    } 6>&1)
+    $waited = $clock.ElapsedMilliseconds
+    $threw = $result | Where-Object { $_ -is [string] }
+    Check ($threw -ceq $Texts.Uninstalling -and $waited -ge 600) "the lock held by an uninstall: waited, then refused ($threw, $waited ms)"
+    $notice = @($result | Where-Object { $_ -is [System.Management.Automation.InformationRecord] })
+    Check ($notice.Count -eq 1 -and $notice[0].ToString() -ceq "Waiting for RB Stems Plus's uninstall to finish...") 'the lock held by an uninstall: one waiting line'
+    [void]$release.Set()
+    $threw = $null
+    try { $l = Open-RbspInstallLock $lockName 10000; Close-RbspInstallLock $l } catch { $threw = $_.Exception.Message }
+    Check ($null -eq $threw) "released within the wait: the install goes on ($threw)"
+} finally {
+    [void]$release.Set()
+    try { [void]$holder.EndInvoke($async) } finally { $holder.Dispose(); $ready.Dispose(); $release.Dispose() }
+}
+$result = @(& {
+    try { $l = Open-RbspInstallLock $lockName 0; Close-RbspInstallLock $l } catch { $_.Exception.Message }
+} 6>&1)
+Check ($result.Count -eq 0) "the lock free: taken at once, no waiting line ($result)"
+
 # the unpacked app's checks, on a zip made here and unpacked as the script does
 $un = [IO.Path]::Combine($tmpRoot, 'zipsrc')
 New-Unpacked $un 'z'
 $zip = [IO.Path]::Combine($tmpRoot, 'w.zip')
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::CreateFromDirectory($un, $zip)
+# entry per file with '/' names, as a release zip has them (.NET Framework's CreateFromDirectory
+# writes '\', which the zip check rightly refuses)
+$za = [IO.Compression.ZipFile]::Open($zip, 'Create')
+try {
+    $base = [IO.Path]::GetFullPath($un)
+    foreach ($f in Get-ChildItem -LiteralPath $un -Recurse -File -Force) {
+        $rel = $f.FullName.Substring($base.Length + 1).Replace('\', '/')
+        [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($za, $f.FullName, $rel)
+    }
+} finally { $za.Dispose() }
 $out = [IO.Path]::Combine($tmpRoot, 'unzipped')
-Expand-Archive -LiteralPath $zip -DestinationPath $out
+Expand-RbspZip $zip $out
 $pz = New-P '1.5.0' '1.5.0' 'z'
 $ok = $true
 try { Test-RbspUnpacked $out $pz } catch { $ok = $false; Write-Host $_.Exception.Message }
 Check $ok 'a zip of the app checks out'
+
+# the zip's entry names, read before Expand-RbspZip (unzip.c's unzip_name_ok and its link rule)
+foreach ($n in @('x64/rbsp-core.dll', 'admin/', 'NOTICE-windows.txt', 'CONSOLE.txt', 'COM10', 'a/b/c/d/e/f/g/h', ('a' * 255))) {
+    Check (Test-RbspZipName $n) "a plain zip name: '$($n.Substring(0, [Math]::Min(40, $n.Length)))'"
+}
+foreach ($n in @('', '/', '/x', '../x', 'a/../b', 'a/./b', 'a//b', 'a\b', 'C:x', 'a*b', 'a?b', 'a"b', 'a<b', 'a|b', 'x ', 'x.',
+                 'a /b', 'a./b', 'CON', 'con.txt', 'Lpt1', 'COM9.dll', 'NUL .txt', 'aux/x', 'CONIN$', 'conin$', 'CONiN$', 'conin$.txt', 'conout$.log', "a`tb",
+                 "caf$([char]0xe9)", ('a' * 256), 'a/b/c/d/e/f/g/h/i')) {
+    Check (-not (Test-RbspZipName $n)) "not a plain zip name: '$($n.Substring(0, [Math]::Min(40, $n.Length)))'"
+}
+# the device names upper-cased invariantly and matched case-sensitively: a case-insensitive match
+# folds by the culture (tr-TR), and PowerShell's regex cache ignores a culture changed in-process,
+# so the text is the guard
+Check (-not ((Get-Command Test-RbspZipName).ScriptBlock.ToString() -match '-imatch')) 'Test-RbspZipName has no culture-dependent -imatch'
+$ok = $true
+try { Test-RbspZip $zip } catch { $ok = $false; Write-Host $_.Exception.Message }
+Check $ok 'the app''s zip: its entries pass'
+# a zip made here with the entries $fill adds
+function New-TestZip([string]$name, [scriptblock]$fill) {
+    $f = [IO.Path]::Combine($tmpRoot, "$name.zip")
+    if ([IO.File]::Exists($f)) { [IO.File]::Delete($f) }
+    $a = [IO.Compression.ZipFile]::Open($f, 'Create')
+    try { [void](& $fill $a) } finally { $a.Dispose() }
+    return $f
+}
+function Add-Entry($a, [string]$n, [string]$text) {
+    $e = $a.CreateEntry($n)
+    if ($text) {
+        $s = $e.Open()
+        try { $b = [Text.Encoding]::ASCII.GetBytes($text); $s.Write($b, 0, $b.Length) } finally { $s.Dispose() }
+    }
+    return $e
+}
+function Zip-Refused([scriptblock]$fill, [string]$what, [string]$like) {
+    $f = New-TestZip 'bent' $fill
+    $r = $false
+    try { Test-RbspZip $f } catch { $r = $_.Exception.Message -like $like; if (-not $r) { Write-Host $_.Exception.Message } }
+    Check $r "zip refused: $what"
+}
+Zip-Refused { param($a) [void](Add-Entry $a 'ok.txt' 'x'); [void](Add-Entry $a '../x' 'x') } 'a name with ..' '*isn''t plain*'
+Zip-Refused { param($a) [void](Add-Entry $a 'a\b' 'x') } 'a backslash' '*isn''t plain*'
+Zip-Refused { param($a) [void](Add-Entry $a 'C:/x' 'x') } 'a drive' '*isn''t plain*'
+Zip-Refused { param($a) $e = Add-Entry $a 'lnk' 'target'; $e.ExternalAttributes = 0xA1FF -shl 16 } 'a symbolic link entry' '*holds a link*'
+Zip-Refused { param($a) [void](Add-Entry $a 'A.txt' 'x'); [void](Add-Entry $a 'a.txt' 'y') } 'a name twice, ignoring case' '*twice*'
+Zip-Refused { param($a) [void](Add-Entry $a 'd/' ''); [void](Add-Entry $a 'D/' '') } 'a folder twice' '*twice*'
+Zip-Refused { param($a) [void](Add-Entry $a 'a' 'x'); [void](Add-Entry $a 'A/b' 'y') } 'a file that is a folder of another' '*same name*'
+Zip-Refused { param($a) [void](Add-Entry $a 'd/' 'data') } 'a folder entry with data' '*folder with data*'
+$f = New-TestZip 'unixmode' { param($a) $e = Add-Entry $a 'x/f.txt' 'x'; $e.ExternalAttributes = 0x81A4 -shl 16; [void](Add-Entry $a 'x/' '') }
+$ok = $true
+try { Test-RbspZip $f } catch { $ok = $false; Write-Host $_.Exception.Message }
+Check $ok 'a regular file with a Unix mode and its folder''s entry: pass'
+
+# the app's version resource (update.c's check_app), read through $sys.ProductInfo
+function Version-Ok([string]$ver, [string]$name) {
+    $script:productInfo = @{ Version = $ver; Name = $name }
+    try { Test-RbspAppVersion $out $pz $fakeSys; return $true } catch { return $false }
+}
+$script:calls.Clear()
+Check (Version-Ok '1.5.0' 'RB Stems Plus') 'ProductVersion the payload''s'
+Check (@($script:calls) -contains "info $([IO.Path]::Combine($out, $AppExe))") 'the version read from the unpacked app'
+Check (Version-Ok '1.5.0+3f2a9c1' 'RB Stems Plus') 'ProductVersion with a +build suffix'
+Check (Version-Ok ' 1.5.0 ' ' RB Stems Plus ') 'trimmed'
+foreach ($v in @('1.5.0.0', '1.5.01', '1.5', '1.4.0', '1.5.0-beta.1', '')) {
+    Check (-not (Version-Ok $v 'RB Stems Plus')) "ProductVersion refused: '$v'"
+}
+Check (-not (Version-Ok '1.5.0' 'rb stems plus')) 'ProductName refused: another case'
+Check (-not (Version-Ok '1.5.0' '')) 'ProductName refused: none'
+$script:productInfo = @{ Version = '1.5.0'; Name = 'RB Stems Plus' }
+$refused = $false
+try {
+    $badVersion = Read-RbspPayload (B (New-Payload '1.5.0' '0.0.0'))
+    Test-RbspAppVersion $out $badVersion $fakeSys
+} catch { $refused = $_.Exception.Message -ceq "the app's version (1.5.0) isn't the one the payload names (0.0.0)" }
+Check $refused 'bad-version payload reaches the app version check and is refused there'
 function Unpacked-Refused([scriptblock]$bend, [string]$what, [string]$like = '*') {
     $d = [IO.Path]::Combine($tmpRoot, 'bent')
     if ([IO.Directory]::Exists($bentLink)) { [IO.Directory]::Delete($bentLink) }
@@ -470,6 +622,384 @@ $lt = [IO.Path]::Combine($tmpRoot, 'linktarget')
 Unpacked-Refused { param($d) [void](New-Item -ItemType $linkType -Path ([IO.Path]::Combine($d, 'link')) -Target $lt) } 'a link inside' '*holds a link*'
 # the link alone first (non-recursive): .NET Framework's recursive delete can throw on a nested mount point
 [IO.Directory]::Delete($bentLink)
+
+# ------------------------------------------------------------------ the capped extraction (BS2)
+# zips written byte by byte here: one stored or deflated entry whose sizes the header declares as
+# given (the review's size-mismatch zips, small: the caps are the same code at any size)
+# (CRC-32 in [long]s: a hex literal over 0x7FFFFFFF is a negative [int] in PowerShell)
+$crcTable = New-Object 'long[]' 256
+for ($i = 0; $i -lt 256; $i++) {
+    $c = [long]$i
+    for ($k = 0; $k -lt 8; $k++) { if ($c -band 1) { $c = [long]3988292384 -bxor ($c -shr 1) } else { $c = $c -shr 1 } }
+    $crcTable[$i] = $c
+}
+function Crc32([byte[]]$b) {
+    $c = [long]4294967295
+    foreach ($x in $b) { $c = $crcTable[($c -bxor $x) -band 0xFF] -bxor ($c -shr 8) }
+    return [uint32]($c -bxor [long]4294967295)
+}
+function New-RawZip([string]$name, [object[]]$entries) {
+    # $entries: @(name, data bytes, method (0 stored, 8 deflate), declared uncompressed size)
+    $ms = New-Object IO.MemoryStream
+    $w = New-Object IO.BinaryWriter($ms)
+    $central = New-Object IO.MemoryStream
+    $cw = New-Object IO.BinaryWriter($central)
+    foreach ($e in $entries) {
+        $nb = [Text.Encoding]::ASCII.GetBytes([string]$e[0])
+        [byte[]]$raw = $e[1]
+        $data = $raw
+        if ($e[2] -eq 8) {
+            $dm = New-Object IO.MemoryStream
+            $ds = New-Object IO.Compression.DeflateStream($dm, [IO.Compression.CompressionMode]::Compress, $true)
+            $ds.Write($raw, 0, $raw.Length); $ds.Dispose()
+            $data = $dm.ToArray()
+        }
+        $off = [uint32]$ms.Position
+        $crc = Crc32 $raw
+        foreach ($h in @(@($w, 0x04034b50), @($cw, 0x02014b50))) {
+            $x = $h[0]
+            $x.Write([uint32]$h[1])
+            if ($h[1] -eq 0x02014b50) { $x.Write([uint16]20) }
+            $x.Write([uint16]20); $x.Write([uint16]0); $x.Write([uint16]$e[2]); $x.Write([uint16]0); $x.Write([uint16]0x21)
+            $x.Write([uint32]$crc); $x.Write([uint32]$data.Length); $x.Write([uint32]$e[3])
+            $x.Write([uint16]$nb.Length); $x.Write([uint16]0)
+            if ($h[1] -eq 0x02014b50) { $x.Write([uint16]0); $x.Write([uint16]0); $x.Write([uint16]0); $x.Write([uint32]0); $x.Write([uint32]$off) }
+            $x.Write($nb)
+        }
+        $w.Write($data)
+    }
+    $cdOff = [uint32]$ms.Position
+    $cd = $central.ToArray()
+    $w.Write($cd)
+    $w.Write([uint32]0x06054b50); $w.Write([uint16]0); $w.Write([uint16]0)
+    $w.Write([uint16]$entries.Count); $w.Write([uint16]$entries.Count); $w.Write([uint32]$cd.Length); $w.Write($cdOff); $w.Write([uint16]0)
+    $w.Flush()
+    $f = [IO.Path]::Combine($tmpRoot, "$name.zip")
+    [IO.File]::WriteAllBytes($f, $ms.ToArray())
+    return $f
+}
+function Expand-Result([string]$zip, [long]$max = 512MB) {
+    $d = [IO.Path]::Combine($tmpRoot, 'expanded')
+    if ([IO.Directory]::Exists($d)) { [IO.Directory]::Delete($d, $true) }
+    try { Expand-RbspZip $zip $d $max; return '' } catch { return $_.Exception.Message }
+}
+function Written { $d = [IO.Path]::Combine($tmpRoot, 'expanded'); $n = [long]0; foreach ($f in Get-ChildItem -LiteralPath $d -Recurse -File -Force) { $n += $f.Length }; return $n }
+$ab = [Text.Encoding]::ASCII.GetBytes('A' * 4096)
+$f = New-RawZip 'raw-ok' @(,@('d/a.txt', $ab, 8, 4096))
+Check ((Expand-Result $f) -ceq '' -and (Written) -eq 4096) 'a zip written here unpacks (the test zip writer itself)'
+$f = New-RawZip 'raw-stored' @(,@('a.txt', $ab, 0, 1))
+$r = Expand-Result $f
+Check ($r -ne '' -and (Written) -le 1) "a stored entry declaring 1 byte of 4096: refused, at most 1 byte written ($r)"
+$f = New-RawZip 'raw-deflated' @(,@('a.txt', $ab, 8, 1))
+$r = Expand-Result $f
+# (.NET's reader may itself stop a deflated entry at its declared size: then nothing is refused, but
+# no more than that is written either)
+Check ((Written) -le 1) "a deflated entry declaring 1 byte of 4096: at most 1 byte written ($r)"
+$f = New-RawZip 'raw-short' @(,@('a.txt', $ab, 8, 8192))
+$r = Expand-Result $f
+Check ($r -like '*isn''t the size the zip declares*') "an entry declaring more than its data: refused ($r)"
+$f = New-RawZip 'raw-total' @(@('a.txt', $ab, 8, 4096), @('b.txt', $ab, 8, 4096))
+$r = Expand-Result $f 6000
+Check ($r -ceq 'the download unpacks too large' -and (Written) -le 6000) "the bytes written in all over the cap: refused ($r)"
+$f = New-RawZip 'raw-twice' @(@('a.txt', $ab, 8, 4096), @('a.txt', $ab, 8, 4096))
+Check ((Expand-Result $f) -ne '') 'a name twice reaching the unpacking: the second never written over the first'
+$f = New-RawZip 'raw-dotdot' @(,@('../x.txt', $ab, 8, 4096))
+Check ((Expand-Result $f) -like '*isn''t plain*' -and -not [IO.File]::Exists([IO.Path]::Combine($tmpRoot, 'x.txt'))) 'a ".." name reaching the unpacking: refused, nothing outside'
+$main = (Get-Command Invoke-RbspMain).ScriptBlock.ToString()
+Check ($main -match 'Test-RbspZip \$zip\s+Expand-RbspZip \$zip \$unpacked' -and $main -notmatch 'Expand-Archive') 'the install unpacks with Expand-RbspZip after Test-RbspZip, never Expand-Archive'
+
+# ------------------------------------------------------------------ -Restore (release.md section 4)
+# the restore route runs in ConstrainedLanguage: no [ref], method call, New-Object, Add-Type in it
+$restoreFns = @('Test-RbspHighToken', 'Get-RbspProgramFiles', 'Test-RbspReparse', 'Get-RbspSddlMask', 'Test-RbspSddlAdminOnly',
+                'Test-RbspAdminOnly', 'Test-RbspRekordboxOpen', 'Test-RbspRestoreBusy', 'Get-RbspFileSha',
+                'Test-RbspAlphaTheta', 'Get-RbspSavedSha', 'Restore-RbspVersion', 'Invoke-RbspRestore')
+foreach ($fn in $restoreFns) {
+    $body = (Get-Command $fn).ScriptBlock.ToString()
+    Check (-not ($body -match '\[ref\]|::|New-Object|Add-Type|\.[A-Za-z]+\(')) "$fn uses only what ConstrainedLanguage allows"
+}
+$tail = $src.Substring($src.IndexOf('# ------------------------------------------------------------------ -Restore'))
+$code = ($tail -split "`n" | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+Check (-not ($code -match '\[ref\]|::|New-Object|Add-Type|\.[A-Za-z]+\(')) 'the restore section and the top level after it use only what ConstrainedLanguage allows'
+Check ($src -match '\$restore = \$env:RBSTEMSPLUS_RESTORE -eq ''1''') 'selected by RBSTEMSPLUS_RESTORE=1'
+$mainAt = $src.IndexOf('function Invoke-RbspMain')
+Check ($src.IndexOf('Test-RbspCanInstall', $mainAt) -gt $mainAt -and (Get-Command Invoke-RbspRestore).ScriptBlock.ToString() -notmatch 'Test-RbspCanInstall|SecurityProtocol') 'the SAC, language and Tls12 lines are on the install route only'
+
+# SDDL: the admin-only rule (win_rules.h wr_acl_ok)
+$ti = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+Check ((Get-RbspSddlMask '0x1200a9') -eq 0x1200a9 -and (Get-RbspSddlMask 'FA') -eq 0x1F01FF -and (Get-RbspSddlMask 'GXGR') -eq 2684354560) 'SDDL masks: hex, letters'
+Check ((Get-RbspSddlMask 'ZZ') -eq -1 -and (Get-RbspSddlMask 'fa') -eq -1 -and (Get-RbspSddlMask '') -eq -1) 'SDDL masks: unknown letters unread'
+$rbAcl = "O:BAG:SYD:AI(A;OICIIO;GA;;;CO)(A;OICIIO;GA;;;SY)(A;;FA;;;SY)(A;OICIIO;GA;;;BA)(A;;FA;;;BA)(A;OICIIO;GXGR;;;BU)(A;;0x1200a9;;;BU)(A;CIIO;GA;;;$ti)(A;;FA;;;$ti)(A;;0x1200a9;;;AC)(A;OICIIO;GXGR;;;AC)(A;;0x1200a9;;;S-1-15-2-2)(A;OICIIO;GXGR;;;S-1-15-2-2)"
+$okAcls = @($rbAcl, 'O:BAG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)', "O:${ti}G:${ti}D:P(A;;FA;;;$ti)", 'O:SYD:(A;;FA;;;SY)',
+            'O:BAG:SYD:', 'O:BAG:SYD:(D;;FA;;;WD)(A;;FA;;;BA)', 'O:BAG:SYD:(A;OICIIO;GA;;;WD)', 'O:BAG:SYD:(A;;ZZ;;;BA)', 'O:S-1-5-32-544G:SYD:(A;;FA;;;S-1-5-18)')
+foreach ($a in $okAcls) { Check (Test-RbspSddlAdminOnly $a) "admin-only: $a" }
+$badAcls = @('O:S-1-5-21-1-2-3-1001G:SYD:(A;;FA;;;BA)', 'O:BAG:SYD:(A;;FA;;;BU)', 'O:BAG:SYD:(A;;0x1301bf;;;AU)', 'O:BAG:SYD:(A;;FW;;;BU)',
+             'O:BAG:SYD:(A;;0x2;;;WD)', 'O:BAG:SYD:(A;;0x40000;;;BU)', 'O:BAG:SYD:(A;;ZZ;;;BU)', 'O:BAG:SYD:(A;OICI;GA;;;CO)',
+             'O:BAG:SYD:(OA;;FA;;;BA)', 'O:BAG:SYD:(XA;;FA;;;WD;(Member_of {SID(BA)}))', 'O:BAG:SYD:NO_ACCESS_CONTROL', 'O:BAG:SY',
+             '', 'O:BAG:SYD:(A;;FA;;BU)', 'O:BAG:SYD:(A;IOCI;GA;;;BU)x', 'O:BAG:SYD:(A;CIOI;FA;;;BU)')
+foreach ($a in $badAcls) { Check (-not (Test-RbspSddlAdminOnly $a)) "not admin-only: '$a'" }
+
+# the flow on a temp Program Files, with what only Windows answers stubbed: the token's level
+# (whoami), running processes, the ACL (Get-Acl's SDDL) and the signature (a file whose text
+# starts "PIONEER" is AlphaTheta's, with $script:subject, unless its path is -like
+# $script:badSig). Get-Item refuses $script:deniedPath (access denied) and Move-Item throws
+# $script:moveFails times (deleting a -Force destination first when $script:moveDeletes, as 5.1
+# does). The files, hashes, copies and moves are real.
+$realSubject = 'SERIALNUMBER=0104-01-151827, OID.2.5.4.15=Private Organization, CN=AlphaTheta Corporation, O=AlphaTheta Corporation, L=Yokohama, S=Kanagawa, C=JP'
+function Reset-Stubs {
+    $script:high = $true; $script:procs = @(); $script:aclOf = @{}; $script:subject = $realSubject; $script:badSig = ''
+    $script:deniedPath = ''; $script:moveFails = 0; $script:moveDeletes = $false
+}
+Reset-Stubs
+function whoami { if ($script:high) { 'Mandatory Label\High Mandatory Level   Label   S-1-16-12288' } else { 'Mandatory Label\Medium Mandatory Level   Label   S-1-16-8192' } }
+function Get-Process([string[]]$Name, $ErrorAction) { $script:procs | Where-Object { $Name -contains $_.ProcessName } }
+function Get-Acl([string]$LiteralPath) {
+    $s = 'O:BAG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)'
+    if ($script:aclOf.ContainsKey($LiteralPath)) { $s = $script:aclOf[$LiteralPath] }
+    return [pscustomobject]@{ Sddl = $s }
+}
+function Get-AuthenticodeSignature([string]$LiteralPath) {
+    if ((-not $script:badSig -or $LiteralPath -notlike $script:badSig) -and [IO.File]::ReadAllText($LiteralPath).StartsWith('PIONEER')) {
+        return [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = $script:subject } }
+    }
+    return [pscustomobject]@{ Status = 'NotSigned'; SignerCertificate = $null }
+}
+function Get-Item {
+    [CmdletBinding()] param([string]$LiteralPath, [switch]$Force)
+    if ($script:deniedPath -and $LiteralPath -eq $script:deniedPath) {
+        $e = New-Object Management.Automation.ErrorRecord ((New-Object UnauthorizedAccessException "Access to the path '$LiteralPath' is denied."),
+             'ItemExistsUnauthorizedAccessError,Microsoft.PowerShell.Commands.GetItemCommand', 'PermissionDenied', $LiteralPath)
+        $PSCmdlet.ThrowTerminatingError($e)
+    }
+    Microsoft.PowerShell.Management\Get-Item -LiteralPath $LiteralPath -Force:$Force
+}
+function Move-Item([string]$LiteralPath, [string]$Destination, [switch]$Force) {
+    if ($script:moveFails -gt 0) {
+        $script:moveFails--
+        if ($Force -and $script:moveDeletes -and [IO.File]::Exists($Destination)) { [IO.File]::Delete($Destination) }
+        throw 'the move failed (test)'
+    }
+    Microsoft.PowerShell.Management\Move-Item -LiteralPath $LiteralPath -Destination $Destination -Force:$Force
+}
+$rsRoot = [IO.Path]::Combine($tmpRoot, 'restore')
+if (-not $onWindows) { [void][IO.Directory]::CreateDirectory($tmpRoot); $rsRoot = [IO.Path]::Combine((& realpath $tmpRoot), 'restore') }   # /var, /tmp: links on the Mac
+$pf = [IO.Path]::Combine($rsRoot, 'pf')
+$set = [IO.Path]::Combine($pf, 'RB Stems Plus', 'pioneer', '7.2.19')
+$dst = [IO.Path]::Combine($pf, 'rekordbox', 'rekordbox 7.2.19')
+$live = [IO.Path]::Combine($dst, 'onnxruntime.dll')
+$pioneerText = 'PIONEER onnxruntime 7.2.19'
+$pioneerSha = Sha ([Text.Encoding]::ASCII.GetBytes($pioneerText))
+function Reset-Restore([string]$liveText = 'rbstems bridge: the bridge') {
+    Reset-Stubs
+    foreach ($l in @($dst, $set)) { if ((Test-Path -LiteralPath $l) -and [string](Get-Item -LiteralPath $l -Force).Attributes -match 'ReparsePoint') { [IO.Directory]::Delete($l) } }
+    if ([IO.Directory]::Exists($rsRoot)) { [IO.Directory]::Delete($rsRoot, $true) }
+    [void][IO.Directory]::CreateDirectory($set); [void][IO.Directory]::CreateDirectory($dst)
+    [IO.File]::WriteAllText([IO.Path]::Combine($set, 'onnxruntime.dll'), $pioneerText)
+    [IO.File]::WriteAllText([IO.Path]::Combine($set, 'SHA256SUMS'), "$pioneerSha  onnxruntime.dll`n")
+    if ($liveText) { [IO.File]::WriteAllText($live, $liveText) }
+}
+function Restore-Says { try { return ((Invoke-RbspRestore $pf 6>&1 | ForEach-Object { [string]$_ }) -join ' | ') } catch { return "THROW $($_.Exception.Message)" } }
+function Live { if ([IO.File]::Exists($live)) { return [IO.File]::ReadAllText($live) }; return '' }
+function Leftovers { return @(Get-ChildItem -LiteralPath $dst -Force -File | Where-Object { $_.Name -like 'onnxruntime.dll?*' }).Count }
+
+Reset-Restore
+$r = Restore-Says
+Check ($r -ceq "Pioneer's file is back in rekordbox 7.2.19." -and (Live) -ceq $pioneerText -and (Leftovers) -eq 0) "-Restore: the bridge replaced by Pioneer's file, no temporary copy left ($r)"
+$r = Restore-Says
+Check ($r -ceq "rekordbox 7.2.19 has Pioneer's file already." -and (Live) -ceq $pioneerText) "-Restore again: Pioneer's file already there, left ($r)"
+Reset-Restore ''
+$r = Restore-Says
+Check ($r -ceq "Pioneer's file is back in rekordbox 7.2.19." -and (Live) -ceq $pioneerText) "-Restore with the live DLL missing (R4.I71): moved into its place ($r)"
+Reset-Restore
+[IO.File]::WriteAllText([IO.Path]::Combine($dst, 'onnxruntime.dll.rbsp-new'), 'a stopped run')
+$r = Restore-Says
+Check ((Live) -ceq $pioneerText -and (Leftovers) -eq 0) "-Restore with a stopped run's temporary file: removed, restored ($r)"
+# the refusals: the live DLL left as it was
+function Restore-Refused([scriptblock]$bend, [string]$want, [string]$what) {
+    Reset-Restore
+    & $bend
+    $r = Restore-Says
+    Check ($r -like "THROW $want" -and (Live) -ceq 'rbstems bridge: the bridge' -and (Leftovers) -eq 0) "-Restore refused: $what ($r)"
+}
+Restore-Refused { $script:high = $false } $Texts.RestoreElevated 'not elevated (no S-1-16-12288)'
+Restore-Refused { $script:procs = @([pscustomobject]@{ ProcessName = 'rekordbox' }) } $Texts.RestoreOpen 'rekordbox open'
+$busy = 'Finish updating or uninstalling rekordbox, or wait for RB Stems Plus to finish, then run the restore command again.'
+$workerRoot = Join-Path $pf 'RB Stems Plus'
+$tempCopy = Join-Path $dst 'onnxruntime.dll.rbsp-new'
+foreach ($p in @(@{ ProcessName = 'Upmgr rekordbox' }, @{ ProcessName = 'Uninstall rekordbox' },
+                 @{ ProcessName = 'RB Stems Plus'; Path = "$($workerRoot.ToUpperInvariant())\bin\RB Stems Plus.exe" })) {
+    Reset-Restore
+    $script:procs = @([pscustomobject]$p)
+    [IO.File]::WriteAllText($tempCopy, 'a running process may still need this')
+    $r = Restore-Says
+    Check ($r -ceq "THROW $busy" -and (Live) -ceq 'rbstems bridge: the bridge' -and
+           (Test-Path -LiteralPath $tempCopy) -and [IO.File]::ReadAllText($tempCopy) -ceq 'a running process may still need this') "-Restore refused: $($p.ProcessName) running (BS12) ($r)"
+}
+Reset-Restore
+$script:procs = @([pscustomobject]@{ ProcessName = 'RB Stems Plus'; Path = "$workerRoot-other\RB Stems Plus.exe" })
+$r = Restore-Says
+Check ((Live) -ceq $pioneerText) "-Restore with RB Stems Plus running outside its Program Files folder (BS12) ($r)"
+Restore-Refused { [IO.Directory]::Delete($set, $true) } $Texts.RestoreNone 'no saved set'
+Restore-Refused { [IO.Directory]::Move($set, [IO.Path]::Combine($pf, 'RB Stems Plus', 'pioneer', 'x7.2.19')) } $Texts.RestoreNone 'a saved set whose name is not a version'
+Restore-Refused { [IO.Directory]::Move($set, [IO.Path]::Combine($pf, 'RB Stems Plus', 'pioneer', '7.2.18')) } $Texts.RestoreNone 'a saved set of a version not installed'
+Restore-Refused { [IO.File]::WriteAllText([IO.Path]::Combine($set, 'SHA256SUMS'), "$('0' * 64)  onnxruntime.dll`n") } '*isn''t complete' 'SHA256SUMS names another file'
+Restore-Refused { [IO.File]::WriteAllText([IO.Path]::Combine($set, 'SHA256SUMS'), "$($pioneerSha.ToUpperInvariant())  onnxruntime.dll`n") } '*isn''t complete' 'SHA256SUMS in upper case'
+Restore-Refused { [IO.File]::WriteAllText([IO.Path]::Combine($set, 'SHA256SUMS'), "$pioneerSha  onnxruntime.dll") } '*isn''t complete' 'SHA256SUMS without its line end'
+Restore-Refused { [IO.File]::Delete([IO.Path]::Combine($set, 'SHA256SUMS')) } '*isn''t complete' 'no SHA256SUMS'
+Restore-Refused { $t = 'not Pioneer''s'; [IO.File]::WriteAllText([IO.Path]::Combine($set, 'onnxruntime.dll'), $t)
+          [IO.File]::WriteAllText([IO.Path]::Combine($set, 'SHA256SUMS'), "$(Sha ([Text.Encoding]::ASCII.GetBytes($t)))  onnxruntime.dll`n") } '*isn''t AlphaTheta''s' 'a saved copy that isn''t AlphaTheta''s'
+Restore-Refused { $script:aclOf[$dst] = 'O:BAG:SYD:(A;;FA;;;BA)(A;;0x1301bf;;;AU)' } '*can be changed by other accounts' 'rekordbox''s folder writable by users'
+Restore-Refused { $script:aclOf[$set] = 'O:S-1-5-21-1-2-3-1001D:(A;;FA;;;BA)' } '*can be changed by other accounts' 'the saved set''s folder owned by a user'
+# a link in the path (I23): the version folder (a junction on Windows), then the saved set's folder
+$linkType = if ($onWindows) { 'Junction' } else { 'SymbolicLink' }
+Restore-Refused { [IO.Directory]::Move($dst, "$dst.real"); [void](New-Item -ItemType $linkType -Path $dst -Target "$dst.real")
+          [IO.File]::WriteAllText($live, 'rbstems bridge: the bridge') } '*reached through a link' 'rekordbox''s version folder a link'
+Check ([IO.File]::ReadAllText([IO.Path]::Combine("$dst.real", 'onnxruntime.dll')) -ceq 'rbstems bridge: the bridge') '-Restore through a link: the real folder untouched'
+Restore-Refused { [IO.Directory]::Move($set, "$set.real"); [void](New-Item -ItemType $linkType -Path $set -Target "$set.real") } '*reached through a link' 'the saved set''s folder a link'
+if (-not $onWindows) {   # a file link needs an administrator or developer mode on Windows
+    Restore-Refused { $s = [IO.Path]::Combine($set, 'SHA256SUMS'); [IO.File]::Move($s, "$s.real"); [void](New-Item -ItemType SymbolicLink -Path $s -Target "$s.real") } '*reached through a link' 'SHA256SUMS a link (BS8)'
+}
+# BS1: the folders above the version folders, which the worker holds too, and a path the reparse
+# check can't read (access denied: refused, not passed over)
+$ours = [IO.Path]::Combine($pf, 'RB Stems Plus')
+foreach ($d in @($ours, [IO.Path]::Combine($ours, 'pioneer'), [IO.Path]::Combine($pf, 'rekordbox'))) {
+    Restore-Refused { $script:aclOf[$d] = 'O:BAG:SYD:(A;;FA;;;BA)(A;;0x1301bf;;;AU)' } ($Texts.RestoreOthers -f $d) "$d writable by users (BS1)"
+}
+Reset-Restore
+$script:deniedPath = $dst
+Check ((Test-RbspReparse $live) -and -not (Test-RbspReparse ([IO.Path]::Combine($set, 'none')))) 'Test-RbspReparse: access denied on a folder in the path counts as a link, a missing path doesn''t (BS1)'
+Restore-Refused { $script:deniedPath = $dst } '*reached through a link' 'rekordbox''s version folder unreadable (BS1)'
+Restore-Refused { $script:deniedPath = $ours } ($Texts.RestoreLinked -f $ours) 'our folder unreadable (BS1)'
+# BS2: the live file and the temporary copy admin-only too (worker.c file_admin_only)
+Restore-Refused { $script:aclOf[$live] = 'O:BAG:SYD:(A;;FA;;;BA)(A;;FA;;;BU)' } '*rekordbox 7.2.19''s ONNX Runtime can be changed by other accounts' 'the live file writable by users (BS2)'
+Restore-Refused { $script:aclOf[[IO.Path]::Combine($dst, 'onnxruntime.dll.rbsp-new')] = 'O:BAG:SYD:(A;;FA;;;BA)(A;;FA;;;BU)' } '*the copy of Pioneer''s file in rekordbox 7.2.19 can be changed by other accounts' 'the copy writable by users (BS2)'
+# BS8: SHA256SUMS exactly 82 bytes, so a BOM or UTF-16 is refused
+$sumsLine = "$pioneerSha  onnxruntime.dll`n"
+Restore-Refused { [IO.File]::WriteAllBytes([IO.Path]::Combine($set, 'SHA256SUMS'), [byte[]](@(0xEF, 0xBB, 0xBF) + [Text.Encoding]::ASCII.GetBytes($sumsLine))) } '*isn''t complete' 'SHA256SUMS with a UTF-8 BOM (BS8)'
+Restore-Refused { [IO.File]::WriteAllText([IO.Path]::Combine($set, 'SHA256SUMS'), $sumsLine, [Text.Encoding]::Unicode) } '*isn''t complete' 'SHA256SUMS in UTF-16 (BS8)'
+# BS6 with BS4: the live file classified before the saved set is read
+Reset-Restore 'PIONEER onnxruntime 7.2.19 another build'
+[IO.File]::Delete([IO.Path]::Combine($set, 'SHA256SUMS'))
+$r = Restore-Says
+Check ($r -ceq "rekordbox 7.2.19 has Pioneer's file already." -and (Live) -ceq 'PIONEER onnxruntime 7.2.19 another build' -and (Leftovers) -eq 0) "-Restore: another Pioneer file left, the saved copy not written, the saved set not needed (BS6) ($r)"
+Reset-Restore ''
+[void][IO.Directory]::CreateDirectory($live)
+$r = Restore-Says
+Check ($r -ceq "THROW rekordbox 7.2.19: $($Texts.RestoreNotFile -f '7.2.19')" -and @(Get-ChildItem -LiteralPath $live -Force).Count -eq 0 -and (Leftovers) -eq 0) "-Restore: a folder named onnxruntime.dll refused, nothing put in it (BS4) ($r)"
+# BS7: a version that fails doesn't stop the others
+Reset-Restore
+$set10 = [IO.Path]::Combine($pf, 'RB Stems Plus', 'pioneer', '7.10.0'); $dst10 = [IO.Path]::Combine($pf, 'rekordbox', 'rekordbox 7.10.0')
+[void][IO.Directory]::CreateDirectory($set10); [void][IO.Directory]::CreateDirectory($dst10)
+[IO.File]::WriteAllText([IO.Path]::Combine($set10, 'onnxruntime.dll'), 'PIONEER onnxruntime 7.10.0')
+[IO.File]::WriteAllText([IO.Path]::Combine($dst10, 'onnxruntime.dll'), 'rbstems bridge: the bridge')
+$r = Restore-Says
+Check ($r -ceq "THROW rekordbox 7.10.0: the saved copy of rekordbox 7.10.0's file isn't complete" -and (Live) -ceq $pioneerText -and
+       [IO.File]::ReadAllText([IO.Path]::Combine($dst10, 'onnxruntime.dll')) -ceq 'rbstems bridge: the bridge') "-Restore: 7.2.19 restored past an incomplete 7.10.0, which is named (BS7) ($r)"
+# BS5: the signer's subject read field by field
+Reset-Restore
+$savedDll = [IO.Path]::Combine($set, 'onnxruntime.dll')
+Check (Test-RbspAlphaTheta $savedDll) 'AlphaTheta pin: the real subject'
+foreach ($s in @('CN="x, O=AlphaTheta Corporation, SERIALNUMBER=0104-01-151827", O=Other, SERIALNUMBER=1',
+                 'SERIALNUMBER=0104-01-151827, CN=AlphaTheta Corporation + O=AlphaTheta Corporation, C=JP',
+                 'SERIALNUMBER=0104-01-151827, O=AlphaTheta Corporation, O=Other, C=JP',
+                 'SERIALNUMBER=0104-01-151827, SERIALNUMBER=0104-01-151827, O=AlphaTheta Corporation',
+                 'SERIALNUMBER=0104-01-151827, O=AlphaTheta Corporation Ltd, C=JP', 'O=AlphaTheta Corporation, C=JP',
+                 'serialNumber=0104-01-151827, O=AlphaTheta Corporation')) {
+    $script:subject = $s
+    Check (-not (Test-RbspAlphaTheta $savedDll)) "AlphaTheta pin refused: $s (BS5)"
+}
+# BS16 and BS3: the failures after the copy, the message and the files on disk
+function Restore-Fails([scriptblock]$bend, [string]$liveText, [string]$want, [string]$liveAfter, [string]$what) {
+    Reset-Restore $liveText
+    & $bend
+    $r = Restore-Says
+    Check ($r -like "THROW rekordbox 7.2.19: $want" -and (Live) -ceq $liveAfter -and (Leftovers) -eq 0) "-Restore: $what ($r)"
+}
+$bridge = 'rbstems bridge: the bridge'
+Restore-Fails { $script:badSig = '*.rbsp-new' } $bridge '*the copy of Pioneer''s file in rekordbox 7.2.19 doesn''t verify' $bridge 'the copy doesn''t verify, the live file unchanged (BS16)'
+Restore-Fails { $script:moveFails = 1 } $bridge 'couldn''t put Pioneer''s file into rekordbox 7.2.19 (the move failed (test))' $bridge 'the forced move throws, the live file there (BS16)'
+Restore-Fails { $script:moveFails = 1 } '' '*where a file may have appeared meanwhile (the move failed (test))' '' 'the move into a missing file''s place throws (BS16)'
+Restore-Fails { $script:badSig = $live } $bridge '*doesn''t verify as Pioneer''s after putting it back' $pioneerText 'the live signature rejected after the move (BS16)'
+Restore-Fails { $script:moveFails = 2; $script:moveDeletes = $true } $bridge ($Texts.RestoreGone -f '7.2.19', 'the move failed (test); the move failed (test)') '' 'the forced move deletes the live file and fails, the retry too (BS3)'
+Reset-Restore
+$script:moveFails = 1; $script:moveDeletes = $true
+$r = Restore-Says
+Check ($r -ceq "Pioneer's file is back in rekordbox 7.2.19." -and (Live) -ceq $pioneerText -and (Leftovers) -eq 0) "-Restore: the forced move deletes the live file and fails, the retry without -Force puts it back (BS3) ($r)"
+Reset-Restore
+$ok = $true
+try { [void](Get-RbspProgramFiles) } catch { $ok = $false }
+if ($onWindows) { Check ($ok) 'Program Files read from the registry' } else { Check (-not $ok) 'Program Files: none off Windows, refused' }
+# BS14: ProgramW6432Dir first (an x86 powershell.exe reads it too), ProgramFilesDir only in a
+# process of the machine's own width
+$script:hklm = @{}
+function Get-ItemProperty([string]$LiteralPath, [string]$Name, $ErrorAction) { if ($script:hklm.ContainsKey($Name)) { [pscustomobject]@{ $Name = $script:hklm[$Name] } } }
+function Program-Files([hashtable]$values, [string]$wow) {
+    $script:hklm = $values
+    $savedWow = $env:PROCESSOR_ARCHITEW6432
+    $env:PROCESSOR_ARCHITEW6432 = $wow
+    try { return Get-RbspProgramFiles } catch { return "THROW $($_.Exception.Message)" } finally { $env:PROCESSOR_ARCHITEW6432 = $savedWow }
+}
+Check ((Program-Files @{ ProgramW6432Dir = 'C:\Program Files'; ProgramFilesDir = 'C:\Program Files (x86)' } 'AMD64') -ceq 'C:\Program Files') 'Program Files: ProgramW6432Dir first, in an x86 process (BS14)'
+Check ((Program-Files @{ ProgramFilesDir = 'C:\Program Files' } '') -ceq 'C:\Program Files') 'Program Files: ProgramFilesDir when there is no ProgramW6432Dir (BS14)'
+Check ((Program-Files @{ ProgramFilesDir = 'C:\Program Files (x86)' } 'AMD64') -like 'THROW *') 'Program Files: ProgramFilesDir refused in a 32-bit process on 64-bit Windows (BS14)'
+Check ((Program-Files @{ ProgramW6432Dir = 'Program Files' } '') -like 'THROW *') 'Program Files: a relative value refused (BS14)'
+Remove-Item function:Get-ItemProperty, function:Program-Files
+
+# the one-liner with RBSTEMSPLUS_RESTORE=1 in a ConstrainedLanguage child: unelevated (the Mac has
+# no S-1-16-12288), its refusal alone; then the whole restore in a ConstrainedLanguage child, its
+# functions defined under iex after the switch, with the four Windows answers stubbed first
+function Invoke-Child([string]$cmd, [hashtable]$envs) {
+    $exe = if ($onWindows) { 'powershell' } else { 'pwsh' }
+    $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cmd))
+    $saved = @{}
+    foreach ($k in $envs.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $envs[$k]) }
+    $savedEap = $ErrorActionPreference
+    $o = ''
+    try {
+        $ErrorActionPreference = 'Continue'
+        $o = (& $exe -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand $enc 2>&1 | Out-String)
+    } finally { $ErrorActionPreference = $savedEap; foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) } }
+    return ($o -replace "$([char]27)\[[0-9;?]*[A-Za-z]", '').Trim()
+}
+if (-not $onWindows) {
+    $out = Invoke-Child ('$ProgressPreference = ''SilentlyContinue''; $ExecutionContext.SessionState.LanguageMode = ''ConstrainedLanguage''; ' +
+                         'Get-Content -Raw -LiteralPath $env:RBSP_BOOT_PATH | iex; "left: [$env:RBSTEMSPLUS_RESTORE]"') @{ RBSP_BOOT_PATH = $path; RBSTEMSPLUS_RESTORE = '1' }
+    $lines = @($out -split '\r?\n')
+    Check ($lines.Count -eq 2 -and $lines[0] -ceq $Texts.RestoreElevated) "-Restore under iex in ConstrainedLanguage, unelevated: its refusal alone (got: $out)"
+    Check ($lines.Count -eq 2 -and $lines[1] -ceq 'left: []') "-Restore: RBSTEMSPLUS_RESTORE removed once read, so the next paste installs (BS15) (got: $out)"
+}
+Reset-Restore
+$stubs = @'
+function global:whoami { 'Mandatory Label\High Mandatory Level   Label   S-1-16-12288' }
+function global:Get-Process([string[]]$Name, $ErrorAction) {
+    if ($env:RBSP_WORKER_PATH -and $Name -contains 'RB Stems Plus') {
+        [pscustomobject]@{ ProcessName = 'RB Stems Plus'; Path = $env:RBSP_WORKER_PATH }
+    }
+}
+function global:Get-Acl([string]$LiteralPath) { [pscustomobject]@{ Sddl = 'O:BAG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)' } }
+function global:Get-AuthenticodeSignature([string]$LiteralPath) {
+    if ([IO.File]::ReadAllText($LiteralPath).StartsWith('PIONEER')) { return [pscustomobject]@{ Status = 'Valid'; SignerCertificate = [pscustomobject]@{ Subject = 'SERIALNUMBER=0104-01-151827, CN=AlphaTheta Corporation, O=AlphaTheta Corporation, C=JP' } } }
+    [pscustomobject]@{ Status = 'NotSigned'; SignerCertificate = $null }
+}
+$src = Get-Content -Raw -LiteralPath $env:RBSP_BOOT_PATH
+$at = $src.IndexOf("`n& {`n")
+$src = $src.Substring(0, $at) + "`n. {`n" + $src.Substring($at + 5)
+$global:RbspTestMode = $true
+# Get-FileHash is a script function of this module on 5.1: loaded after the switch it would load in
+# ConstrainedLanguage (no system lockdown here) and fail. Loaded first, in FullLanguage, as WDAC
+# loads the Microsoft-signed module on a real SAC/WDAC PC (BS11).
+Import-Module Microsoft.PowerShell.Utility
+$ExecutionContext.SessionState.LanguageMode = 'ConstrainedLanguage'
+iex $src
+"mode: $($ExecutionContext.SessionState.LanguageMode)"
+try { Invoke-RbspRestore $env:RBSP_PF } catch { "THROW $($_.Exception.Message)" }
+'@
+$out = Invoke-Child $stubs @{ RBSP_BOOT_PATH = $path; RBSP_PF = $pf; RBSP_WORKER_PATH = "$workerRoot\RB Stems Plus.exe" }
+Check ($out -match 'mode: ConstrainedLanguage' -and $out -like "*THROW $busy" -and (Live) -ceq $bridge) "-Restore in a ConstrainedLanguage child: running worker refused (BS12) (got: $out)"
+Reset-Restore
+$out = Invoke-Child $stubs @{ RBSP_BOOT_PATH = $path; RBSP_PF = $pf }
+Check ($out -match 'mode: ConstrainedLanguage' -and $out -match 'Pioneer''s file is back in rekordbox 7\.2\.19\.' -and (Live) -ceq $pioneerText -and (Leftovers) -eq 0) "-Restore in a ConstrainedLanguage child: restored (got: $out)"
+Remove-Item function:whoami, function:Get-Process, function:Get-Acl, function:Get-AuthenticodeSignature, function:Get-Item, function:Move-Item
+if ([IO.Directory]::Exists("$dst.real")) { [IO.Directory]::Delete("$dst.real", $true) }
 
 # the shortcut's C# compiles (it runs only on Windows)
 $compiled = $true

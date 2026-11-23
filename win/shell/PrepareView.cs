@@ -57,6 +57,9 @@ namespace RbStemsPlus.Shell
             model.ScrollOutlineTo += row => { pendingOutline = true; ApplyOneShots(); };
             untilPicker = new UntilPicker(model, () => Until.SelectedDate, d => Until.SelectedDate = d,
                 (from, to) => { Until.DisplayDateStart = from; Until.DisplayDateEnd = to; }, a => Dispatcher.BeginInvoke(a));
+#if SHELL_TEST
+            untilPicker.Today = TestHooks.PickerToday;
+#endif
             model.Applied += DrawDate;   // a refused day drawn back, the range after midnight (PT1)
             model.FocusOutline += () => { pendingFocus = true; ApplyOneShots(); };
             Loaded += (s, e) => { DrawAll(); ApplyOneShots(); };

@@ -35,8 +35,9 @@ let unknownModelMessage = "rekordbox's stems model isn't one RB Stems Plus knows
 let originalsUnreadableMessage = "The saved copies of rekordbox's own stems model can't be read."
 
 /// rekordbox's model folder and our saved originals: what the steps below work on.
-/// Models.originalsCheck: what is saved (best first), what verifies, whether anything can't be checked.
-typealias OriginalsCheck = (saved: [(sha: String, engine: String)], verified: [String], unknown: Bool)
+/// Models.originalsCheck: what is saved (best first), what verifies, whether anything can't be
+/// checked, and whether 1.0's saved model is still in the old layout.
+typealias OriginalsCheck = (saved: [(sha: String, engine: String)], verified: [String], unknown: Bool, legacy: Bool)
 
 struct Models {
     let dir: String                 // rekordbox's model folder (hdemucs.onnx, demucs3_ver.txt)
@@ -50,6 +51,8 @@ struct Models {
     var lookup: (String) -> Lookup = fileLookup
     /// How a saved copy is hashed in originalsCheck (sha256; the tests make a read fail)
     var hashFile: (String) -> String? = { sha256($0) }
+    /// How a saved model's engine file is written (writeAtomically; the tests make it fail)
+    var writeFile: (Data, String) -> Bool = writeAtomically
 
     var model: String { dir + "/hdemucs.onnx" }
     var newTemp: String { dir + "/.hdemucs.new" }
@@ -85,9 +88,17 @@ struct Models {
         guard isSHA256(sha), !ours.contains(sha) else {
             return fail("rekordbox's stems model is the Demucs v4 model, so it wasn't saved as rekordbox's own.")
         }
-        if savedIsGood(sha) { log("save Pioneer's model: already saved (\(sha.prefix(12)))"); return Outcome(ok: true, message: "") }
-        try? FileManager.default.createDirectory(atPath: originals, withIntermediateDirectories: true)
         let e = engine
+        if savedIsGood(sha) {
+            // the live model is that copy, so the current engine is its engine: a missing tag written (review b-a2a-F1)
+            guard tagEngine(sha, e) else {
+                log("save Pioneer's model: FAILED its STEMS Engine version")
+                return fail("A copy of rekordbox's own stems model couldn't be saved.")
+            }
+            log("save Pioneer's model: already saved (\(sha.prefix(12)))")
+            return Outcome(ok: true, message: "")
+        }
+        try? FileManager.default.createDirectory(atPath: originals, withIntermediateDirectories: true)
         let part = saved(sha) + ".part"
         remove(part)                                            // left by a run that was stopped
         let err = copyFile(model, part)
@@ -98,10 +109,20 @@ struct Models {
                                                                                   : "A copy of rekordbox's own stems model couldn't be saved.")
         }
         // the engine version before the model: a saved model never appears without it
-        if !e.isEmpty && fileType(engineFile(sha)) == nil { writeAtomically(Data((e + "\n").utf8), to: engineFile(sha)) }
+        guard tagEngine(sha, e) else {
+            remove(part)
+            log("save Pioneer's model: FAILED its STEMS Engine version")
+            return fail("A copy of rekordbox's own stems model couldn't be saved.")
+        }
         guard place(part, as: sha) else { remove(part); return fail("A copy of rekordbox's own stems model couldn't be saved.") }
         log("save Pioneer's model: saved (\(sha.prefix(12)), STEMS Engine \(e.isEmpty ? "unknown" : e))")
         return Outcome(ok: true, message: "")
+    }
+
+    /// The saved model sha's STEMS Engine version e as <sha>.engine, when e is known and it has
+    /// none: false when it couldn't be written (an untagged copy ranks below an older engine's).
+    private func tagEngine(_ sha: String, _ e: String) -> Bool {
+        e.isEmpty || fileType(engineFile(sha)) != nil || writeFile(Data((e + "\n").utf8), engineFile(sha))
     }
 
     /// Whether the originals folder can't be listed (any error but ENOENT): then which of
@@ -136,7 +157,7 @@ struct Models {
                 }
             }
         }
-        return (list, verified, unknown)
+        return (list, verified, unknown, s.legacy)
     }
 
     /// Whether removeOwnFolders(keepOriginals: true) keeps the originals folder: it is a real
@@ -203,18 +224,18 @@ struct Models {
     /// their engine version and date), and whether a <sha>.onnx that isn't ours can't be checked
     /// (its lookup fails with anything but ENOENT, or it is a file that can't be opened). Such a
     /// copy isn't listed (a good one next to it can still be put back) but makes `unknown` true.
-    private func scan() -> (list: [(sha: String, engine: String, date: Date)], unknown: Bool) {
+    private func scan() -> (list: [(sha: String, engine: String, date: Date)], unknown: Bool, legacy: Bool) {
         var list: [(sha: String, engine: String, date: Date)] = [], unknown = false
         // only a real folder is read: through a link (or with a file there) nothing counts as
         // saved, as removeOwnFolders takes it with the rest; a lookup error is "unknown"
         switch lookup(originals) {   // through self.lookup, as each saved copy below (MP1)
         case .type(S_IFDIR): break
-        case .unreadable: return ([], true)
-        case .type, .missing: return ([], false)
+        case .unreadable: return ([], true, false)
+        case .type, .missing: return ([], false, false)
         }
         // listed with readdir (FileManager's listing also looks each entry up, and fails as a
         // whole in a folder that can be read but not searched): a listing error is "unknown"
-        guard let d = opendir(originals) else { return ([], errno != ENOENT) }
+        guard let d = opendir(originals) else { return ([], errno != ENOENT, false) }
         var names: [String] = []
         while true {
             errno = 0
@@ -225,7 +246,8 @@ struct Models {
         closedir(d)
         // 1.0's saved model (originals/hdemucs.onnx) still there: migrateLegacy couldn't move it,
         // so it may be Pioneer's only copy (review MP2)
-        if lookup(legacy) != .missing { unknown = true }
+        let legacyThere = lookup(legacy) != .missing
+        if legacyThere { unknown = true }
         for name in names where name.hasSuffix(".onnx") {
             let sha = String(name.dropLast(5))
             guard isSHA256(sha), !ours.contains(sha) else { continue }
@@ -241,7 +263,7 @@ struct Models {
             let date = (try? FileManager.default.attributesOfItem(atPath: saved(sha)))?[.modificationDate] as? Date ?? .distantPast
             list.append((sha, e, date))
         }
-        return (list, unknown)
+        return (list, unknown, legacyThere)
     }
 
     // MARK: putting it back
@@ -262,6 +284,7 @@ struct Models {
         guard now.readable else { return fail("rekordbox's stems model can't be read.") }
         let live = now.sha, present = live != nil
         let check = originalsCheck(hashing: false), candidates = check.saved   // one scan for every decision below
+        guard !check.legacy else { log("  1.0's saved model is still in the old layout: nothing put back"); return fail(originalsUnreadableMessage) }
         if let l = live, !ours.contains(l) {
             // a saved copy that can't be checked may say this model isn't Pioneer's
             guard !check.unknown else { return fail(originalsUnreadableMessage) }
@@ -400,7 +423,10 @@ struct Models {
         if savedIsGood(sha) { remove(legacy); log("1.0's saved model: already in the new layout"); return false }
         let e = engine
         if !e.isEmpty, live == sha || live.map(ours.contains) == true, fileType(engineFile(sha)) == nil {
-            writeAtomically(Data((e + "\n").utf8), to: engineFile(sha))
+            guard writeFile(Data((e + "\n").utf8), engineFile(sha)) else {
+                log("1.0's saved model: its STEMS Engine version couldn't be written: left as it is")
+                return false
+            }
         }
         log("1.0's saved model (\(sha.prefix(12))): \(place(legacy, as: sha) ? "moved to the new layout" : "COULDN'T BE MOVED")")
         return false

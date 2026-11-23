@@ -1,0 +1,111 @@
+# Multi-version rekordbox on Windows, the VM part of the qualification (mv-spec.md section 5,
+# V1-V13; decisions mv-decisions.md): Stems Cache as one machine-wide installation covering every
+# installed, listed rekordbox, end to end in the real app. From snapshot (b) "rekordbox 7.2.19
+# installed + stems model + 7.2.20 installer staged" (mv-vm-snapshots.md):
+#   scripts/build.sh --test http://10.211.55.2:8766/ --win-test https://10.211.55.2:8766/current --windows
+#   tests/win/suites/multiversion/make-dist.sh dist-test         # build/win/dist-mv: M1 at the root, m1/, m2/
+#   tests/win/vm-run.sh stage                                    # repo/ (keep the share's vm/uia and sysdesk)
+#   bridge/win/tests/stage.sh                                    # bridge-win/harness.exe and its test model
+#   tests/win/vm-run.sh run "{dcb239b2-290c-4559-bc38-04de3a4e687c}" multiversion --serve build/win/dist-mv
+# The app downloads from current/, which the switch steps fill with M1 (7.2.19 only) or M2
+# (7.2.19 + 7.2.20, both bindings, the code digest). UAC: worker/prep.ps1 elevates without a prompt
+# (the suites' approved way), and each batch's UAC count is the Security log's elevated process
+# creations of RB Stems Plus.exe (auditing on since mv-prep) beside app.log's admin runs; V13 alone
+# prompts, answered No on the secure desktop by rbui (uac/arm.ps1). VMs never start rekordbox
+# (owner, 2026-11-17): V5's "each EXE loads its own folder's DLL" runs harness.exe (an ordinal
+# importer, as rekordbox.exe) copied into each folder, and V6's running 7.2.19 is a PING.EXE copy
+# in its rekordbox.exe's place. The installer (V3) and the uninstallers (V10) run with /S; their
+# NSIS language picker gets OK (ruling 2026-11-21; it isn't a licence, sign-in or UAC dialog),
+# any other window ends them. V7 injects a TEST load failure. V8 uses the sign-out machinery of
+# stems-cache-uac.suite to interrupt the second swap. V11 is out under D13 (no legacy adoption).
+# Not a release.list row.
+include lib/vmlib.ps1
+include worker/rblib.ps1
+include uninstall/cases/unlib.ps1
+include uac/uaclib.ps1
+include watcher/wtlib.ps1
+include report/rplib.ps1
+include multiversion/mvlib.ps1
+need http
+need file repo/core/texts.def
+need file vm/uia/rbui/rbui.exe
+need file vm/x64/sysdesk.exe
+need file vm/arm64/sysdesk.exe
+need file bridge-win/harness.exe
+need file bridge-win/model/hdemucs.onnx
+need file dist-mv/m1/payload.json
+need file dist-mv/m2/payload.json
+# MODE       SECS NAME              SCRIPT
+sys          120  prep              worker/prep.ps1
+sys          120  mv-prep           multiversion/prep.ps1
+sys          120  switch-m1         multiversion/switch.ps1
+user         600  install           bootstrap/install.ps1
+# V1, V2: 7.2.19 alone under M1
+user         600  v1                multiversion/v1.ps1
+sys          120  v1-files          multiversion/files.ps1
+user         300  v2                multiversion/v2.ps1
+sys          60   v2-uac            multiversion/uac.ps1
+# V3: the real 7.2.20 installer with the app open; V4: M2 and the watcher's grouped ask
+sys          60   v3-start          multiversion/v3-start.ps1
+user-high    120  v3-lang           multiversion/lang-ok.ps1
+user-high    600  v3-observe        multiversion/v3-observe.ps1
+sys          120  v3-installed      multiversion/v3-installed.ps1
+sys          60   switch-m2         multiversion/switch.ps1
+user         600  v4                multiversion/v4.ps1
+# V5: the batch over both, and each folder's own DLL loaded
+user         600  v5                multiversion/cache.ps1
+sys          120  v5-files          multiversion/files.ps1
+sys          120  standin-put       multiversion/standin.ps1
+user         300  v5-load           multiversion/v5-load.ps1
+sys          60   standin-clean     multiversion/standin.ps1
+# V6: the running gate names the version
+sys          60   v6-standin        multiversion/v6-standin.ps1
+user         300  v6                multiversion/v6.ps1
+sys          60   v6-restore        multiversion/v6-restore.ps1
+# V7: 7.2.20 fails after the first commit. Prove the first loads and can be uninstalled,
+# then repeat the failure and retry with only 7.2.20 in scope.
+user         300  v7-reset          multiversion/v7.ps1
+user         600  v7                multiversion/v7.ps1
+sys          120  v7-files          multiversion/files.ps1
+sys          120  v7-standin-put    multiversion/standin.ps1
+user         300  v7-load           multiversion/v5-load.ps1
+sys          60   v7-standin-clean  multiversion/standin.ps1
+user         300  v7-remove         multiversion/v7.ps1
+user         600  v7-again          multiversion/v7.ps1
+user         600  v7-retry          multiversion/v7.ps1
+sys          120  v7-retry-files    multiversion/files.ps1
+# V8: sign out after the second swap and before its receipt. Put Back, then install it again.
+user         300  v8-reset          multiversion/v7.ps1
+sys          120  v8-setup          uac/setup.ps1
+sys          240  arm-wc-v8         uac/arm.ps1
+user         300  v8                uac/press.ps1
+sys          600  v8-settle         uac/settle.ps1
+wait         600  v8-signin         logon
+sys          120  v8-uac-done       uac/done.ps1
+user         420  v8-repair         multiversion/v8-repair.ps1
+user         600  v8-retry          multiversion/cache.ps1
+sys          120  v8-retry-files    multiversion/files.ps1
+# V13: UAC refused
+sys          120  v13-prompt        multiversion/v13-prompt.ps1
+sys          240  arm-no-v13        uac/arm.ps1
+user         420  v13               multiversion/v13.ps1
+sys          60   v13-done          multiversion/v13-done.ps1
+# V9: 7.2.19's DLL deleted, Put Back on it alone, then Install again
+sys          60   v9-delete         multiversion/v9-delete.ps1
+user         600  v9p               multiversion/v9p.ps1
+sys          120  v9p-files         multiversion/files.ps1
+user         600  v9i               multiversion/cache.ps1
+sys          120  v9i-files         multiversion/files.ps1
+# V12: Uninstall Completely from Settings > Apps with both bridged
+user         600  v12               multiversion/v12.ps1
+sys          120  v12-files         multiversion/v12-files.ps1
+# V10: the app again, both bridged, then each version removed (7.2.20 with the watcher stopped)
+user         600  app-again         multiversion/app-again.ps1
+user         600  v10i              multiversion/cache.ps1
+sys          120  v10i-files        multiversion/files.ps1
+user-high    600  v10a              multiversion/rb-uninstall.ps1
+user-high    600  v10b              multiversion/rb-uninstall.ps1
+user         420  v10u              multiversion/v10u.ps1
+sys          120  v10u-files        multiversion/v10u-files.ps1
+sys          60   switch-clean      multiversion/switch.ps1
+sys          60   done              multiversion/done.ps1

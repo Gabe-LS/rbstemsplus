@@ -1,0 +1,52 @@
+# N12's UAC rows (the judged GPT pre-release audit, w6/audit-fixes) and N8's admin\ row (review
+# audit-fixes-rr1 AR4, AF12), with UAC prompting as Windows ships it (rbui answers on the secure
+# desktop, as stems-cache-uac.suite). From "rekordbox 7.2.19 installed + stems model":
+#   tests/win/vm-run.sh stage --build
+#   tests/win/vm-run.sh run "rekordbox 7.2.19 installed + stems model" admin-paths
+# After Stems Cache is installed (the first install's admin\ copy):
+# - uninstall-no (W13a's UAC No row): Uninstall Stems Cache, UAC No: nothing changes, the choice kept
+# - updating-cancel (item 14, AF8): rekordbox's folder moved aside (rb-moved), Uninstall Stems
+#   Cache's "rekordbox missing" Remove, a fake updater ("Upmgr rekordbox.exe": a PING.EXE copy;
+#   rekordbox never runs) makes the remove-root-folder run ask "rekordbox updating": Cancel keeps
+#   the choice; rb-back puts the folder back
+# - admin-gone: the app folder's admin\ worker removed; install-stops: Reinstall Stems Cache stops
+#   before any elevation (arm-guard's responder sees no prompt); restore-bin: R1's Put Back
+#   (foreign live DLL) elevates the bin\ worker (the prompt's details); uninstall-bin: Uninstall
+#   Stems Cache elevates the bin\ worker
+# Needs the TEST build in dist-test/ (main 447ea474 or later) and a local account signed in
+# (setup's Set-AutoLogon). Not a release.list row.
+include lib/vmlib.ps1
+include worker/rblib.ps1
+include uninstall/cases/unlib.ps1
+include uac/uaclib.ps1
+need http
+need file repo/core/texts.def
+need file dist-test/bootstrap.ps1
+need file dist-test/payload.json
+need file vm/uia/rbui/rbui.exe
+need file vm/x64/sysdesk.exe
+need file vm/arm64/sysdesk.exe
+# MODE       SECS NAME              SCRIPT
+sys          120  prep              worker/prep.ps1
+sys          120  setup             uac/setup.ps1
+user         600  install           bootstrap/install.ps1
+sys          240  arm-yes-1         uac/arm.ps1
+user         600  cache-install     worker/cache-install.ps1
+user         180  consent-yes-1     uac/consent.ps1
+# W13a: UAC No on Uninstall Stems Cache
+sys          240  arm-no-2          uac/arm.ps1
+user         420  uninstall-no      admin-paths/uninstall-no.ps1
+# AF8: Cancel at "rekordbox updating" (the two-prompt case)
+sys          60   rb-moved          admin-paths/rb-folder.ps1
+user         300  updating-cancel   admin-paths/updating.ps1
+sys          60   rb-back           admin-paths/rb-folder.ps1
+# AF12 / AR4: the app folder's admin\ worker gone
+user         60   admin-gone        admin-paths/admin-gone.ps1
+sys          120  arm-guard         admin-paths/arm-guard.ps1
+user         420  install-stops     admin-paths/install-stops.ps1
+sys          60   foreign           admin-paths/foreign.ps1
+sys          240  arm-details-3     uac/arm.ps1
+user         480  restore-bin       admin-paths/bin-worker.ps1
+sys          240  arm-details-4     uac/arm.ps1
+user         480  uninstall-bin     admin-paths/bin-worker.ps1
+sys          120  done              uac/done.ps1

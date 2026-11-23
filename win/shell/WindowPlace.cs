@@ -97,20 +97,14 @@ namespace RbStemsPlus.Shell
         /// the user sees: the window opens at its start size next time).
         public bool Save(string path)
         {
-            string tmp = path + ".tmp";
             try
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(path));
-                File.WriteAllText(tmp, Format(), Encoding.ASCII);
-                if (File.Exists(path)) File.Replace(tmp, path, null);
-                else File.Move(tmp, path);
-                return true;
+                string support = Path.GetDirectoryName(path);
+                byte[] text = Encoding.ASCII.GetBytes(Format());
+                return Core.core_win_window_save(Path.GetDirectoryName(support), Path.GetFileName(support),
+                    Path.GetFileName(path), text, (UIntPtr)text.Length) == 0;
             }
-            catch (Exception)
-            {
-                try { File.Delete(tmp); } catch (Exception) { }
-                return false;
-            }
+            catch (Exception) { return false; }
         }
     }
 }

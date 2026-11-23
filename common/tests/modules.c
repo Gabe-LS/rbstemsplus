@@ -218,6 +218,25 @@ static void t_paths(void) {
     CHECK(!paths_same_win("C:/M/x.mp3", "C:/m/x.mp3") && !paths_same_win("C:/a", "D:/a") && !paths_same_win("C:/a", "C:/ab")
           && !paths_same_win("ca:/x", "Ca:/x"), "Windows: nothing else folded");
 #if defined(PATHS_WIN_FORM)
+    /* Windows' another drive (T13): the system drive C: */
+    CHECK(!paths_other_drive_win("C:/Users/a/x.mp3", 'C') && !paths_other_drive_win("c:\\x.mp3", 'C') && !paths_other_drive_win("C:", 'c')
+              && !paths_other_drive_win("\\\\?\\C:\\x.mp3", 'C'),
+          "Windows: the system drive, either case and separator, behind \\\\?\\ too, isn't another drive");
+    CHECK(paths_other_drive_win("D:/Music/x.mp3", 'C') == 3 && paths_other_drive_win("e:\\x", 'C') == 3 && paths_other_drive_win("D:", 'C') == 2
+              && paths_other_drive_win("\\\\?\\D:\\x", 'C') == 7 && paths_other_drive_win("C:/x", 0) == 3,
+          "Windows: another letter is, its root \"D:\\\\\" (and every drive when the system's isn't known)");
+    CHECK(paths_other_drive_win("//nas/share/m/x.mp3", 'C') == strlen("//nas/share") && paths_other_drive_win("\\\\nas\\share", 'C') == strlen("\\\\nas\\share")
+              && paths_other_drive_win("\\\\?\\UNC\\nas\\share\\x", 'C') == strlen("\\\\?\\UNC\\nas\\share")
+              && paths_other_drive_win("//nas", 'C') == 5,
+          "Windows: UNC is, its root \\\\server\\share (behind \\\\?\\UNC\\ too)");
+    CHECK(paths_other_drive_win("\\\\?\\Volume{0f8c2d3a-1b2c-4d5e-8f90-1a2b3c4d5e6f}\\m\\x", 'C') == 49, "Windows: a volume GUID path is");
+    CHECK(!paths_other_drive_win("/Volumes/GLS/x", 'C') && !paths_other_drive_win("Music/x.mp3", 'C') && !paths_other_drive_win("", 'C')
+              && !paths_other_drive_win("C:x.mp3", 'D') && !paths_other_drive_win("1:/x", 'C'),
+          "Windows: a path with no root isn't (the Mac's, relative, empty, drive-relative)");
+    /* the UNC ruling: track input only; a chosen cache location never takes UNC */
+    CHECK(!paths_location_ok_win("\\\\nas\\share\\" PATHS_CACHE_FOLDER) && !paths_location_ok_win("//nas/share/" PATHS_CACHE_FOLDER)
+              && !paths_location_ok_win("\\\\?\\UNC\\nas\\share\\" PATHS_CACHE_FOLDER) && !paths_root_win("\\\\?\\UNC\\nas\\share\\"),
+          "Windows: a cache location on a share is refused, in each UNC form");
     CHECK(paths_location_ok_os("E:\\" PATHS_CACHE_FOLDER) && !paths_location_ok_os("/Volumes/GLS/" PATHS_CACHE_FOLDER), "the build's form: Windows'");
 #else
     CHECK(!paths_location_ok_os("E:\\" PATHS_CACHE_FOLDER) && paths_location_ok_os("/Volumes/GLS/" PATHS_CACHE_FOLDER), "the build's form: the Mac's");

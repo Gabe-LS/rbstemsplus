@@ -69,7 +69,10 @@ Metric definitions (start and end events), every event of a launch counted:
             between top's samples
   P13       the app zip's size (MB)
   P14       the old app's "answer Update" -> the new app's ev windowDrawn, the two processes'
-            records joined through their kernel start times (pids.txt; perf-update)
+            records joined through their kernel start times (pids.txt; perf-update); its split
+            (P14.status, .download, .quit, .relaunch, .launch, and with the probe's shutdown
+            points and afterexit.txt .shutdown, .exit, .wait, .script, .armed: p14() below) is
+            information
   P15       --p15 FILE: the helper-line parse, ns per line ("swift" A, "c" B), shown in µs
   P16       cmd menu Create Report -> its ev dialog ("Report saved"; perf-report), wall time
   P16.own   P16 less P16.children: the app's own time in the report (perf-report's rounds measure
@@ -330,14 +333,37 @@ def footprint_mb(path):
     return v / 1024 if m.group(2) == "KB" else v * 1024 if m.group(2) == "GB" else v / 1048576 if m.group(2) == "B" else v
 
 
+def stamp_ns(text):
+    """afterexit.txt's time ("<s>.<ns>", stat -f %Fm) as integer ns, no float rounding; None: not one"""
+    m = re.fullmatch(r"(\d+)(?:\.(\d{1,9}))?", text)
+    return int(m.group(1)) * 1_000_000_000 + int((m.group(2) or "0").ljust(9, "0")) if m else None
+
+
 def p14(rundir):
     """P14: the old app's "answer Update" to the new app's windowDrawn, two processes' records
     joined through their kernel start times (pids.txt: pid, µs since 1970; the probe's times are
-    relative to its own start, launch_ns the kernel's start in that clock)."""
+    relative to its own start, launch_ns the kernel's start in that clock). Then its split, for
+    information (each step only when both its ends were recorded; every time in ns since 1970):
+      P14.status    answer Update -> the old app's first c.status set
+      P14.download  that -> its last c.status set before willTerminate (download and verify)
+      P14.quit      that -> ev willTerminate
+      P14.relaunch  willTerminate -> the new app's process start (pids.txt)
+      P14.launch    the new app's process start -> its windowDrawn
+    and, from the probe's shutdown points (perf mode; app/Probe/Probe.swift) and the afterExit
+    script's stamps (afterexit.txt: tests/harness/run.sh):
+      P14.shutdown  willTerminate -> tp exit.end, the old app's last recorded moment
+      P14.exit      tp exit.begin (exit() called) -> tp exit.end: the atexit handlers
+      P14.wait      exit.end -> the script's wait over (afterexit-PID-work): the process's
+                    teardown plus the poll's rounding up (kill -0 every 0.2 s)
+      P14.script    the wait over -> the new app's process start (the copy, signing, --swap,
+                    lsregister, open)
+      P14.armed     the script's start (afterexit-PID-start) -> exit.end: under one poll
+                    interval, the first check after it can find the app gone"""
+    out = {}
     starts = {}
     p = os.path.join(rundir, "pids.txt")
     if not os.path.isfile(p):
-        return []
+        return out
     for line in open(p, encoding="utf-8"):
         f = line.split()
         if len(f) == 2 and f[0].isdigit() and f[1].isdigit():
@@ -346,15 +372,54 @@ def p14(rundir):
     for path in glob.glob(os.path.join(rundir, "perf-*.tsv")):
         head, ev = read_perf(path)
         pid, launch = head.get("pid"), int(head.get("launch_ns", "0"))
-        ans = next((e[0] for e in ev if e[1] == "cmd" and e[2] == "answer Update"), None)
-        drawn = next((e[0] for e in ev if e[1] == "ev" and e[2] == "windowDrawn"), None)
         if pid not in starts:
             continue
-        if ans is not None:
-            old = starts[pid] + ans - launch
-        elif drawn is not None:
-            new = starts[pid] + drawn - launch
-    return [ms(new - old)] if old is not None and new is not None and new > old else []
+        wall = [(starts[pid] + e[0] - launch,) + e[1:] for e in ev]
+        if any(e[1] == "cmd" and e[2] == "answer Update" for e in wall):
+            old = (pid, wall)
+        elif any(e[1] == "ev" and e[2] == "windowDrawn" for e in wall):
+            new = (starts[pid], wall)
+    if old is None or new is None:
+        return out
+
+    def first(ev, kind, name, after=None, before=None):
+        return next((e[0] for e in ev if e[1] == kind and e[2] == name
+                     and (after is None or e[0] >= after) and (before is None or e[0] <= before)), None)
+
+    pid, ev = old
+    ans = first(ev, "cmd", "answer Update")
+    drawn = first(new[1], "ev", "windowDrawn")
+    if drawn is not None and drawn > ans:
+        out["P14"] = [ms(drawn - ans)]
+    quit_ = first(ev, "ev", "willTerminate", after=ans)
+    status = [e[0] for e in ev if e[1] == "field" and e[2].startswith("c.status:") and e[0] >= ans
+              and (quit_ is None or e[0] <= quit_)]
+    stamps = {}
+    p = os.path.join(rundir, "afterexit.txt")
+    if os.path.isfile(p):
+        for line in open(p, encoding="utf-8"):
+            f = line.split()
+            m = re.fullmatch(r"afterexit-(\d+)-(start|work)", f[0]) if len(f) == 2 else None
+            if m and m.group(1) == pid and stamp_ns(f[1]) is not None:
+                stamps[m.group(2)] = stamp_ns(f[1])
+    end = first(ev, "tp", "exit.end", after=quit_) if quit_ is not None else None
+    begin = first(ev, "tp", "exit.begin", after=quit_) if quit_ is not None else None
+    steps = [
+        ("P14.status", ans, status[0] if status else None),
+        ("P14.download", status[0] if status else None, status[-1] if status else None),
+        ("P14.quit", status[-1] if status else None, quit_),
+        ("P14.relaunch", quit_, new[0]),
+        ("P14.launch", new[0], drawn),
+        ("P14.shutdown", quit_, end),
+        ("P14.exit", begin, end),
+        ("P14.wait", end, stamps.get("work")),
+        ("P14.script", stamps.get("work"), new[0]),
+        ("P14.armed", stamps.get("start"), end),
+    ]
+    for name, a, b in steps:
+        if a is not None and b is not None and b >= a:
+            out[name] = [ms(b - a)]
+    return out
 
 
 def top_cpu(path):
@@ -387,9 +452,8 @@ def samples(rundir):
     for p in sorted(glob.glob(os.path.join(rundir, "perf-*.tsv"))):
         for k, v in samples_perf(p, p6_rows, rundir).items():
             s.setdefault(k, []).extend(v)
-    v = p14(rundir)
-    if v:
-        s["P14"] = v
+    for k, v in p14(rundir).items():
+        s[k] = v
     for label in ("idle", "after7"):
         p = os.path.join(rundir, f"footprint-{label}.txt")
         v = footprint_mb(p) if os.path.isfile(p) else None
@@ -570,6 +634,8 @@ def write_tsv(path, lines):
 
 
 def cmd_compare(root, a, b, tsv, zips, p15):
+    if tsv and os.path.lexists(tsv):
+        os.remove(tsv)          # a compare that stops early never leaves an earlier table behind
     rows, plan = thresholds()
     sess = session(root)
     ua, ha = launches(root, a, sess)

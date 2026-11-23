@@ -4,7 +4,7 @@
 
 # the served bootstrap.ps1 has -Restore, or the step SKIPs (a TEST build from before it)
 function Assert-RestoreServed {
-    $b = [IO.File]::ReadAllText((Need 'dist-test/bootstrap.ps1' 'the TEST build'))
+    $b = Read-ServedText 'bootstrap.ps1'   # (rblib: the run's served folder, as served)
     if ($b -notmatch 'RBSTEMSPLUS_RESTORE') { Skip "the served bootstrap.ps1 has no -Restore (RBSTEMSPLUS_RESTORE): a TEST build from before release.md T8's -Restore" }
 }
 # -Restore through the real one-liner in a child powershell.exe (ConstrainedLanguage with

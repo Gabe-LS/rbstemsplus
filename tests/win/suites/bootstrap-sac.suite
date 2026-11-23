@@ -1,0 +1,22 @@
+# BS1 under Smart App Control On (release.md section 8, by-hand.md's Bootstrap, plan row 47): the
+# one-liner in ConstrainedLanguage and the plain install against the served TEST build, from the
+# "SAC On" snapshot (sac.suite), every user step through user-signed (Windows' own conhost.exe
+# --headless: SAC blocks our unsigned hidden.exe). Both must give the SAC line (cl: it or the
+# language line) and install nothing. install-high pins SAC before the elevated refusal. Restore
+# uses a preinstalled saved-copy fixture from rekordbox 7.2.19, without starting rekordbox or RB
+# Stems Plus. For the complete round, make "SAC On + rekordbox 7.2.19" using sac.suite --keep
+# from "rekordbox 7.2.19 installed", then snapshot it. The clean "SAC On" snapshot skips Restore.
+# The steps use sac/lib.ps1 so that the user steps work in ConstrainedLanguage.
+#   tests/win/vm-run.sh stage
+#   tests/win/vm-run.sh run "SAC On + rekordbox 7.2.19" bootstrap-sac
+# Not a release.list row.
+include sac/lib.ps1
+need http
+need file repo/scripts/bootstrap.ps1
+# MODE       SECS NAME          SCRIPT
+sys          120  sac-check     sac/check.ps1
+user-signed  180  cl-refusal    sac/oneliner.ps1
+user-signed  600  install       sac/oneliner.ps1
+user-signed-high 180 install-high    sac/oneliner.ps1
+sys              120 restore-fixture sac/restore-fixture.ps1
+user-signed-high 300 restore         sac/restore.ps1

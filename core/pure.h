@@ -182,6 +182,9 @@ typedef struct {
     int32_t has_paused_floor; int64_t paused_floor;
     const char *location;                      /* the location light's text, NULL when fine */
     const char *drive;                         /* the chosen drive's name, NULL on this Mac */
+#ifdef CORE_WIN_POLICY
+    int64_t win_r1;                            /* Windows: FACT_R1_STATE (R1_*), 0 nothing to put back */
+#endif
 } cache_light_in;
 int32_t light_cache(tbuf *tip, const cache_light_in *in);   /* cacheLight */
 
@@ -242,6 +245,9 @@ typedef struct {
     int32_t cache_traces, rekordbox_installed, user_is_admin;
     int32_t own_bundle, cache_is_link, watcher_off;
     const char *location_notice, *model_notice, *notice;   /* NULL: none */
+#ifdef CORE_WIN_POLICY
+    const char *win_cache_problem;   /* version-specific status line when available */
+#endif
 } gate_in;
 typedef struct {
     int32_t install_plus, install_cache, reinstall, reinstall_plus, reinstall_cache, settings;
@@ -356,6 +362,7 @@ typedef struct {
     core_text_id title;
     int32_t nbuttons; core_text_id buttons[3];
     int32_t blocked;                 /* the OK / Don't Ask Again form */
+    const char *reinstall;           /* the features offered by Reinstall Now */
 } watcher_dialog;
 void watcher_dialog_build(tbuf *message, watcher_dialog *d, int32_t model_off, int32_t cache_off, const char *engine,
                           const char *rekordbox_short, int32_t engine_ok, int32_t rekordbox_ok, int32_t plus_works);
@@ -379,6 +386,9 @@ void w_install_note(tbuf *b, int32_t plus, int32_t cache, int32_t reinstall, int
 void w_uninstall_note(tbuf *b, int32_t cache);                       /* uninstallNote */
 /* uninstallEverythingMessage: stems the size text (" (1.2 GB)" or ""), drive NULL on this Mac */
 void w_uninstall_all_message(tbuf *b, int32_t others_cache, int32_t no_saved_model, const char *stems, const char *drive, int32_t drive_connected);
+#ifdef CORE_WIN_POLICY
+void w_win_uninstall_all_unmeasured(tbuf *b, int32_t others_cache, int32_t no_saved_model, const char *drive, const char *dir);
+#endif
 enum { FATE_DELETED = 0, FATE_OTHER_ACCOUNT = 1, FATE_CANT_DELETE = 2 };     /* AppFate */
 void w_own_files_removed(tbuf *b, const char *about, int32_t fate, int32_t others_cache, int32_t cache_link, const char *const *left, int32_t nleft);
 void w_location_removal_note(tbuf *b, const char *drive, int32_t connected, const char *size);   /* locationRemovalNote */
@@ -400,8 +410,31 @@ enum { ROOT_NO_ORIGINALS = 3, ROOT_CHECK_FAILED = 4, ROOT_REKORDBOX_OPEN = 5, RO
 #ifdef CORE_WIN_POLICY
 /* Windows (W-core): the worker's appended exit codes (app.md §5.5) and UAC declined */
 enum { ROOT_WIN_PROTOCOL = 12, ROOT_WIN_RUN_AGAIN = 13, ROOT_WIN_OLDER = 14, ROOT_WIN_USER_STOPPED = 1223 };
+/* multi-version rekordbox (mv-spec §2.2): the worker's fresh scope differs from the app's (nothing
+ * changed), and some targets done while one failed */
+enum { ROOT_WIN_SCOPE_CHANGED = 15, ROOT_WIN_PARTIAL = 16 };
+/* an Install refused before any rekordbox folder changed whose undo couldn't restore everything
+ * (worker exit 17): never "nothing changed" */
+enum { ROOT_WIN_UNDO_INCOMPLETE = 17 };
+/* FACT_WIN_RB_ROWS' state and why codes: win/c/inventory.h's INV_ROW_* and WHY_*, the same values */
+enum { WIN_ROW_ON = 0, WIN_ROW_READY = 1, WIN_ROW_UNSUPPORTED = 2, WIN_ROW_REPAIR = 3, WIN_ROW_UNVERIFIED = 4 };
+enum { WIN_WHY_NONE = 0, WIN_WHY_RB_UNLISTED = 1, WIN_WHY_BUILD_UNLISTED = 2, WIN_WHY_ORT_UNLISTED = 3, WIN_WHY_ORT_NOT_ORIGINAL = 4,
+       WIN_WHY_R1_MISSING = 5, WIN_WHY_R1_FOREIGN = 6, WIN_WHY_R1_ORT_MISSING = 7, WIN_WHY_DELISTED_BRIDGE = 8, WIN_WHY_NOT_VERIFIED = 9,
+       WIN_WHY_NO_ANSWER = 10, WIN_WHY_NOT_RECORDED = 11 };
 /* R1's state (FACT_R1_STATE) and its line for the status line and the light's tip: nothing for 0 */
 enum { R1_OK = 0, R1_LIVE_MISSING = 1, R1_LIVE_FOREIGN = 2, R1_ORT_MISSING = 3 };
+enum { WIN_ROWS_MAX = 32, WIN_VERSION_CAP = 64 };
+typedef struct {
+    char version[WIN_VERSION_CAP], display_version[WIN_VERSION_CAP];
+    int state, why, running, r1, r1_dismissed;
+} win_row;
+int win_version_ok(const char *s, size_t n);
+int win_rows_parse(const char *s, size_t len, win_row *out, int max);
+void w_win_version_list(tbuf *b, const char *const *versions, int n);
+void w_win_row_text(tbuf *b, const win_row *r, int full_build);
+void w_win_row_reason(tbuf *b, const win_row *r);
+void w_win_cache_summary(tbuf *b, int on, int total);
+void w_win_batch_why(tbuf *b, int code, const char *programs);
 void w_r1_line(tbuf *b, int64_t state);
 /* the Windows in-front policy (win.c, mac-core §3.6): front_facts' bits, modal_open, the tab asked
  * about (core_tab), held: the held click's check. 1 in front */

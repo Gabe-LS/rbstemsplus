@@ -17,9 +17,25 @@ function Read-WorkerFacts {
     if (-not (Test-Path -LiteralPath $WorkerFacts)) { return $null }
     return (Get-Content -Raw -LiteralPath $WorkerFacts | ConvertFrom-Json)
 }
-# the served TEST build's payload.json (dist-test/, the same file vm-run.sh serves and records)
+# a file of the run's served folder as the run's server sends it (vm-run.sh --serve: dist-test/
+# by default, or another folder of the share), as text
+function Read-ServedText([string]$name) {
+    $w = New-Object Net.WebClient
+    try { return [Text.Encoding]::UTF8.GetString($w.DownloadData($VmRun.Url + $name)) }
+    catch { throw "the served $name ($($VmRun.Url)$name) couldn't be read: $($_.Exception.Message)" }
+    finally { $w.Dispose() }
+}
+# a file of the run's served folder saved to dest, as the run's server sends it
+function Save-ServedFile([string]$name, [string]$dest) {
+    $w = New-Object Net.WebClient
+    try { $w.DownloadFile($VmRun.Url + $name, $dest) }
+    catch { throw "the served $name ($($VmRun.Url)$name) couldn't be saved to ${dest}: $($_.Exception.Message)" }
+    finally { $w.Dispose() }
+}
+# the served TEST build's payload.json (the file vm-run.sh serves and records), never dist-test/'s
+# when the run serves another folder
 function Read-TestPayload {
-    return ([IO.File]::ReadAllText((Need 'dist-test/payload.json' 'the TEST build')) | ConvertFrom-Json)
+    return (Read-ServedText 'payload.json' | ConvertFrom-Json)
 }
 # bridge.log's text after byte offset from ('' when there is none), opened as its readers must
 # (share read, write and delete: bridge.md, the fsync/rename row)

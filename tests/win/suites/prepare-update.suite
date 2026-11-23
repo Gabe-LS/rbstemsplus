@@ -1,0 +1,21 @@
+# W13b: Stop and Update during a paused real Prepare. Use update.suite's a and new
+# releases, both Prepare-enabled. The reverted snapshot needs closed rekordbox,
+# Stems Cache and its model, and a long, unprepared RBSP Update playlist. The two
+# TEST versions must support the fixture's rekordbox and the app's paused update path.
+# As in update.suite, SYSTEM owns the temporary dist-test/current selector.
+include lib/vmlib.ps1
+include worker/rblib.ps1
+include uninstall/cases/unlib.ps1
+include shell-ui/shelllib.ps1
+include prepare/app-lib.ps1
+need http
+need vm
+need file repo/core/texts.def
+need file vm/uia/rbui/rbui.exe
+need fixture dist-test/a/payload.json
+need candidate dist-test/new/payload.json
+sys 120 switch-a update/switch.ps1
+user 600 install shell-ui/install.ps1
+sys 120 switch-new update/switch.ps1
+user 500 paused-update prepare/run-controls.ps1
+sys 120 switch-clean update/switch.ps1

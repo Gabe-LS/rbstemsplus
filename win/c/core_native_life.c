@@ -10,6 +10,9 @@
 #include <errno.h>
 #include <stddef.h>
 
+_Static_assert(CORE_WIN_TOKEN_OK == LIFE_TOKEN_OK && CORE_WIN_TOKEN_ELEVATED == LIFE_TOKEN_ELEVATED && CORE_WIN_TOKEN_UAC_OFF == LIFE_TOKEN_UAC_OFF
+                   && CORE_WIN_TOKEN_SERVICE == LIFE_TOKEN_SERVICE && CORE_WIN_TOKEN_UNKNOWN == LIFE_TOKEN_UNKNOWN,
+               "core_win.h's token answers are lifecycle.h's");
 _Static_assert(CORE_WIN_ONE_HELD == LIFE_ONE_HELD && CORE_WIN_ONE_HANDED == LIFE_ONE_HANDED && CORE_WIN_ONE_BUSY == LIFE_ONE_BUSY
                    && CORE_WIN_ONE_FAILED == LIFE_ONE_FAILED,
                "core_win.h's one-copy answers are lifecycle.h's");
@@ -37,6 +40,9 @@ CORE_API void CORE_CALL core_win_one_close(core_win_one *one) {
 }
 
 CORE_API int64_t CORE_CALL core_win_process_start(uint32_t pid) { return life_process_start(pid); }
+
+/* the shell's start refusal (app.md §5.9, I35): life_token_check, LIFE_TOKEN_* */
+CORE_API int32_t CORE_CALL core_win_token_check(void) { return life_token_check(); }
 
 CORE_API int32_t CORE_CALL core_win_critical_running(void) { return critical_running(critical_process()); }
 

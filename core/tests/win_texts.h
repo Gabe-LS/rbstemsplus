@@ -4,4 +4,6 @@
 void win_texts_tests(int *passed, int *failed);
 /* the Windows in-front policy (win_front.c) */
 void win_front_tests(int *passed, int *failed);
+/* menus.def's Windows rows (win_menus.c) */
+void win_menus_tests(int *passed, int *failed);
 #endif

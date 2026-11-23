@@ -92,6 +92,21 @@ namespace RbStemsPlus.Shell
                 for (int i = 0; i < n; i++) if (pins[i].IsAllocated) pins[i].Free();
             }
         }
+
+        /// A menu title's words outside the menu (a button, a window title, an automation name):
+        /// its access key's "_" dropped as WPF's AccessText reads it ("__" is one "_").
+        public static string Plain(CoreText id) => StripAccessKey(Get(id));
+
+        public static string StripAccessKey(string s)
+        {
+            var b = new StringBuilder(s.Length);
+            for (int i = 0; i < s.Length; i++)
+            {
+                if (s[i] == '_' && i + 1 < s.Length) i++;
+                b.Append(s[i]);
+            }
+            return b.ToString();
+        }
     }
 
     /// JSON for the low-rate events (core_event): the shell writes it, never reads it (app.md §4.1).
@@ -123,6 +138,8 @@ namespace RbStemsPlus.Shell
         public static string Num(ulong n) => n.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
         public static string Click(string id) => "{\"ev\":\"click\",\"id\":" + Quote(id) + "}";
+        /// R1's Don't Ask Again: the versions its button showed when clicked (ManageModel.R1DismissVersions)
+        public static string R1Dismiss(string versions) => "{\"ev\":\"r1_dismiss\",\"versions\":" + Quote(versions ?? "") + "}";
         public static string Menu(string id) => "{\"ev\":\"menu\",\"id\":" + Quote(id) + "}";
         public static string Tab(int tab) => "{\"ev\":\"tab\",\"tab\":" + Num(tab) + "}";
     }

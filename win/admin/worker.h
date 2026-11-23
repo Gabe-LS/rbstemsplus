@@ -12,22 +12,40 @@
  *   lock                      the lock (an exclusive handle, never a Global\ mutex)
  *   payload-version           the floor (payload_store.c's record); payload.json(.sig): the pair
  *                             that raised it
- *   installed-bridge          the sha256 of the bridge the last install put in (one line)
+ *   receipts\<v>              one per installation holding our bridge (receipt.h): the folder's name
+ *                             and identity, rekordbox.exe's, the bridge's, the original's and the
+ *                             runtime's sha256; deleted before a swap, written after its checks
  *   pioneer\<v>\              Pioneer's onnxruntime.dll of rekordbox <v>, SHA256SUMS last
- *   ort\onnxruntime.dll       Pioneer's ORT, which the bridge loads
+ *   ort\onnxruntime.dll       Pioneer's ORT, which every bridge loads: one copy, kept while it is a
+ *                             bound original's bytes (mv-spec §2.3)
  *   bin\<sha12>\RB Stems Plus.exe   the installed workers (I78)
- *   stage.<hex>\              a run's staging folder (removed at its end; leftovers by the next run)
- * and in rekordbox's version folder (<Program Files>\rekordbox\rekordbox X.Y.Z\):
+ *   stage.<hex>\              a run's staging folder, with an Install's copies of the root files it
+ *                             replaces until its first target changes (undo.<n>: a refused run
+ *                             puts them back); removed at its end, leftovers by a later run (an
+ *                             Install's once a target changed)
+ * and in each rekordbox version folder (<Program Files>\rekordbox\rekordbox X.Y.Z\):
  *   onnxruntime.dll           Pioneer's, or the bridge
  *   onnxruntime.dll.rbsp-new  the one temp name of every swap and put-back (bridge.md §2, I36)
  *   onnxruntime.dll.rbsp-probe  the write probe (removed at once)
  *
+ * Multi-version rekordbox (.orchestration/mv-spec.md §2.2, decisions D1, D4-D7, D13): Stems Cache
+ * is one machine-wide installation over every verified, supported rekordbox folder. The worker
+ * reads the inventory again (inventory.c, the app's walk) under the lock, assesses each folder
+ * through a held handle and computes the scope with the app's rule (inv_targets): a scope other
+ * than --targets is 15, nothing changed. Install and Reinstall run each target in version order
+ * (a failure rolls that one back; the ones before it stay installed: 16); Uninstall and Restore
+ * take each folder by itself. A saved set goes back into a folder only when its receipt binds it
+ * or the signed binding vouches for it, never on X.Y.Z alone; a bridge with no receipt is never
+ * "done" and never adopted (D13: Put Back Pioneer's File repairs it).
+ *
  * Order of every run (the Mac's, Scripts.swift): the root (created with its protected DACL, or
  * an existing one exactly so), the lock (ADMIN_EXIT_ALREADY_RUNNING), leftovers, Pioneer's
- * installer or updater (8) and rekordbox open, with the linger allowed (5), rekordbox's folder
- * (9 missing; 10 not Pioneer's or not admin-only), the version agreement (4), then the verb. The
- * classification comes before anything is touched; after the swap, any failure is a rollback
- * through the one put-back routine (6, 4 or 11). */
+ * installer or updater (8) and rekordbox open in any session, with the linger allowed (5: the
+ * system-wide gate, D6), the payload and --manifest (install), the inventory and each folder's
+ * checks (9 none; 10 not Pioneer's or not admin-only; 4), then the verb. The classification comes
+ * before anything is touched; the system-wide gate (8, 5) is asked again before the shared writes
+ * and before each folder's change; after a swap, any failure is a rollback through the one
+ * put-back routine (6, 4 or 11). */
 #ifndef RBSP_WIN_ADMIN_WORKER_H
 #define RBSP_WIN_ADMIN_WORKER_H
 
@@ -53,9 +71,11 @@ typedef struct admin_os {
     /* The root folder at the absolute path: created when missing (create) with an explicit
      * protected DACL (SYSTEM and Administrators full, Users read and execute, inherited by what
      * is made in it) and owner Administrators; an existing one must have exactly that owner and
-     * DACL. Held for the run as hold_dir holds. 0 with *out; ENOENT (missing, create 0); EACCES
-     * (an existing one isn't exactly that); ELOOP (a reparse point); another errno. */
-    int (*root_open)(void *ctx, const char *path, int create, plat_dir *out);
+     * DACL. Held for the run as hold_dir holds. *made: whether this call made it (one another run
+     * made meanwhile is opened, never counted as made: re-review blocker A). 0 with *out; ENOENT
+     * (missing, create 0); EACCES (an existing one isn't exactly that); ELOOP (a reparse point);
+     * another errno. */
+    int (*root_open)(void *ctx, const char *path, int create, plat_dir *out, int *made);
     /* Opens folder `name` in parent (parent not open: name is an absolute path) without following
      * a reparse point, held (READ_CONTROL | FILE_LIST_DIRECTORY | SYNCHRONIZE, share READ|WRITE,
      * never DELETE: it can't be renamed or removed while held), and checks its descriptor on that
@@ -71,9 +91,9 @@ typedef struct admin_os {
     int (*rmdir_at)(void *ctx, plat_dir d, const char *name);
     /* Renames from to `to` in d without replacing: EEXIST when something has that name */
     int (*rename_noreplace)(void *ctx, plat_dir d, const char *from, const char *to);
-    /* The lock: an exclusive handle (share 0) on `lock` in root, made when missing. 0 with *token;
-     * EBUSY when another run holds it; another errno. */
-    int (*lock)(void *ctx, plat_dir root, void **token);
+    /* The lock: an exclusive handle (share 0) on `lock` in root, made when missing (*made: by this
+     * call). 0 with *token; EBUSY when another run holds it; another errno. */
+    int (*lock)(void *ctx, plat_dir root, void **token, int *made);
     void (*unlock)(void *ctx, void *token);
     /* Whether `name` in d is mapped (opened for FILE_WRITE_DATA sharing READ|WRITE|DELETE: a
      * sharing violation means mapped): 1, 0, or -1 when it couldn't be told */
@@ -101,6 +121,13 @@ typedef struct admin_os {
     uint64_t (*now_ms)(void *ctx);
     /* n random lowercase hex digits and a NUL into out (n + 1 bytes) */
     void (*random_hex)(void *ctx, char *out, size_t n);
+    /* Holds the file `name` in d against writes, renames and removal until release_file: opened
+     * for reading, never following a reparse point, sharing READ only (another open for writing
+     * or deleting it fails, so it can't be written, replaced or removed while held). 0 with
+     * *token; ENOENT; ELOOP (a reparse point); EBUSY (another handle writes or may delete it);
+     * another errno. */
+    int (*hold_file)(void *ctx, plat_dir d, const char *name, void **token);
+    void (*release_file)(void *ctx, void *token);
 } admin_os;
 
 /* Where things are and what is trusted. main.c passes the places under Windows' own Program
@@ -119,6 +146,23 @@ typedef struct {
 /* One run: the verb in a (parsed, protocol checked), its exit code (admin_proto.h). Lines go to
  * os->say as it goes. */
 int admin_run(const admin_env *e, const admin_os *os, const admin_args *a);
+
+#ifdef ADMIN_TEST_HOLD
+/* Test builds only (win/admin/build.sh --test-key; a release build has neither the call nor the
+ * function): admin_run calls it once its work has begun changing files, at the one point of a
+ * verb where a run cut off leaves rekordbox mid-change (where: what is done and what isn't yet):
+ *   install    the bridge swapped into a version folder, not yet verified (its receipt deleted, none
+ *              written yet); with several targets, also each target done (its receipt written)
+ *              before the next one's swap
+ *   uninstall  Pioneer's file put back into rekordbox, our folder not yet removed
+ * Other verbs, and runs that change nothing there (already in place, nothing to put back), never
+ * call it. main.c's holds the worker RBSP_TEST_WORKER_MIDHOLD seconds there (the VM's sign-out
+ * cases WC3 and WC10: the session's end lands mid-work); the tests' fake records the call. */
+/* version is set only for a swap. Setting RBSP_TEST_WORKER_MIDHOLD_TARGET selects that swap. */
+void admin_test_mid_hold(const admin_os *os, const char *where, const char *version);
+/* Fail a selected target in the existing load-check and rollback path. */
+int admin_test_fail_target(const admin_os *os, const char *version);
+#endif
 
 /* -- the pure rules (worker.c), exported for the tests */
 

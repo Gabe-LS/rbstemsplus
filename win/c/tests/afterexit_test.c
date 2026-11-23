@@ -4,6 +4,7 @@
 #include "check.h"
 
 #include "../afterexit.h"
+#include "../update.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -11,6 +12,74 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <wchar.h>
+
+/* Win32 stand-ins for the kept-dialog policy. Compile the same calls the after-exit copy uses. */
+typedef void *HWND;
+typedef unsigned long DWORD;
+enum { WS_EX_TOPMOST = 0x8, WS_EX_TOOLWINDOW = 0x80, MB_OK = 0, MB_ICONWARNING = 0x30,
+       MB_SETFOREGROUND = 0x10000, MB_TOPMOST = 0x40000 };
+#define WS_POPUP 0x80000000UL
+static struct {
+    int no_owner, result, created, shown, destroyed;
+    DWORD owner_ex, owner_style, box_style, last_error;
+    HWND box_owner, destroyed_owner;
+} dialog;
+
+static HWND CreateWindowExW(DWORD ex, const wchar_t *class_name, const wchar_t *title, DWORD style,
+                           int x, int y, int width, int height, HWND parent, void *menu, void *instance, void *param) {
+    (void)class_name; (void)title; (void)x; (void)y; (void)width; (void)height;
+    (void)parent; (void)menu; (void)instance; (void)param;
+    dialog.created++;
+    dialog.owner_ex = ex;
+    dialog.owner_style = style;
+    return dialog.no_owner ? NULL : &dialog;
+}
+
+static int MessageBoxW(HWND owner, const wchar_t *message, const wchar_t *title, unsigned style) {
+    (void)message; (void)title;
+    dialog.shown++;
+    dialog.box_owner = owner;
+    dialog.box_style = style;
+    if (!dialog.created || dialog.destroyed) dialog.box_owner = NULL;
+    dialog.last_error = 42;
+    return dialog.result;
+}
+
+static DWORD GetLastError(void) { return dialog.last_error; }
+
+static int DestroyWindow(HWND owner) {
+    dialog.destroyed++;
+    dialog.destroyed_owner = owner;
+    dialog.last_error = 99;
+    return 1;
+}
+
+#include "../afterexit_dialog_win.h"
+
+static void kept_message_box(void) {
+    DWORD error = 0;
+    dialog.result = 1;
+    int result = ax_win_kept_message_box(L"kept", L"app", &error);
+    CHECK(result == 1 && dialog.created == 1 && dialog.shown == 1 && dialog.owner_style == WS_POPUP
+              && dialog.owner_ex == (WS_EX_TOPMOST | WS_EX_TOOLWINDOW) && dialog.box_owner == &dialog
+              && dialog.box_style == (MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST)
+              && dialog.destroyed == 1 && dialog.destroyed_owner == &dialog,
+          "the kept message box uses a hidden topmost owner until it closes");
+
+    memset(&dialog, 0, sizeof dialog);
+    result = ax_win_kept_message_box(L"kept", L"app", &error);
+    CHECK(result == 0 && dialog.destroyed == 1 && error == 42,
+          "a failed kept message box releases its owner and preserves the message box error");
+
+    memset(&dialog, 0, sizeof dialog);
+    dialog.result = 1;
+    dialog.no_owner = 1;
+    result = ax_win_kept_message_box(L"kept", L"app", &error);
+    CHECK(result == 1 && dialog.created == 1 && dialog.shown == 1 && !dialog.box_owner && !dialog.destroyed
+              && dialog.box_style == (MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST),
+          "if owner creation fails, still show the warning with MB_TOPMOST");
+}
 
 static void cmdline_and_parse(void) {
     char o[512];
@@ -153,8 +222,19 @@ static void cmd_lines(void) {
 
 /* ------------------------------------------------------------------ ax_run on a fake OS */
 
+/* a listed process as update_win.c's running_under sees it (review K2): opened or refused (err),
+ * its image path (NULL: unreadable) and its snapshot name's kind */
+typedef struct {
+    int opened;
+    unsigned long err;
+    const char *image;
+    int kind;
+} listed;
+
 typedef struct {
     char calls[4096];
+    const listed *procs;    /* running_under scans these, by update_win.c's rules, when given */
+    int nprocs;
     int not_self;           /* self_ok answers 0 */
     const char *home;       /* home's answer (run: the local given when NULL); "-" none */
     int parent_exits;       /* wait_parent: 0 exited */
@@ -162,6 +242,9 @@ typedef struct {
     uint64_t running_until; /* ms */
     int remove_rc, run_rc, records_left, clean_rc;
     int logon_rc;           /* clean_at_logon's answer: 1 registered when 0 */
+    int dialog_scan_unknown;
+    int locked;             /* the install lock: 1 a reinstall holds it, -1 it can't be made (lock's answer: 0, -1) */
+    int with_lock;          /* run passes the lock ops */
     uint64_t now;
     char usage[1200];       /* our CLR_v4.0 UsageLogs entry: remove notes whether it is still there */
     char lines[8192];
@@ -197,17 +280,48 @@ static int f_wait(void *ctx, uint64_t parent, uint32_t ms) {
     add(f, b);
     return f->parent_exits;
 }
+/* image is a watcher directly in dir, as update_win.c's watcher_in */
+static int watcher_directly_in(const char *image, const char *dir) {
+    size_t n = strlen(dir);
+    while (n && dir[n - 1] == '/') n--;
+    return ax_under(image, dir) && !strchr(image + n + 1, '/') && !strncmp(image + n + 1, "rbsp-watch", 10);
+}
 static int f_stop(void *ctx, const char *dir) {
     fake *f = ctx;
     char b[300];
     snprintf(b, sizeof b, "stop %.250s", base_of(dir));
     add(f, b);
+    if (f->procs) {
+        /* update_win.c's stop_watchers on the listed processes (review K2's undefined4): one opened
+         * is stopped; one refused whose path is a watcher in dir (this account's in another logon
+         * session) is left running and reported, as one unknown by its name */
+        int stopped = 0, left = 0, unknown = 0;
+        for (int i = 0; i < f->nprocs; i++) {
+            const listed *p = &f->procs[i];
+            int v = update_listed_verdict(p->opened, p->err, p->image ? 1 : -1, p->image && watcher_directly_in(p->image, dir), p->kind, 1);
+            if (v == UPDATE_LISTED_FOUND) {
+                if (p->opened) stopped = 1;
+                else left = 1;
+            }
+            unknown |= v == UPDATE_LISTED_UNKNOWN;
+        }
+        return update_stop_result(!unknown, stopped, left);
+    }
     return !strcmp(base_of(dir), "1.6.0");
 }
 static int f_running(void *ctx, const char *dir) {
     fake *f = ctx;
-    (void)dir;
     if (!strstr(f->calls, "running;")) add(f, "running");
+    if (f->procs) {
+        int found = 0, unknown = 0;
+        for (int i = 0; i < f->nprocs; i++) {
+            const listed *p = &f->procs[i];
+            int v = update_listed_verdict(p->opened, p->err, p->image ? 1 : -1, p->image && ax_under(p->image, dir), p->kind, 0);
+            found |= v == UPDATE_LISTED_FOUND;
+            unknown |= v == UPDATE_LISTED_UNKNOWN;
+        }
+        return update_scan_result(found, unknown, 1);
+    }
     return f->now < f->running_until ? f->running : 0;
 }
 static int f_remove(void *ctx, const char *path) {
@@ -283,7 +397,17 @@ static void tree(const char *local) {
     (void)symlink(target, p);
 }
 
-static void f_kept(void *ctx) { add(ctx, "kept dialog"); }
+static void f_kept(void *ctx, int scan_unknown) {
+    fake *f = ctx;
+    f->dialog_scan_unknown = scan_unknown;
+    add(f, "kept dialog");
+}
+static int f_lock(void *ctx) {
+    fake *f = ctx;
+    add(f, "lock");
+    return f->locked > 0 ? 0 : f->locked < 0 ? -1 : 1;
+}
+static void f_unlock(void *ctx) { add(ctx, "unlock"); }
 static int f_logon(void *ctx) {
     add(ctx, "logon");
     return ((fake *)ctx)->logon_rc ? ((fake *)ctx)->logon_rc : 1;
@@ -300,7 +424,12 @@ static int run(fake *f, const char *local, ax_args *a) {
     if (ax_parse(line, a)) return -1;
     if (!f->home) f->home = local;
     snprintf(f->usage, sizeof f->usage, "%s/Microsoft/CLR_v4.0/UsageLogs/RB Stems Plus.exe.log", local);
-    ax_os os = {f_self, f_home, f_wait, f_stop, f_running, f_remove, f_clean, f_run, f_records, f_now, f_sleep, f_log, f_logon, f_kept, f};
+    ax_os os = {f_self, f_home, f_wait, f_stop, f_running, f_remove, f_clean, f_run, f_records, f_now, f_sleep, f_log, f_logon, f_kept, f, NULL, NULL,
+                "arm64"};
+    if (f->with_lock) {
+        os.lock = f_lock;
+        os.unlock = f_unlock;
+    }
     return ax_run(&os, a);
 }
 
@@ -367,6 +496,7 @@ static void order(const char *scratch) {
     CHECK(kept_shown(&f) == 1 && calls_in_order(&f, 3, "logon;", "kept dialog;", "clean;"),
           "kept for a program still running: the logon cleanup set, then the kept dialog once, before the temp folder's cleanup (owner 2026-11-16): %s",
           f.calls);
+    CHECK(!f.dialog_scan_unknown, "review 7: a confirmed running process gets the running-process dialog");
     CHECK(!strstr(f.lines, "at the next logon"), "the logon cleanup set: nothing said: %s", f.lines);
     /* ... the logon cleanup can't be set: said, the dialog and the cleanup still run */
     memset(&f, 0, sizeof f);
@@ -397,6 +527,7 @@ static void order(const char *scratch) {
           "the list still unreadable (an uninspectable process of ours, review UQ's GPT re-run G2): the folder and the records kept: %s", f.calls);
     CHECK(kept_shown(&f) == 1 && calls_in_order(&f, 3, "logon;", "kept dialog;", "clean;"),
           "kept for a list still unknown: the logon cleanup set, then the kept dialog once: %s", f.calls);
+    CHECK(f.dialog_scan_unknown, "review 7: an inconclusive process scan gets the unknown-cause dialog");
     /* ... until it can be read and nothing runs */
     memset(&f, 0, sizeof f);
     f.running = -1;
@@ -404,22 +535,80 @@ static void order(const char *scratch) {
     r = run(&f, local, &a);
     CHECK(r == AX_DONE && f.now >= 2000 && !exists(f.usage), "the list readable again, nothing running: done");
 
+    /* review K2: a watcher of this account in session 0 (a password-logon task) refuses
+     * OpenProcess with ERROR_ACCESS_DENIED from the user's session, as another account's does;
+     * skipped by the error alone, the uninstall deleted the app. Its path from the system's list
+     * runs from the apps folder: waited on, then the files, the entry and UsageLogs kept, the
+     * kept dialog shown */
+    {
+        char img[1200], theirs[1200];
+        snprintf(img, sizeof img, "%s/Programs/RB Stems Plus/1.5.0/rbsp-watch-arm64.exe", local);
+        snprintf(theirs, sizeof theirs, "%s/../other/Programs/RB Stems Plus/1.5.0/rbsp-watch-arm64.exe", local);
+        listed k2[] = {{1, 0, "/Windows/explorer.exe", UPDATE_IMAGE_OTHER}, {0, UPDATE_ERR_ACCESS_DENIED, img, UPDATE_IMAGE_WATCHER}};
+        tree(local);
+        memset(&f, 0, sizeof f);
+        f.procs = k2;
+        f.nprocs = 2;
+        r = run(&f, local, &a);
+        CHECK(r == AX_LEFT && f.now >= AX_OTHERS_WAIT_MS && exists(f.usage) && !strstr(f.calls, "remove ") && !strstr(f.calls, "records;")
+                  && kept_shown(&f) == 1 && strstr(f.lines, "a program still runs from ") && strstr(f.lines, "the watchers couldn't all be checked")
+                  && strstr(f.calls, "stop 1.5.0;"),
+              "K2: another session's watcher of this account (refused, 5) runs from the apps folder: kept, the kept dialog: %d %s", r, f.calls);
+        /* GH1: another account's own copy (refused, 5, its path in its own LocalAppData) never counts */
+        listed gh1[] = {{0, UPDATE_ERR_ACCESS_DENIED, theirs, UPDATE_IMAGE_WATCHER}, {0, UPDATE_ERR_ACCESS_DENIED, "/Windows/System32/csrss.exe", UPDATE_IMAGE_OTHER}};
+        memset(&f, 0, sizeof f);
+        f.procs = gh1;
+        f.nprocs = 2;
+        r = run(&f, local, &a);
+        CHECK(r == AX_DONE && f.now == 0 && strstr(f.calls, "remove RB Stems Plus;") && kept_shown(&f) == 0,
+              "GH1: another account's copy (refused, its path elsewhere): no wait, deleted: %d %s", r, f.calls);
+        /* fail closed: refused and its path unreadable, with our name: unknown, kept */
+        listed unk[] = {{0, UPDATE_ERR_ACCESS_DENIED, NULL, UPDATE_IMAGE_APP}};
+        tree(local);
+        memset(&f, 0, sizeof f);
+        f.procs = unk;
+        f.nprocs = 1;
+        r = run(&f, local, &a);
+        CHECK(r == AX_LEFT && !strstr(f.calls, "remove ") && !strstr(f.calls, "records;") && kept_shown(&f) == 1
+                  && strstr(f.lines, "still can't be read"),
+              "refused, its path unreadable, our name: unknown, kept: %d %s", r, f.calls);
+        tree(local);
+    }
+
     /* what stays */
     memset(&f, 0, sizeof f);
     f.remove_rc = EBUSY;
     CHECK(run(&f, local, &a) == AX_LEFT && kept_shown(&f) == 0, "a held file: left, no kept dialog (nothing ran): %s", f.calls);
-    /* review GH6: a partial delete that leaves the app able to start (the stub, current and
-     * current's exe there) keeps the Apps & features entry and the other records; one that broke
-     * it removes them */
+    /* GH6 and UF6: keep the records if the app still starts and can launch the uninstaller. */
     snprintf(p, sizeof p, "%s/Programs/RB Stems Plus/RB Stems Plus.exe", local);
     snprintf(q, sizeof q, "%s/Programs/RB Stems Plus/1.6.0/RB Stems Plus.exe", local);
     put(p, "stub");
     put(q, "app");
+    char stub[1200], dll[1200], part[1200];
+    snprintf(part, sizeof part, "%s/Programs/RB Stems Plus/1.6.0/stub", local);
+    mkdir(part, 0755);
+    snprintf(part, sizeof part, "%s/Programs/RB Stems Plus/1.6.0/stub/arm64", local);
+    mkdir(part, 0755);
+    snprintf(part, sizeof part, "%s/Programs/RB Stems Plus/1.6.0/arm64", local);
+    mkdir(part, 0755);
+    snprintf(stub, sizeof stub, "%s/Programs/RB Stems Plus/1.6.0/stub/arm64/" AX_EXE, local);
+    snprintf(dll, sizeof dll, "%s/Programs/RB Stems Plus/1.6.0/arm64/" AX_DLL, local);
+    put(stub, "after-exit stub");
+    put(dll, "after-exit DLL");
     memset(&f, 0, sizeof f);
     f.remove_rc = EBUSY;
     CHECK(run(&f, local, &a) == AX_LEFT && strstr(f.calls, "remove RB Stems Plus;") && !strstr(f.calls, "records;") &&
               strstr(f.lines, "the Apps & features entry kept") && kept_shown(&f) == 0 && !strstr(f.calls, "logon;"),
           "partial delete, the app still starts: the records kept, no kept dialog: %s", f.calls);
+    const char *launch_files[] = {stub, dll};
+    for (size_t i = 0; i < sizeof launch_files / sizeof launch_files[0]; i++) {
+        CHECK(unlink(launch_files[i]) == 0, "UF6: remove the %s fixture", base_of(launch_files[i]));
+        memset(&f, 0, sizeof f);
+        f.remove_rc = EBUSY;
+        CHECK(run(&f, local, &a) == AX_LEFT && strstr(f.calls, "records;") && !strstr(f.lines, "entry kept"),
+              "UF6: missing %s with startup files intact: the records go: %s", base_of(launch_files[i]), f.calls);
+        put(launch_files[i], "after-exit file");
+    }
     unlink(q);
     memset(&f, 0, sizeof f);
     f.remove_rc = EBUSY;
@@ -480,7 +669,8 @@ static void order(const char *scratch) {
     /* arguments that don't hang together: nothing asked */
     memset(&f, 0, sizeof f);
     f.home = local;
-    ax_os os = {f_self, f_home, f_wait, f_stop, f_running, f_remove, f_clean, f_run, f_records, f_now, f_sleep, f_log, f_logon, f_kept, &f};
+    ax_os os = {f_self, f_home, f_wait, f_stop, f_running, f_remove, f_clean, f_run, f_records, f_now, f_sleep, f_log, f_logon, f_kept, &f, NULL, NULL,
+                "arm64"};
     ax_args b = a;
     snprintf(b.apps, sizeof b.apps, "%s/Programs/Other", local);
     CHECK(ax_run(&os, &b) == AX_BAD_ARGS && !f.calls[0], "an apps folder that isn't local's: refused, nothing asked");
@@ -578,11 +768,50 @@ static void watchers_unchecked(const char *scratch) {
           "a version folder whose path doesn't fit: not stopped, said: %d %s", r, f.lines);
 }
 
+/* audit b-a2b-F2: the install lock bootstrap.ps1 holds while it reinstalls. Held by it: nothing
+ * deleted, the records kept, AX_LEFT; free: taken before the Run value, released after the
+ * records, as today otherwise */
+static void install_lock(const char *scratch) {
+    char local[1024];
+    snprintf(local, sizeof local, "%s/local-lock", scratch);
+    tree(local);
+    ax_args a;
+    fake f;
+    memset(&f, 0, sizeof f);
+    f.with_lock = 1;
+    f.locked = 1;
+    int r = run(&f, local, &a);
+    CHECK(r == AX_LEFT && !strcmp(f.calls, "self;wait 2c 120000;lock;clean;") && exists(f.usage) && kept_shown(&f) == 0,
+          "a reinstall holds the lock: nothing deleted or removed, AX_LEFT (%d): %s", r, f.calls);
+    CHECK(strstr(f.lines, "a reinstall is under way: nothing deleted") != NULL, "said: %s", f.lines);
+    memset(&f, 0, sizeof f);
+    f.with_lock = 1;
+    f.locked = -1;
+    r = run(&f, local, &a);
+    CHECK(r == AX_LEFT && !strcmp(f.calls, "self;wait 2c 120000;lock;clean;") && exists(f.usage), "the lock can't be made: nothing deleted (%d): %s", r, f.calls);
+    memset(&f, 0, sizeof f);
+    f.with_lock = 1;
+    r = run(&f, local, &a);
+    CHECK(r == AX_DONE && calls_in_order(&f, 7, "wait 2c 120000;", "lock;", "run;", "remove RB Stems Plus;", "records;", "unlock;", "clean;")
+              && !exists(f.usage),
+          "the lock free: taken before the Run value, released after the records (%d): %s", r, f.calls);
+    /* kept for a program still running: released before the kept dialog (a reinstall needn't wait for it) */
+    tree(local);
+    memset(&f, 0, sizeof f);
+    f.with_lock = 1;
+    f.running = 1;
+    f.running_until = UINT64_MAX;
+    r = run(&f, local, &a);
+    CHECK(r == AX_LEFT && calls_in_order(&f, 4, "lock;", "running;", "unlock;", "kept dialog;"), "kept: the lock released before the dialog: %s", f.calls);
+}
+
 void test_afterexit(const char *scratch) {
+    kept_message_box();
     cmdline_and_parse();
     folders();
     cmd_lines();
     order(scratch);
     usage_links(scratch);
     watchers_unchecked(scratch);
+    install_lock(scratch);
 }

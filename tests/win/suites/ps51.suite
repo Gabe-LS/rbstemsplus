@@ -1,0 +1,7 @@
+# The rekordbox test kit's Windows PowerShell 5.1 gate (tests/rekordbox/win/ps51-check.ps1) on the
+# VM's own powershell.exe 5.1 and .NET Framework. tests/rekordbox/win/ps51-gate.sh copies the kit to
+# the share's ps51/ first and runs this suite:
+#   tests/rekordbox/win/ps51-gate.sh ["clean Windows (shut down)"]
+# MODE  SECS NAME  SCRIPT
+need file ps51/ps51-check.ps1
+sys     600  ps51  ps51/check.ps1

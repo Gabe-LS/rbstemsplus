@@ -1,0 +1,28 @@
+# T17/T11: the complete uninstall's account case (by-hand.md's UN8, the session card's G6): a second
+# account B with its own copy running while A uninstalls. From "clean Windows":
+#   tests/win/vm-run.sh stage
+#   tests/win/vm-run.sh run "clean Windows" sessions
+# B (rbB) is a local account made in the run (the VM is reverted after it), its password generated
+# in the VM, never printed, never on a command line, its file SYSTEM-only and deleted once B's task
+# holds it. B's copy is installed by the one-liner and runs (app and watcher) in B's own logon
+# session through a scheduled task (LogonType Password, session 0), not a signed-in desktop: the
+# desktop variant runs in sessions-interactive.suite. A's start sweep, pending update undo and
+# uninstall ignore B's processes (refused to A's token, review GH1). Needs a TEST build as uninstall.suite
+# does; not a release.list row.
+include lib/vmlib.ps1
+include uninstall/cases/unlib.ps1
+include sessions/sslib.ps1
+need http
+need vm
+need file vm/uia/rbui/rbui.exe
+need file repo/core/texts.def
+need file repo/tests/win/suites/lib/vmlib.ps1
+need file repo/tests/win/suites/sessions/as-b.ps1
+need file dist-test/bootstrap.ps1
+# MODE       SECS NAME                 SCRIPT
+user         600  install              bootstrap/install.ps1
+sys          600  account-b            sessions/account-b.ps1
+user         300  a-start              sessions/a-start.ps1
+user         360  a-undo               sessions/a-undo.ps1
+user         600  a-uninstall          sessions/a-uninstall.ps1
+sys          180  b-after              sessions/b-after.ps1

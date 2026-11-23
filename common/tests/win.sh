@@ -73,7 +73,7 @@ for a in x64 arm64; do
   # shellcheck disable=SC2086
   if (cd "$common" && "$cc" $a $WARN -Wno-unused-command-line-argument -DPLAT_NO_BLOCKS -I"$pf" -c plat_win.c -o "$o/plat_win.o" \
       && "$cc" $a $WARN -Wno-unused-command-line-argument -fblocks -I"$pf" -I"$brt" -c plat_win.c -o "$o/plat_win-blocks.o" \
-      && "$cc" $a $WARN -Wno-unused-command-line-argument -DPLAT_TEST_CLOCK -DPLAT_TEST_OWNER -DPLAT_TEST_PROGRAMS -DPLAT_TEST_FLUSH -I"$pf" -c plat_win.c -o "$o/plat_win-test.o") \
+      && "$cc" $a $WARN -Wno-unused-command-line-argument -DPLAT_TEST_CLOCK -DPLAT_TEST_OWNER -DPLAT_TEST_PROGRAMS -DPLAT_TEST_FLUSH -DPLAT_TEST_REMOVE_TREE -I"$pf" -c plat_win.c -o "$o/plat_win-test.o") \
       > "$o/cc.log" 2>&1; then ok "$a: plat_win.c builds three ways with -Werror"
   else cat "$o/cc.log"; bad "$a: plat_win.c"; continue; fi
   "$cc" $a -w -c -I"$pf" "$pf/pocketfft.c" -o "$o/pocketfft.o"
@@ -82,7 +82,7 @@ for a in x64 arm64; do
   "$cc" $a -shared "$o/plat_win.o" "$o/pocketfft.o" $LIBS -Wl,-Map="$o/plat_win.map" -o "$o/plat_win.dll" > "$o/link.log" 2>&1 \
     || { cat "$o/link.log"; bad "$a: link"; continue; }
   # shellcheck disable=SC2086
-  (cd "$common" && "$cc" $a $WARN -Wno-unused-command-line-argument -DPLAT_TEST_CLOCK -DPLAT_TEST_OWNER -DPLAT_TEST_PROGRAMS -DPLAT_TEST_FLUSH -I"$pf" tests/plat_win.c \
+  (cd "$common" && "$cc" $a $WARN -Wno-unused-command-line-argument -DPLAT_TEST_CLOCK -DPLAT_TEST_OWNER -DPLAT_TEST_PROGRAMS -DPLAT_TEST_FLUSH -DPLAT_TEST_REMOVE_TREE -I"$pf" tests/plat_win.c \
     "$o/plat_win-test.o" "$o/pocketfft.o" $LIBS -o "$o/plat-win-test.exe") > "$o/test-cc.log" 2>&1 \
     || { cat "$o/test-cc.log"; bad "$a: plat-win-test.exe"; continue; }
   # T3c's: a chosen location's checks (location.c), the volume calls with GUID and long paths,

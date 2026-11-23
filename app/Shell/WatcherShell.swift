@@ -177,7 +177,7 @@ final class WatcherShell {
             // the app does the reinstall: it reads the request at launch, or on the reopen event
             // macOS sends when it is already open; opened once this process has exited (and so let
             // go of the lock): its reinstall changes what the watcher watches
-            writeReinstallRequest()
+            writeReinstallRequest(features: args.first ?? "reinstall")
             afterExit(poll: "0.2", "/bin/sleep 0.5; /usr/bin/open -a \"$1\"", [app])
             return 0
         case CORE_STEP_WATCH_KEPT:

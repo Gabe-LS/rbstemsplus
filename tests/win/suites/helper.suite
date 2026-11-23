@@ -1,0 +1,26 @@
+# The Windows helper's T13-T15 test exes in the VM (helper.md §5): readable.c (T14), the Stop on
+# stdin and Pause by suspending (T15), CNG's PBKDF2 against LibTomCrypt and the indicative P-H5
+# timings, the track rules on library.c and manifest.c (T13), UNC tracks (the UNC ruling:
+# unc.ps1), and AAC through Media Foundation (T10, Q3: aac.ps1). Each step copies its exe from
+# the share to the user's own temporary folder and runs it there. From the snapshot without
+# rekordbox (nothing here loads it; rbsp-decode-dump.exe gets a player folder that isn't there,
+# which only MP3 needs), after the share holds the exes:
+#   helper/build-win.sh && helper/tests/win-vm-stage.sh
+#   tests/win/vm-run.sh run "clean Windows" helper
+include lib/vmlib.ps1
+include helper/local.ps1
+need file helper/rbsp-win-readable-test.exe
+need file helper/rbsp-win-stop-test.exe
+need file helper/rbsp-win-library-test.exe
+need file helper/rbsp-win-rules-test.exe
+need file helper/rbsp-decode-dump.exe
+need file helper/rbsp-aac-mf-probe.exe
+need file helper/aac/ff-128.m4a
+need file helper/unc/path.txt
+# MODE       SECS NAME        SCRIPT
+user         300  readable    helper/readable.ps1
+user         300  stop        helper/stop.ps1
+user         300  kdf         helper/kdf.ps1
+user         300  rules       helper/rules.ps1
+user         300  unc         helper/unc.ps1
+user         600  aac         helper/aac.ps1

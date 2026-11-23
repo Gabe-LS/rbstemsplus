@@ -12,13 +12,11 @@
 #        pioneer with its contents, and Program Files itself: owner Administrators, SYSTEM or
 #        TrustedInstaller, no reparse point, no other SID's Allow ACE with a write, delete, ACL,
 #        owner, GENERIC_WRITE or GENERIC_ALL right; its header saying what it checks;
-#   WS5: the rekordbox version from the snapshot's name ("rekordbox V logged in"), prep checking
+#   WS5: the rekordbox version from the snapshot's name ("rekordbox V installed"), prep checking
 #        ProductVersion against it, and a rule (check, or the selftest over release.list) that
 #        every rekordbox version DIR/payload.json's windows.compatible.rekordbox newly lists has
 #        its worker row;
-#   VX9: first-run.sh step 9 picking this suite's record as check does (rec_for and the snapshot
-#        match), exactly one, naming this run's run id (the TODO at first-run.sh's GAPS);
-#   and worker:cache-hit taken out of first-run.sh's GAPS.
+# Remove worker:cache-hit from first-run.sh's GAPS when the release gate accepts the PC record (M6).
 $log = Join-Path (Get-Layout).Support 'Logs\bridge.log'
 $entry = (Read-BridgeLog $log 0) -match 'bridge loaded, ENTRY ONLY'
 Skip "no step loads a track in rekordbox yet, so no cache hit is checked$(if ($entry) { ' (and this bridge is entry-only: it caches nothing)' }): by hand (by-hand.md), and this suite's record is never a pass"

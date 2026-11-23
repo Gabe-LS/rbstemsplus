@@ -1,0 +1,16 @@
+# Smart App Control On (by-hand.md's Bootstrap, plan row 46): the snapshot bootstrap-sac.suite runs
+# from. From a snapshot with SAC in Evaluation ("clean Windows"), kept running, then taken by the
+# host (no owner step):
+#   tests/win/vm-run.sh run "clean Windows" sac --keep
+#   tests/win/vm-run.sh snapshot "SAC On"
+# sac-on sets VerifiedAndReputablePolicyState to 1, refreshes the Code Integrity policies and
+# restarts Windows; Windows signs the user in by itself (no autologon of ours is set: a snapshot
+# never carries one); sac-check reads the state back (the registry, Defender) and sees our
+# unsigned hidden.exe blocked. The steps are ConstrainedLanguage-safe (sac/lib.ps1, not vmlib),
+# in case SAC On runs our scripts in ConstrainedLanguage. Without --keep the run reverts the VM as
+# any other. Not a release.list row.
+include sac/lib.ps1
+# MODE       SECS NAME          SCRIPT
+sys          300  sac-on        sac/on.ps1
+wait         600  sac-restart   logon
+sys          120  sac-check     sac/check.ps1

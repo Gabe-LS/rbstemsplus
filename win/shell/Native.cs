@@ -71,6 +71,14 @@ namespace RbStemsPlus.Shell
         [DllImport(Dll, CallingConvention = C, ExactSpelling = true)] public static extern int core_selftest();
 
         [DllImport(Dll, CallingConvention = C, ExactSpelling = true)]
+        public static extern int core_win_window_save([MarshalAs(UnmanagedType.LPUTF8Str)] string parent,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string support, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, byte[] text, UIntPtr len);
+
+        [DllImport(Dll, CallingConvention = C, ExactSpelling = true)]
+        public static extern int core_win_log_append([MarshalAs(UnmanagedType.LPUTF8Str)] string parent,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string support, byte[] text, UIntPtr len);
+
+        [DllImport(Dll, CallingConvention = C, ExactSpelling = true)]
         public static extern IntPtr core_new(ref CoreHost host, int role, [MarshalAs(UnmanagedType.LPUTF8Str)] string config, UIntPtr len);
         [DllImport(Dll, CallingConvention = C, ExactSpelling = true)] public static extern void core_free(IntPtr c);
         [DllImport(Dll, CallingConvention = C, ExactSpelling = true)] public static extern void core_run(IntPtr job);
@@ -126,6 +134,52 @@ namespace RbStemsPlus.Shell
             int n = 0;
             while (((byte*)p)[n] != 0) n++;
             return System.Text.Encoding.UTF8.GetString((byte*)p, n);
+        }
+    }
+
+    /// core_new's config (core.h): the OS, the version, the paths of app.md §5.10 the shell knows,
+    /// and the entries the DLL runs itself. Nothing rooted in Program Files is computed or written
+    /// here (PF3): the DLL derives rekordbox's folder and ours from its one Program Files rule (the
+    /// prepare helper's --rekordbox and --ort are its own whatever the config says), so "rekordbox"
+    /// and "root_ort" stay out. "model" is rekordbox's stems model under the account's roaming
+    /// AppData (Paths.swift's modelDir + "/hdemucs.onnx", models.h's folder): models.c's restore,
+    /// copy and look at originals\ and the facts of host_facts.c read it. Without a roaming folder
+    /// there is no "model", and the model steps fail closed (an uninstall stops at the restore).
+    /// "helper" is the prepare helper beside this exe in the version folder (the zip's
+    /// rbsp-prepare.exe, release.md §3; the Mac's Contents/Helpers/rbsp-prepare): the DLL spawns it,
+    /// and FACT_HELPER_THERE says whether it is there. "kept"
+    /// is support\kept (helper.md §1, the Mac's keptDir): the helper's --kept-dir, the Status tab's
+    /// kept sets and Stop Keeping.
+    internal static class CoreConfig
+    {
+        public const string HelperName = "rbsp-prepare.exe";
+
+        // The window and the core use the same setting. TEST builds can exercise both layouts.
+#if SHELL_TEST
+        internal static readonly bool PrepareShown = TestHooks.Has("prepare");
+#else
+        internal static readonly bool PrepareShown = true;
+#endif
+
+        public static string RekordboxModel(string roaming) =>
+            string.IsNullOrEmpty(roaming) ? null : System.IO.Path.Combine(roaming, "Pioneer", "rekordbox6", "models", "demucs3_model", "hdemucs.onnx");
+
+        public static string Build(string version, string home, string support, string app, string roaming, string tmp, string native)
+        {
+            string P(string k, string v) => Json.Quote(k) + ":" + Json.Quote(v);
+            string model = RekordboxModel(roaming);
+            string paths = string.Join(",",
+                P("home", home),
+                P("support", support),
+                P("app", app),
+                P("helper", System.IO.Path.Combine(app, HelperName)),
+                P("kept", System.IO.Path.Combine(support, "kept")),
+                P("log", System.IO.Path.Combine(support, "Logs")),
+                P("cache_default", System.IO.Path.Combine(support, "Cache")),
+                P("tmp", tmp));
+            if (model != null) paths += "," + P("model", model);
+            string tabs = PrepareShown ? ",\"prepare_tabs\":true" : "";
+            return "{\"os\":\"win\",\"version\":" + Json.Quote(version) + ",\"paths\":{" + paths + "},\"native\":" + native + tabs + "}";
         }
     }
 }

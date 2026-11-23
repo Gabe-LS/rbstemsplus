@@ -51,5 +51,7 @@ EVENT(EV_WATCH,          "watch",          all, "")            /* the watcher: t
 EVENT(EV_LOCATION,       "location",       all, "")            /* LocationMonitor.onChange: the host's location snapshot changed (M4; until its memo moves into the core) */
 
 EVENT(EV_FACTS_WARM,     "facts_warm",     win, "")            /* Windows: the shell's warm-up on activation ended (app.md §2 rule 1, HF2): one refresh, the files' pins and sha256 now memoised */
+EVENT(EV_REKORDBOX_CHANGED, "rekordbox_changed", win, "")       /* Windows watcher: quietly refresh Manage and its Restore offer */
+EVENT(EV_R1_DISMISS,     "r1_dismiss",     win, "versions")    /* Windows: R1's Don't Ask Again clicked; versions: F_WIN_R1_DISMISS_VERSIONS as the shell showed it */
 
 #undef EVENT

@@ -2,14 +2,21 @@
  * (app.md §5.5, §5.6). Pure C11, no file and no Windows call: the Mac tests and the fuzz driver
  * run every rule here.
  *
- *  - The command line: `install|uninstall|restore|install-worker|remove-root-folder --proto N
- *    --version V --source DIR --force 0|1 --pipe NAME`, every option exactly once, in any order.
- *    `--version` is rekordbox's version as the app checked it (the Mac's $VERSION) and must match
- *    ^\d+\.\d+\.\d+$ before any version agreement is looked at (each part at most 9 digits here);
- *    it is empty only for remove-root-folder and install-worker. `--source` is the folder of the
- *    payload the app verified: absolute, needed by install and install-worker, empty otherwise.
- *    A protocol that isn't ADMIN_PROTO is refused with ADMIN_EXIT_PROTOCOL, except for
- *    install-worker, which no protocol version refuses (I75).
+ *  - The command line (protocol 2, multi-version rekordbox, .orchestration/mv-spec.md §2.2):
+ *    `install|uninstall|restore|install-worker|remove-root-folder --proto N --targets T
+ *    --manifest M --source DIR --force 0|1 --pipe NAME`, every option exactly once, in any order.
+ *    `--targets` is the scope the app checked: `*` for uninstall, remove-root-folder and
+ *    install-worker (they sweep and name none), else 1 to ADMIN_TARGETS_MAX comma-separated
+ *    `X.Y.Z:<16 lowercase hex>` items (a version folder's X.Y.Z, ^\d+\.\d+\.\d+$ with each part
+ *    at most 9 digits, and the first 16 hex digits of its rekordbox.exe's sha256), sorted by
+ *    version, unique. `--manifest` is the sha256 of the payload.json the app verified and copied
+ *    into the source folder (install, install-worker), `-` for the verbs without a source.
+ *    `--source` is that folder: absolute, needed by install and install-worker, empty otherwise.
+ *    A line whose --proto is a well-formed number other than ADMIN_PROTO is refused with
+ *    ADMIN_EXIT_PROTOCOL whatever its other options (another protocol's line), except for
+ *    install-worker, which no protocol version refuses (I75) once its line is well-formed: its
+ *    shape (`--targets *`, a manifest) is kept from protocol 2 on. Protocol 2 is a plain version
+ *    check (decision D13: Windows never shipped, so there is no protocol-1 adoption).
  *  - The exit codes: Scripts.swift's RootExit table, unchanged, plus three appended (W-core adds
  *    their texts): the protocol mismatch, "run again" after install-worker, and a payload older
  *    than the worker's floor (J23). 1223 (ERROR_CANCELLED) is the app's own: UAC declined.
@@ -27,14 +34,22 @@
 #include <stdint.h>
 
 /* The protocol this app and this worker speak. Raised with any change to the command line, the
- * exit codes' meanings or the pipe records. */
-enum { ADMIN_PROTO = 1 };
+ * exit codes' meanings or the pipe records. Protocol 2 (.orchestration/mv-spec.md §2.2, decision
+ * D13) replaced protocol 1's --version with --targets T and added --manifest M; it is a plain
+ * version check (a mismatch refuses, and the app reinstalls the worker): Windows never shipped,
+ * so there is no protocol-1 adoption or migration path. ADMIN_PROTO_TEXT is the same number as
+ * text, for the worker's marker (win/admin/main.c). */
+enum { ADMIN_PROTO = 2 };
+#define ADMIN_PROTO_TEXT "2"
+enum { ADMIN_PROTO_TARGETS = 2 };   /* the first protocol that speaks --targets and --manifest */
 
 enum {
     ADMIN_PATH_MAX = 1024,       /* --source, and every path the worker builds */
     ADMIN_VERSION_MAX = 32,      /* "999999999.999999999.999999999" fits */
     ADMIN_PIPE_MAX = 64,
     ADMIN_LINE_MAX = 1024,       /* one pipe line, its end included; longer ones are cut */
+    ADMIN_TARGETS_MAX = 16,      /* --targets' items */
+    ADMIN_TARGETS_ARG_MAX = 16 * 32,   /* --targets' text, its NUL included */
 };
 
 /* the bridge's cap, both sides' (bridge.md §2, Scripts.swift:310-311): the app's download
@@ -68,17 +83,49 @@ enum {
     ADMIN_EXIT_PROTOCOL = 12,            /* this worker speaks another protocol: update the app first */
     ADMIN_EXIT_RUN_AGAIN = 13,           /* install-worker put the app's own worker in bin\: start it */
     ADMIN_EXIT_OLDER = 14,               /* the app's payload is older than the worker's floor: update first */
+    /* appended for multi-version rekordbox (protocol 2, mv-spec §2.2) */
+    ADMIN_EXIT_SCOPE_CHANGED = 15,       /* the worker's fresh target set isn't --targets, or the staged payload.json's
+                                          * sha256 isn't --manifest: nothing changed; the app refreshes and asks again */
+    ADMIN_EXIT_PARTIAL = 16,             /* some targets done, one failed (its @target says how), the rest not started */
+    ADMIN_EXIT_UNDO_INCOMPLETE = 17,     /* an Install refused before any rekordbox folder changed, and its undo couldn't
+                                          * restore everything in the root: the staging folder with the saved copies stays
+                                          * (the "rollback incomplete" line names it) */
     ADMIN_EXIT_USER_STOPPED = 1223,      /* the app's own: UAC declined (ERROR_CANCELLED), never the worker's */
 };
+
+/* One --targets item, "X.Y.Z:<16 lowercase hex>": a version folder's X.Y.Z (admin_version_ok) and
+ * the first 16 hex digits of its rekordbox.exe's sha256, as the app checked them (protocol 2). */
+typedef struct {
+    char version[ADMIN_VERSION_MAX];
+    char exe16[17];
+} admin_target;
 
 typedef struct {
     int verb;                             /* enum admin_verb */
     int proto;
-    char version[ADMIN_VERSION_MAX];      /* rekordbox's version as the app checked it, or "" */
+    /* --targets and --manifest (protocol 2, mv-spec §2.2) */
+    int all;                              /* --targets *: uninstall, remove-root-folder and install-worker
+                                           * sweep and name none */
+    admin_target t[ADMIN_TARGETS_MAX];    /* else 1 to ADMIN_TARGETS_MAX items, sorted by version, unique */
+    int nt;
+    char manifest[65];                    /* the sha256 of the payload.json the app verified and copied
+                                           * into --source; "" for "-" (the verbs without a source) */
     char source[ADMIN_PATH_MAX];          /* the verified payload's folder, or "" */
     int force;                            /* 0/1: install again over our bridge (Reinstall) */
     char pipe[ADMIN_PIPE_MAX];            /* \\.\pipe\rbstemsplus-admin-<32 hex> */
 } admin_args;
+
+/* --targets' value into out->all, out->t and out->nt: "*", or 1 to ADMIN_TARGETS_MAX
+ * comma-separated items sorted by version (payload_version_cmp's order: numeric, part by part),
+ * unique, each version admin_version_ok and each hex exactly 16 lowercase digits, the whole
+ * shorter than ADMIN_TARGETS_ARG_MAX. 0, or -1 (out's targets cleared). */
+int admin_targets_parse(const char *s, admin_args *out);
+/* n targets as --targets' value ("*" for n 0 is the caller's): the length written (NUL not
+ * counted), or -1 when an item is invalid, they aren't sorted and unique, n isn't 1 to
+ * ADMIN_TARGETS_MAX, or it doesn't fit (out "" then). */
+long admin_targets_format(const admin_target *t, int n, char *out, size_t cap);
+/* the order of two admin_version_ok versions, numeric part by part: -1, 0 or 1 */
+int admin_version_cmp(const char *a, const char *b);
 
 /* the verb's word ("install", ...), NULL for none */
 const char *admin_verb_name(int verb);
@@ -101,16 +148,28 @@ int admin_abs_path_ok(const char *p);
  * space, at most 128 bytes. */
 int admin_plain_name_ok(const char *name);
 
-/* Parses argv[1..argc-1] (UTF-8; argv[0] is the program). ADMIN_EXIT_OK with *out filled;
+/* Parses argv[1..argc-1] (UTF-8; argv[0] is the program; ADMIN_ARGC of them for this protocol,
+ * any count for another's). ADMIN_EXIT_OK with *out filled;
  * ADMIN_EXIT_CHECK_FAILED for anything malformed (why, n bytes, says what); ADMIN_EXIT_PROTOCOL
- * when everything else is well-formed but --proto isn't ADMIN_PROTO (install-worker excepted:
- * then ADMIN_EXIT_OK, out->proto as given). */
+ * when the verb is known and --proto is a well-formed number other than ADMIN_PROTO, whatever the
+ * rest and the argument count (another protocol's line; out->pipe its --pipe when that is a valid
+ * one, so the worker can say why). install-worker in this protocol's shape is the exception
+ * (I75): parsed as this protocol's and, well-formed, ADMIN_EXIT_OK with out->proto as given. */
+enum { ADMIN_ARGC = 14 };   /* the program, the verb and six options with their values */
 int admin_parse_args(int argc, const char *const *argv, admin_args *out, char *why, size_t n);
+/* The worker's start (main.c): argv (any count; an argument that couldn't be read is NULL)
+ * parsed, then the app's pipe (*out's --pipe) connected and the marker line said on it, and a
+ * refusal's reason. ADMIN_EXIT_OK with *out: go on. Else the exit code: another protocol's
+ * recognised line is ADMIN_EXIT_PROTOCOL whether or not its pipe could be used (re-review
+ * finding 9); without the app's pipe anything else is ADMIN_EXIT_CHECK_FAILED, nothing said. */
+int admin_start(int argc, const char *const *argv, const char *marker, int (*connect)(void *ctx, const char *pipe), void (*say)(void *ctx, const char *line),
+                void *ctx, admin_args *out);
 
 /* The command line ShellExecuteEx gets as lpParameters (the verb and options, not the program),
  * quoted for the CRT's (and CommandLineToArgvW's) parsing: every value in double quotes, the
- * backslashes before a quote doubled. The length written (NUL not counted), or -1 when a value
- * is invalid (admin_parse_args would refuse it, with this protocol) or it doesn't fit. */
+ * backslashes before a quote doubled. a->all gives `--targets *`, else a->t[0..nt); an empty
+ * a->manifest gives `-`. The length written (NUL not counted), or -1 when a value is invalid
+ * (admin_parse_args would refuse it, whatever a->proto) or it doesn't fit. */
 long admin_build_params(const admin_args *a, char *out, size_t cap);
 
 /* the pipe's name for 16 random bytes */
@@ -141,9 +200,25 @@ enum {
     ADMIN_LINE_FLOOR,           /* "@floor <version>": the worker's floor now */
     ADMIN_LINE_CLOSED,          /* "@closed": the rekordbox that was still closing has closed (after @still-closing) */
     ADMIN_LINE_UNKNOWN,         /* '@' and anything else: ignored by the app (a newer worker) */
+    /* protocol 2 (mv-spec §2.2), after UNKNOWN so no value above moves; an older app reads them
+     * as ADMIN_LINE_UNKNOWN */
+    ADMIN_LINE_TARGET,          /* "@target <X.Y.Z> <code> <what>": one target's outcome; code the exit code it
+                                 * would have alone ("-" for not-started), what one of ADMIN_TARGET_WHAT_* */
+    ADMIN_LINE_ROOT_KEPT,       /* "@root-kept <why>": the inventory was incomplete or a bridge remains: the shared root stays */
 };
+/* @target's <what> words */
+#define ADMIN_TARGET_WHAT_INSTALLED "installed"
+#define ADMIN_TARGET_WHAT_ALREADY "already"
+#define ADMIN_TARGET_WHAT_PUT_BACK "put-back"
+#define ADMIN_TARGET_WHAT_KEPT "kept"
+#define ADMIN_TARGET_WHAT_NOT_STARTED "not-started"
+#define ADMIN_TARGET_WHAT_REFUSED "refused"
+enum { ADMIN_TARGET_WHAT_MAX = 16 };   /* the longest word and its NUL fit */
 /* A line (without its end) as a record: its kind, and its value (after one space) in val. */
 int admin_line_kind(const char *line, size_t n, char *val, size_t cap);
+/* @target's value "<X.Y.Z> <code> <what>": 0 with the version (ADMIN_VERSION_MAX bytes), the code
+ * (-1 for "-"; else 0 to 9999) and the word (one of ADMIN_TARGET_WHAT_*), or -1 */
+int admin_target_value(const char *val, char *version, int *code, char *what);
 
 /* Splits the pipe's bytes into lines: feed what was read, take lines while there are. A line
  * longer than ADMIN_LINE_MAX - 1 is cut there (the rest, to its end, dropped); a NUL or a byte

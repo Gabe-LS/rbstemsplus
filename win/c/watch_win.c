@@ -10,16 +10,154 @@
  * COMCTL32 and the UCRT; bcrypt (the payload's signature, the files' sha256) and wintrust and
  * crypt32 (the AlphaTheta pin) are loaded from System32 at their first use by the modules that
  * use them. Unverified until the VM run (W13a): every call here. */
-#ifndef WIN32_LEAN_AND_MEAN
-#  define WIN32_LEAN_AND_MEAN
+#ifdef _WIN32
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <windows.h>
+#  include <commctrl.h>
+#  include <shellapi.h>
+#  include <shlobj.h>
+#  include <tlhelp32.h>
 #endif
-#include <windows.h>
-#include <commctrl.h>
-#include <shellapi.h>
-#include <shlobj.h>
 
-#include "watch.h"
-#include "core.h"   /* core_text: the dialog's window title */
+#include "watch_kept.h"
+
+#include "helper_proc.h"
+#include "native.h"
+#ifndef RBSP_CORE_PLAT_SHIM_H    /* watch_kept.h already includes common/plat.h */
+#  define RBSP_CORE_PLAT_SHIM_H
+#endif
+#include "internal.h"          /* the core's text builder */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+static void read_support(watch_kept *k, const char *name, core_facts *out, core_fact fact) {
+    plat_dir dir;
+    if (plat_dir_open(k->env->support, &dir)) return;
+    plat_file file;
+    int64_t size;
+    int e = plat_file_open_at(dir, name, INT64_MAX, &size, &file);
+    plat_dir_close(dir);
+    if (e) return;
+
+    /* Read the whole file at its original size, including histories larger than 64 KiB. */
+    size_t n = (size_t)size, got = 0;
+    char *b = malloc(n + 1);
+    if (b) {
+        while (got <= n) {
+            size_t count = 0;
+            e = plat_read(file, b + got, n + 1 - got, &count);
+            if (e || !count) break;
+            got += count;
+        }
+        if (!e && got == n) core_fact_str(out, fact, b, n);
+        free(b);
+    }
+    plat_file_close(file);
+}
+
+int32_t watch_kept_step(void *ctx, core_step kind, const char *const *args, int32_t nargs, core_facts *out) {
+    watch_kept *k = ctx;
+    if (!nargs) return 1;
+    if (kind == CORE_STEP_WATCH_HELPER) {
+        const char *argv[32];
+        int argc = nargs - 1;
+        if (argc > (int)(sizeof argv / sizeof *argv) || helper_program_args(args + 1, argc, k->ort, k->rekordbox, argv, NULL))
+            return 1;
+        return k->helper(k->facts.helper, argv, argc, (unsigned)strtoul(args[0], NULL, 10), out);
+    }
+    if (kind != CORE_STEP_WATCH_KEPT) return 1;
+    const char *op = args[0];
+    if (!strcmp(op, "session")) {
+        char session[sizeof k->checked] = "";
+        k->session(session, sizeof session);
+        core_fact_str(out, FACT_STEP_TEXT, session, CORE_NTS);
+        if (!strcmp(session, k->checked))
+            core_fact_str(out, FACT_STEP_TEXT2, k->checked, CORE_NTS);
+        else
+            read_support(k, "kept.checked", out, FACT_STEP_TEXT2);
+    } else if (!strcmp(op, "seen") && nargs == 2) {
+        snprintf(k->checked, sizeof k->checked, "%s", args[1]);
+        k->write(k->env, "kept.checked", args[1], strlen(args[1]));
+    } else if (!strcmp(op, "sets")) {
+        char *sets;
+        if (host_facts_kept_sets(k->kept, (double)plat_now_wall_ns() / 1e9, k->date, NULL, &sets)) return 1;
+        core_fact_str(out, FACT_KEPT_SETS, sets, CORE_NTS);
+        free(sets);
+    } else if (!strcmp(op, "facts")) {
+        host_facts f;
+        if (host_facts_read(&k->facts, &f)) return 1;
+        snprintf(k->rekordbox, sizeof k->rekordbox, "%s", f.rekordbox_folder);
+        f.has_model = 0;   /* the watcher doesn't compute the model's hash */
+        host_facts_write(&f, out);
+        host_facts_free(&f);
+    } else if (!strcmp(op, "noticed")) {
+        read_support(k, "kept.noticed", out, FACT_STEP_TEXT);
+    } else if (!strcmp(op, "notice") && nargs == 2) {
+        k->write(k->env, "kept.noticed", args[1], strlen(args[1]));
+    } else if (!strcmp(op, "running") && nargs == 2) {
+        core_fact_flag(out, FACT_STEP_FLAG, k->running(args[1]));
+    } else if (!strcmp(op, "notify") && nargs == 3) {
+        return k->notify(args[1], args[2]);
+    } else {
+        return 1;
+    }
+    return 0;
+}
+
+static void kept_log(void *ctx, const char *line, size_t n) {
+    watch_kept *k = ctx;
+    (void)n;   /* the core's log lines are NUL-terminated */
+    k->env->log(k->env->ctx, line);
+}
+
+/* This core only runs the synchronous session check. The watcher already owns scheduling and UI. */
+static void unused_main(void *ctx, core_job *job) { (void)ctx; core_job_drop(job); }
+static void unused_work(void *ctx, core_work kind, core_job *job) { (void)kind; unused_main(ctx, job); }
+static void unused_facts(void *ctx, core_facts *out) { (void)ctx; (void)out; }
+static int32_t unused_dialog(void *ctx, const core_dialog *d, core_reply *r) { (void)ctx; (void)d; (void)r; return 1; }
+static void unused_close(void *ctx, core_close what, int32_t proceed) { (void)ctx; (void)what; (void)proceed; }
+
+static void quoted(tbuf *b, const char *s) {
+    tb_puts(b, "\"");
+    for (; *s; s++) {
+        if (*s == '\\' || *s == '"') tb_puts(b, "\\");
+        if ((unsigned char)*s < 32) {
+            char esc[7];
+            snprintf(esc, sizeof esc, "\\u%04x", (unsigned)(unsigned char)*s);
+            tb_puts(b, esc);
+        } else {
+            tb_put(b, s, 1);
+        }
+    }
+    tb_puts(b, "\"");
+}
+
+void watch_kept_check(watch_kept *k) {
+    char cfg[8 * WATCH_PATH_MAX];
+    tbuf b;
+    tb_init(&b, CORE_OS_WIN, cfg, sizeof cfg);
+    tb_puts(&b, "{\"os\":\"win\",\"paths\":{\"model\":");
+    quoted(&b, k->facts.model);
+    tb_puts(&b, ",\"kept\":");
+    quoted(&b, k->kept);
+    tb_puts(&b, ",\"cache_default\":");
+    quoted(&b, k->cache);
+    tb_puts(&b, "}}");
+    const core_host host = {.size = sizeof host, .ctx = k, .log = kept_log, .step = watch_kept_step, .facts = unused_facts,
+                            .post_main = unused_main, .post_work = unused_work, .dialog = unused_dialog, .close_reply = unused_close};
+    core *c = b.err ? NULL : core_new(&host, CORE_ROLE_WATCHER, cfg, tb_len(&b));
+    if (c) {
+        core_watch_kept(c);
+        core_free(c);
+    }
+}
+
+#ifdef _WIN32
+#include "helper_proc_win.h"
 #include "plat_win.h"
 #include "win_rules.h"
 
@@ -303,8 +441,103 @@ static void o_pause(void *c, int32_t s) {
     (void)c;
     Sleep((DWORD)s * 1000u);
 }
-/* the prepared playlists' check comes with Prepare (rbsp-prepare.exe isn't in the first release) */
-static void o_session(void *c) { (void)c; }
+static watch_kept kept;
+
+static void kept_session(char *out, size_t n) {
+    DWORD session;
+    if (!ProcessIdToSessionId(GetCurrentProcessId(), &session)) return;
+    HANDLE list = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (list == INVALID_HANDLE_VALUE) return;
+    PROCESSENTRY32W entry = {.dwSize = sizeof entry};
+    for (BOOL more = Process32FirstW(list, &entry); more; more = Process32NextW(list, &entry)) {
+        DWORD pid = entry.th32ProcessID, other;
+        if (_wcsicmp(entry.szExeFile, L"rekordbox.exe") || !ProcessIdToSessionId(pid, &other) || other != session) continue;
+        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (!h) continue;
+        FILETIME created, exited, kernel, user;
+        DWORD code;
+        int alive = GetProcessTimes(h, &created, &exited, &kernel, &user) && GetExitCodeProcess(h, &code) && code == STILL_ACTIVE;
+        CloseHandle(h);
+        if (alive) {
+            /* Include creation time so Windows can reuse a PID without skipping a session. */
+            snprintf(out, n, "%lu-%08lx%08lx", (unsigned long)pid, (unsigned long)created.dwHighDateTime,
+                     (unsigned long)created.dwLowDateTime);
+            break;
+        }
+    }
+    CloseHandle(list);
+}
+
+static int kept_write(const watch_env *e, const char *name, const char *s, size_t n) {
+    AcquireSRWLockExclusive(&act_lock);
+    int r = watch_write_support(e, name, s, n);
+    ReleaseSRWLockExclusive(&act_lock);
+    return r;
+}
+
+typedef struct {
+    HANDLE done;
+    char *out;
+    size_t len, cap;
+    int failed, code;
+    char err[4096];
+} kept_capture;
+
+static void kept_line(void *ctx, const char *s, size_t n) {
+    kept_capture *b = ctx;
+    if (b->failed) return;
+    if (n >= SIZE_MAX - b->len) {
+        b->failed = 1;
+        return;
+    }
+    size_t need = b->len + n + 1;
+    if (need > b->cap) {
+        size_t cap = b->cap <= SIZE_MAX / 2 ? b->cap * 2 : need;
+        if (cap < need) cap = need;
+        char *out = realloc(b->out, cap);
+        if (!out) {
+            b->failed = 1;
+            return;
+        }
+        b->out = out;
+        b->cap = cap;
+    }
+    memcpy(b->out + b->len, s, n);
+    b->out[b->len + n] = '\n';
+    b->len = need;
+}
+
+static void kept_ended(void *ctx, int code, const char *err, size_t n) {
+    kept_capture *b = ctx;
+    b->code = code;
+    if (n >= sizeof b->err) n = sizeof b->err - 1;
+    memcpy(b->err, err, n);
+    b->err[n] = 0;
+    SetEvent(b->done);
+}
+
+static int kept_helper(const char *exe, const char *const *argv, int argc, unsigned seconds, core_facts *out) {
+    if (!seconds || seconds > 60) return 1;
+    kept_capture b = {.done = CreateEventW(NULL, TRUE, FALSE, NULL)};
+    if (!b.done) return 1;
+    helper_proc *p;
+    int r = helper_proc_spawn(exe, argv, argc, 0, kept_line, kept_ended, wlog, &b, &p);
+    if (!r) {
+        DWORD waited = WaitForSingleObject(b.done, seconds * 1000);
+        helper_proc_close(p);    /* terminates a timed-out helper and joins its readers */
+        core_fact_i64(out, FACT_STEP_CODE, waited == WAIT_OBJECT_0 ? b.code : -1);
+        core_fact_str(out, FACT_STEP_TEXT, waited == WAIT_OBJECT_0 && !b.failed ? b.out : "", waited == WAIT_OBJECT_0 && !b.failed ? b.len : 0);
+        core_fact_str(out, FACT_STEP_TEXT2, waited == WAIT_OBJECT_0 ? b.err : "the helper timed out", CORE_NTS);
+    }
+    free(b.out);
+    CloseHandle(b.done);
+    return r;
+}
+
+static void o_session(void *c) {
+    (void)c;
+    if (kept.env) watch_kept_check(&kept);
+}
 static int o_take(void *c) {
     (void)c;
     AcquireSRWLockExclusive(&state_lock);
@@ -319,7 +552,7 @@ static void o_give_back(void *c, int flags) {
     ReleaseSRWLockExclusive(&state_lock);
 }
 
-static HRESULT CALLBACK td_callback(HWND h, UINT msg, WPARAM w, LPARAM l, LONG_PTR ref) {
+static HRESULT WINAPI td_callback(HWND h, UINT msg, WPARAM w, LPARAM l, LONG_PTR ref) {
     (void)w, (void)l, (void)ref;
     if (msg == TDN_CREATED) SetForegroundWindow(h);   /* refused in the background: the taskbar flashes */
     return S_OK;
@@ -364,11 +597,17 @@ static int o_ask(void *c, const char *title, const char *message, const char *co
     return pressed;
 }
 
+/* t's lines added to dismissed as it is now, under the answer lock shared with the app (N10) */
 static int o_remember(void *c, const char *t, size_t n) {
     (void)c;
     AcquireSRWLockExclusive(&act_lock);
-    int e = watch_write_support(&env, "dismissed", t, n);
+    int e = dismissed_add_locked(env.support, t, n);
     ReleaseSRWLockExclusive(&act_lock);
+    if (e) {
+        char b[128];
+        snprintf(b, sizeof b, "couldn't write dismissed (error %d)", e);
+        wlog(NULL, b);
+    }
     return e;
 }
 
@@ -411,17 +650,27 @@ static int open_app(void) {
 
 /* "Reinstall Now": the request, then the app, under one hold of act_lock (SRW locks aren't
  * recursive: open_app_locked takes nothing) */
-static int o_reinstall(void *c) {
+static int o_request(void *c, const char *name) {
     (void)c;
     AcquireSRWLockExclusive(&act_lock);
-    int r = watch_write_support(&env, "request", "reinstall\n", 10) ? WATCH_NO_REQUEST : open_app_locked() ? WATCH_NO_APP : 0;
+    char request[16];
+    int n = snprintf(request, sizeof request, "%s\n", name);
+    int r = n <= 0 || (size_t)n >= sizeof request || watch_write_support(&env, "request", request, (size_t)n) ? WATCH_NO_REQUEST : open_app_locked() ? WATCH_NO_APP : 0;
     ReleaseSRWLockExclusive(&act_lock);
     return r;
 }
 
 static int o_open_app(void *c) {
     (void)c;
-    return open_app();
+    int r = open_app();
+    if (!r) {
+        HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, WATCH_REPAIR_EVENT);
+        if (event) {
+            SetEvent(event);
+            CloseHandle(event);
+        }
+    }
+    return r;
 }
 
 static void o_current(void *c, const char *name) {
@@ -431,8 +680,16 @@ static void o_current(void *c, const char *name) {
     ReleaseSRWLockExclusive(&state_lock);
 }
 
+static void o_refresh_app(void *c) {
+    (void)c;
+    HANDLE event = OpenEventW(EVENT_MODIFY_STATE, FALSE, WATCH_REFRESH_EVENT);
+    if (!event) return;
+    SetEvent(event);
+    CloseHandle(event);
+}
+
 static const watch_ops ops = {NULL, CORE_OS_WIN, o_facts, o_updating, o_busy, o_open, o_half, o_pause, o_session, o_take, o_give_back,
-                              o_ask, o_remember, o_reinstall, o_open_app, o_current, wlog};
+                              o_ask, o_remember, o_request, o_open_app, o_current, wlog, o_refresh_app};
 
 static HANDLE rounds_done;
 
@@ -449,14 +706,30 @@ typedef struct {
     wchar_t title[64], body[256];
 } notice;
 
+static int notice_text(wchar_t *out, size_t cap, const char *text) {
+    wchar_t *w = wide(text);
+    if (!w) return 0;
+    size_t n = wcslen(w);
+    if (n < cap) {
+        memcpy(out, w, (n + 1) * sizeof *out);
+    } else {
+        n = cap - 2;
+        if (w[n - 1] >= 0xd800 && w[n - 1] <= 0xdbff) n--;
+        memcpy(out, w, n * sizeof *out);
+        out[n++] = L'\u2026';
+        out[n] = 0;
+    }
+    free(w);
+    return 1;
+}
+
 int watch_notify(const char *title, const char *body) {
     notice *n = calloc(1, sizeof *n);
-    if (!n || !tray_hwnd) {
+    if (!n || !tray_hwnd || !notice_text(n->title, sizeof n->title / sizeof *n->title, title) ||
+        !notice_text(n->body, sizeof n->body / sizeof *n->body, body)) {
         free(n);
         return -1;
     }
-    MultiByteToWideChar(CP_UTF8, 0, title, -1, n->title, (int)(sizeof n->title / sizeof n->title[0]) - 1);
-    MultiByteToWideChar(CP_UTF8, 0, body, -1, n->body, (int)(sizeof n->body / sizeof n->body[0]) - 1);
     if (!PostMessageW(tray_hwnd, WM_NOTIFY_SHOW, 0, (LPARAM)n)) {
         free(n);
         return -1;
@@ -473,7 +746,7 @@ static void tray_remove(HWND h) {
     Shell_NotifyIconW(NIM_DELETE, &d);
 }
 
-static LRESULT CALLBACK tray_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
+static LRESULT WINAPI tray_proc(HWND h, UINT msg, WPARAM w, LPARAM l) {
     if (msg == WM_NOTIFY_SHOW) {
         notice *n = (notice *)l;
         NOTIFYICONDATAW d;
@@ -540,15 +813,26 @@ static DWORD net_release(void) {
     return v;
 }
 
+#ifdef WATCH_TEST_PATHS
+/* Keep the VM-only paths visible in the linker map (W12-strip). */
+__attribute__((noinline, section(".text$rbsp_test_watch_paths")))
+static int known_test_path(const char *test_env, char *out, size_t cap) {
+    const char *t = getenv(test_env);
+    if (!t || !*t) return 0;
+    snprintf(out, cap, "%s", t);
+    return 1;
+}
+
+__attribute__((noinline, section(".text$rbsp_test_watch_notify")))
+static void notify_test(void) {
+    if (wcsstr(GetCommandLineW(), L"--notify-test")) watch_notify("RB Stems Plus", "A notification from the watcher's test build.");
+}
+#endif
+
 /* a known folder, in UTF-8 */
 static int known(REFKNOWNFOLDERID id, const char *test_env, char *out, size_t cap) {
 #ifdef WATCH_TEST_PATHS
-    /* test builds only: the VM's fake trees (app.md §7) */
-    const char *t = getenv(test_env);
-    if (t && *t) {
-        snprintf(out, cap, "%s", t);
-        return 1;
-    }
+    if (known_test_path(test_env, out, cap)) return 1;
 #else
     (void)test_env;
 #endif
@@ -576,7 +860,35 @@ static int64_t process_start(void *ctx, int32_t pid) {
 
 static char p_rekordbox[WATCH_PATH_MAX], p_root[WATCH_PATH_MAX], p_pioneer[WATCH_PATH_MAX], p_models[WATCH_PATH_MAX],
     p_support[WATCH_PATH_MAX];
+static char p_helper[WATCH_PATH_MAX], p_kept[WATCH_PATH_MAX], p_cache[WATCH_PATH_MAX], p_model[WATCH_PATH_MAX],
+    p_settings[WATCH_PATH_MAX], p_ort[WATCH_PATH_MAX];
 static sig_pubkey keys[8];
+
+static int kept_path(char *out, const char *dir, const char *name) {
+    int n = snprintf(out, WATCH_PATH_MAX, "%s\\%s", dir, name);
+    return n > 0 && n < WATCH_PATH_MAX;
+}
+
+static void kept_paths(void) {
+    char app[WATCH_PATH_MAX];
+    if (!utf8(self_path, -1, app, sizeof app)) return;
+    char *cut = strrchr(app, '\\');
+    if (!cut) return;
+    *cut = 0;
+    /* CoreConfig.Build gives the app the same helper, kept and cache paths. */
+    if (!kept_path(p_helper, app, "rbsp-prepare.exe") || !kept_path(p_kept, env.support, "kept") ||
+        !kept_path(p_cache, env.support, "Cache") || !kept_path(p_model, env.models, "hdemucs.onnx") ||
+        !kept_path(p_settings, p_pioneer, WATCH_SETTINGS_BELOW "\\rekordbox3.settings") ||
+        !kept_path(p_ort, env.root, "ort\\onnxruntime.dll")) return;
+    kept = (watch_kept){
+        .env = &env, .kept = p_kept, .cache = p_cache, .ort = p_ort,
+        .facts = {.os = env.os, .programs_rekordbox = env.rekordbox, .root = env.root, .model = p_model,
+                  .support = env.support, .helper = p_helper, .rb_settings = p_settings, .prepare = 1,
+                  .own = env.version, .keys = env.keys, .nkeys = env.nkeys, .admin = -1, .own_bundle = -1},
+        .session = kept_session, .date = host_facts_kept_date, .running = helper_proc_keeping, .notify = watch_notify,
+        .helper = kept_helper, .write = kept_write
+    };
+}
 
 /* The folders below Pioneer\ that count (review VF3): one that is a junction or a symbolic link
  * isn't seen through Pioneer\'s subtree watch (changes inside a link's target aren't reported
@@ -671,6 +983,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show) {
     watch_env e = {compat_os_windows(), p_rekordbox, p_root, p_models, p_support, keys, (size_t)nk, RBSP_VERSION, process_start, wlog,
                    NULL};
     env = e;
+    kept_paths();
 
     INITCOMMONCONTROLSEX icc = {sizeof icc, ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&icc);
@@ -681,8 +994,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show) {
     wc.lpszClassName = L"io.github.rbstemsplus.watcher";
     if (RegisterClassW(&wc)) tray_hwnd = CreateWindowExW(0, wc.lpszClassName, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, inst, NULL);
 #ifdef WATCH_TEST_PATHS
-    /* test builds only: the notification on its own (VM check) */
-    if (wcsstr(GetCommandLineW(), L"--notify-test")) watch_notify("RB Stems Plus", "A notification from the watcher's test build.");
+    notify_test();
 #endif
 
     for (int i = 0; i < WATCH_SLOTS; i++) {
@@ -706,6 +1018,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show) {
     ReleaseSRWLockExclusive(&state_lock);
     links_tick();
     ULONGLONG next_tick = GetTickCount64() + WATCH_TICK_MS;
+    ULONGLONG next_registry = 0;
 
     for (;;) {
         HANDLE hs[2 + WATCH_SLOTS];
@@ -717,6 +1030,10 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show) {
             if (watch_engine_slot_open(&engine, i)) map[nh] = i, hs[nh++] = slots[i].ev;
         int64_t wait = -1;
         ULONGLONG now = GetTickCount64();
+        if (now >= next_registry) {
+            watch_sched_registry(&sched, compat_uninstall_generation(), 0);
+            next_registry = now + 2000;
+        }
         if (watch_sched_poll(&sched, (int64_t)now, &wait)) {
             HANDLE t = CreateThread(NULL, 0, rounds_thread, NULL, 0, NULL);
             if (t) CloseHandle(t);
@@ -727,6 +1044,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show) {
         }
         ReleaseSRWLockExclusive(&state_lock);
         DWORD timeout = next_tick > now ? (DWORD)(next_tick - now) : 0;
+        if (next_registry - now < timeout) timeout = (DWORD)(next_registry - now);
         if (wait >= 0 && (DWORD)wait < timeout) timeout = (DWORD)wait;
         DWORD r = MsgWaitForMultipleObjectsEx((DWORD)nh, hs, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
         if (r < WAIT_OBJECT_0 + (DWORD)nh) {
@@ -757,9 +1075,11 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show) {
         if (GetTickCount64() >= next_tick) {
             AcquireSRWLockExclusive(&state_lock);
             watch_sched_note(&sched, watch_engine_tick(&engine));
+            watch_sched_registry(&sched, compat_uninstall_generation(), 1);
             ReleaseSRWLockExclusive(&state_lock);
             links_tick();
             next_tick = GetTickCount64() + WATCH_TICK_MS;
         }
     }
 }
+#endif

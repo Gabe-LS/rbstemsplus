@@ -1,19 +1,20 @@
 # T17/T8: bootstrap.ps1's -Restore (release.md section 4; by-hand.md's "the three -Restore cases",
 # moved here) on the rekordbox snapshot after Stems Cache is installed through the shipped worker
-# (worker.suite's first steps). From "rekordbox 7.2.19 logged in":
+# (worker.suite's first steps). From "rekordbox 7.2.19 installed":
 #   tests/win/vm-run.sh stage
-#   tests/win/vm-run.sh run "rekordbox 7.2.19 logged in" restore
+#   tests/win/vm-run.sh run "rekordbox 7.2.19 installed" restore
 # The cases: refused unelevated; restore with the bridge in place; restore with the live DLL
 # deleted (R4.I71); refused through a junctioned version folder (I23); restore in
 # ConstrainedLanguage (R4.I69). Elevated steps are user-high (the user's full token through a
 # scheduled task: no UAC prompt). Every -Restore step SKIPs while the served bootstrap.ps1 has no
-# RBSTEMSPLUS_RESTORE. -Restore with Smart App Control On needs a SAC On snapshot and stays by hand
-# (by-hand.md). Not a release.list row.
+# RBSTEMSPLUS_RESTORE. -Restore with Smart App Control On is in bootstrap-sac.suite.
+# Not a release.list row.
 include lib/vmlib.ps1
 include worker/rblib.ps1
 include restore/rslib.ps1
 need http
 need file repo/core/texts.def
+need file repo/scripts/bootstrap.ps1
 need file dist-test/bootstrap.ps1
 need file dist-test/payload.json
 # MODE       SECS NAME                 SCRIPT

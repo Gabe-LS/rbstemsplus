@@ -34,6 +34,8 @@
 #define RBSP_WIN_WATCH_H
 
 #include "compat.h"
+#include "dismissed.h"
+#include "inventory.h"
 #include "payload.h"
 
 #include <stddef.h>
@@ -55,7 +57,10 @@ enum { WD_REKORDBOX, WD_PIONEER, WD_ROOT, WD_COUNT, WATCH_SLOTS = 2 * WD_COUNT }
 enum { WATCH_NO_REQUEST = 1, WATCH_NO_APP = 2 };
 
 /* what a notification asks for */
-enum { WATCH_ROUND = 1, WATCH_R1 = 2 };
+enum { WATCH_ROUND = 1, WATCH_R1 = 2, WATCH_REGISTRY = 4 };
+
+#define WATCH_REFRESH_EVENT L"Local\\io.github.rbstemsplus.rekordbox-changed"
+#define WATCH_REPAIR_EVENT L"Local\\io.github.rbstemsplus.rekordbox-repair"
 
 /* a notification's action: FILE_ACTION_*'s values */
 enum { WATCH_ADDED = 1, WATCH_REMOVED = 2, WATCH_MODIFIED = 3, WATCH_RENAMED_OLD = 4, WATCH_RENAMED_NEW = 5 };
@@ -95,8 +100,7 @@ typedef struct {
     int seen[WD_COUNT];                      /* looked at by a tick before */
 } watch_engine;
 
-/* What a notification in kind's folder asks for (pure): WATCH_* flags. current: the current
- * version folder's name ("rekordbox 7.2.19"; "" unknown: any version folder counts). */
+/* What a notification in kind's folder asks for (pure): WATCH_* flags. */
 int watch_classify(int kind, const char *current, int action, const char *name);
 /* what kind's folder appearing, going or overflowing asks for */
 int watch_kind_flags(int kind);
@@ -124,9 +128,12 @@ typedef struct {
     int running;         /* a set of rounds runs */
     int started;         /* a set has started before (last_start is set) */
     int64_t last_start;  /* ms, the host's monotonic clock */
+    uint64_t registry_gen;
 } watch_sched;
 
 void watch_sched_note(watch_sched *s, int flags);
+/* A new Uninstall generation, or a periodic check for changes without a registry notification. */
+void watch_sched_registry(watch_sched *s, uint64_t generation, int periodic);
 /* 1: start a set of rounds now (running, last_start = now); 0: not now, and *wait_ms is how long
  * until it may (-1: nothing pending, or a set runs) */
 int watch_sched_poll(watch_sched *s, int64_t now_ms, int64_t *wait_ms);
@@ -138,7 +145,10 @@ void watch_sched_done(watch_sched *s);
 
 /* What a round reads (watch_facts.c on Windows; the tests fill it themselves). */
 typedef struct {
+    inv_row_view rows[INV_MAX];
+    int nrows, inv_complete;
     int rb_state;                          /* COMPAT_RB_* */
+    int rb_unsettled;                      /* registry entry waiting for its EXE */
     char rekordbox_version[COMPAT_VERSION_MAX];   /* the current folder's "7.2.19", "" none */
     char folder[WATCH_PATH_MAX];           /* the current version folder (COMPAT_RB_OK), "" none */
     char watch_name[WATCH_PATH_MAX];       /* the version folder to watch: the candidate's, "" none */
@@ -163,7 +173,7 @@ typedef struct {
     int (*facts)(void *ctx, watch_facts *f);
     /* watcherSettle's: an update or uninstall of rekordbox runs, RB Stems Plus is busy, rekordbox
      * runs (any session), an uninstall of ours left half-done (its id), wait, rekordbox's session
-     * under way (the prepared playlists' check: Prepare's, not in the first release) */
+     * under way (the prepared-playlists check) */
     int32_t (*updating)(void *ctx);
     int32_t (*app_busy)(void *ctx);
     int32_t (*rekordbox_open)(void *ctx);
@@ -178,17 +188,20 @@ typedef struct {
     /* the dialog (the first button the default): index of the button pressed, or -1 (closed, or it
      * couldn't be shown) */
     int (*ask)(void *ctx, const char *title, const char *message, const char *const *buttons, int n);
-    /* dismissed's new text, written whole: 0 or an errno */
+    /* dismissed's new text: in the exe its lines are added to the file as it is now, under the
+     * answer lock (dismissed_add_locked), so a line the app wrote meanwhile (R1's Don't Ask Again,
+     * N10) is kept: 0 or an errno */
     int (*remember)(void *ctx, const char *text, size_t n);
-    /* "Reinstall Now": the request "reinstall" written for the app, then RB Stems Plus started,
-     * both under one hold of the answer lock (the stop event waits for it): 0,
+    /* Write "reinstall" or "cache" and start the app under one hold of the answer lock
+     * (the stop event waits for it): 0,
      * WATCH_NO_REQUEST, or WATCH_NO_APP (written, but the app didn't start) */
-    int (*reinstall)(void *ctx);
+    int (*request)(void *ctx, const char *name);
     /* RB Stems Plus started (through the start stub): 0 or an errno */
     int (*open_app)(void *ctx);
-    /* the current version folder's name for the folders' filter */
+    /* the current version folder's name for diagnostics */
     void (*set_current)(void *ctx, const char *name);
     void (*log)(void *ctx, const char *line);
+    void (*refresh_app)(void *ctx); /* quiet notification to an app that is already open */
 } watch_ops;
 
 /* What the watcher remembers while it runs: R1's openings of the app, one per state of the live
@@ -196,14 +209,19 @@ typedef struct {
  * offer isn't made again until that state changes or the watcher starts again, at the next logon
  * or update). */
 typedef struct {
-    char r1_opened[1024];   /* keys, one per line */
+    unsigned char rows_digest[32], row_digests[INV_MAX][32], list_digest[32];
+    int nrows, inv_complete;
+    char r1_opened[INV_MAX * (COMPAT_VERSION_MAX + 32)];   /* keys, one per line */
+    char observed_folder[WATCH_PATH_MAX];
+    char observed_version[COMPAT_VERSION_MAX];
+    int observed, rb_state, cache_present, supported, live, ort_copy, offer_restore;
 } watch_state;
 
 /* One set of rounds: the questions put off ("Remind Me Later"), asked again from the next set on
  * (on the Mac, the next start of the watcher). */
 typedef struct {
     watch_state *st;
-    char put_off[1024];   /* keys, one per line */
+    char put_off[INV_MAX * (COMPAT_VERSION_MAX + 80)];   /* keys, one per line */
     int stash;            /* flags taken between rounds, for the next one */
 } watch_set;
 
@@ -216,10 +234,8 @@ int watch_rounds(const watch_ops *o, watch_state *st);
 
 /* R1's key for the version folder's facts ("r1:7.2.19 live=missing ort=0"); its length */
 size_t watch_r1_key(const char *version, const compat_r1 *r, char *out, size_t n);
-/* The line R1's offer in the app writes to dismissed for "Don't Ask Again for This Version"
- * ("r1:7.2.19"; the contract with W-core, app.md §5.7): the watcher doesn't open the app for R1 in
- * that version. Its length. */
-size_t watch_r1_dismissed_key(const char *version, char *out, size_t n);
+/* watch_r1_dismissed_key, the line R1's Don't Ask Again writes ("r1:7.2.19"): dismissed.h, shared
+ * with the core DLL's writer (N10) */
 
 #ifdef WATCH_TEST_HOOKS
 /* Test builds only (watch.sh): the question's text with this id (a core_text_id) reads as not

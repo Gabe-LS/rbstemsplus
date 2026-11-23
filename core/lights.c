@@ -17,6 +17,11 @@ int32_t light_plus(tbuf *tip, int32_t installed) {
 }
 
 int32_t light_cache(tbuf *tip, const cache_light_in *in) {
+#ifdef CORE_WIN_POLICY
+    /* Windows: R1 (app.md §5.2): rekordbox's ONNX Runtime missing or not the expected one, so
+     * Stems Cache isn't working, whatever else holds; the tip is R1's line (review C19) */
+    if (in->win_r1 != R1_OK) { w_r1_line(tip, in->win_r1); return LOOK_LIMITED; }
+#endif
     if (!in->installed) { TB_TEXT0(tip, T_CACHE_OFF); return LOOK_OFF; }
     if (!in->plus_on) {
         const char *engine = in->engine ? in->engine : "";
@@ -52,6 +57,11 @@ static void drive_text(tbuf *b, core_text_id drive_id, core_text_id this_mac_id,
 }
 
 int location_light(tbuf *b, const loc_status *s, const loc_bridge *br, int32_t rekordbox_running) {
+#ifdef CORE_WIN_POLICY
+    const loc_bridge local_problem = {"unavailable", "folder", NULL};
+    if (b->os == CORE_OS_WIN && !br && s->kind == LOC_THIS_MAC && s->probe == PROBE_MARKER_MISSING_OR_WRONG)
+        br = &local_problem;
+#endif
     int config_wrong = s->kind == LOC_CONFIG_UNREADABLE || s->kind == LOC_CONFIG_MALFORMED;
     if (br && !str_eq(br->state, "available") && !str_eq(br->reason, "disabled") && !(str_eq(br->reason, "config") && config_wrong)) {
         if (str_eq(br->state, "pending")) { drive_text(b, T_LOC_CHECKING_DRIVE, T_LOC_CHECKING_THIS_MAC, br->drive, NULL); return 1; }
@@ -284,6 +294,12 @@ void w_status_lines(tbuf *b, const gate_in *in) {
     tb_init(&st, b->os, sb, sizeof sb);
     int standard = w_standard_account_line(&st, in->user_is_admin, in->cache_traces, in->chosen_cache);
     if (st.err) b->err = st.err;
+#ifdef CORE_WIN_POLICY
+    if (b->os == CORE_OS_WIN && in->win_cache_problem && *in->win_cache_problem) {
+        LINE_SEP();
+        tb_puts(b, in->win_cache_problem);
+    } else
+#endif
     if (in->cache_why != FEAT_OK && (!in->cache || in->chosen_cache)) {
         line_of(&cw, b, fill_cache_why, in);
         int dup = (plus_line && pw.n == cw.n && !memcmp(pw.buf, cw.buf, cw.n));

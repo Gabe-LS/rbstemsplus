@@ -16,6 +16,17 @@ func prepareTests() {
     try? "<PROPERTIES><VALUE name=\"PartAnalysis\" val=\"1\"/><VALUE name=\"PartAnalysisQuality\" val=\"1\"/></PROPERTIES>".write(toFile: settings, atomically: true, encoding: .utf8)
     check(stemsQuality(settings) == 1, "PartAnalysisQuality read (not the setting named like it)")
     check(stemsQuality(tmp + "/prep/none") == nil, "no settings file: unknown")
+    let qualityCases: [(String, Int?, String)] = [
+        (#"<VALUE val="1" name="PartAnalysisQuality"/><VALUE name="Other" val="0"/>"#, 1, "reversed attributes use their own value"),
+        (#"<VALUE name="PartAnalysisQuality"/><VALUE name="Other" val="1"/>"#, nil, "a missing value stays unknown"),
+        (#"<VALUE name="PartAnalysisQuality" val="0""#, nil, "an unterminated element stays unknown"),
+        (#"<VALUE othername="PartAnalysisQuality" val="1"/>"#, nil, "a lookalike attribute is ignored"),
+        ("<VALUE name=\"PartAnalysisQuality\"" + String(repeating: " ", count: 65) + "val=\"1\"/>", 1, "attributes more than 64 bytes apart")
+    ]
+    for (xml, expected, label) in qualityCases {
+        try? xml.write(toFile: settings, atomically: true, encoding: .utf8)
+        check(stemsQuality(settings) == expected, "stemsQuality: \(label)")
+    }
 
     // MARK: the kept sets on disk
     let kd = tmp + "/prep/kept"
@@ -31,6 +42,21 @@ func prepareTests() {
     let sets = keptSets(kd, now: now)
     check(sets.map { $0.name } == ["123", "bad"] && sets[0].entries == 2 && sets[0].files == 2 && sets[0].until != nil && sets[1].until == nil,
           "kept sets: past their date, hidden and badly named ones left out; one the bridge can't read still listed: \(sets)")
+    let past = Int(now.timeIntervalSince1970) - 10, future = past + 3600
+    let malformedSets = [
+        ("\(past)\n\(entry)\nG\(entry.dropFirst())\n", "expired date with a non-hex entry"),
+        ("\(future)\n\(entry.replacingOccurrences(of: " ", with: ":"))\n", "entry with the wrong separator"),
+        ("\(future)\n\(entry)", "entry without its final newline"),
+        ("0\(future)\n", "date with a leading zero"),
+        ("\(future).5\n", "fractional date"),
+        ("\(future)", "date without its final newline"),
+        ("1000000000000\n", "date longer than twelve digits")
+    ]
+    for (body, label) in malformedSets {
+        try? ("rbstemsplus-kept 1\nuntil " + body).write(toFile: kd + "/broken.kept", atomically: true, encoding: .utf8)
+        let broken = keptSets(kd, now: now).first { $0.name == "broken" }
+        check(broken == KeptSet(name: "broken"), "kept sets: blank date for \(label)")
+    }
     check(stopKeeping("123", dir: kd) && fileType(kd + "/123.kept") == nil && fileType(kd + "/123.manifest") == nil, "stop keeping: the set and its manifest go")
     check(!stopKeeping("../x", dir: kd), "stop keeping: a name with a slash is refused")
     // a set that can't be looked up (its folder can't be searched) isn't reported stopped (review SR5)

@@ -8,6 +8,9 @@
  * core_free at each host call, and must end cleanly: the busy state off, nothing asked of the
  * host after the free, nothing leaked (CORE_DEBUG). Linked into core-test. */
 #include "../internal.h"
+#ifdef CORE_WIN_POLICY
+#include "../native.h"
+#endif
 #include "flows_test.h"
 #include <stdarg.h>
 #include <stdio.h>
@@ -32,6 +35,8 @@ typedef struct ff {
     int freed;
     /* cheap facts */
     int plus, cache, chosen_model, chosen_cache, traces, admin_user, cache_link;
+    int cache_record_ok;            /* Windows: FACT_CACHE_RECORD_OK (every eligible version's receipt binds its live DLL) */
+    int record_lost_at_payload;     /* the PAYLOAD step clears cache_record_ok (another account's worker meanwhile) */
     /* step results */
     int rb_open_n, updating_n, rb_checks, rb_open_from;   /* open for n checks, from the rb_open_from-th (1-based) */
     int updating_from;              /* updating_n's checks from this one on (1-based; 0: the first) */
@@ -57,14 +62,33 @@ typedef struct ff {
     int rb_folder, root_folder;
     const char *loc_dir, *loc_drive, *loc_name, *loc_shown, *loc_gate_id;
     int64_t loc_size_kind, loc_size;
+#ifdef CORE_WIN_POLICY
+    int loc2_delay_ms;
+    core_step blocked_picker_check;
+    const char *pc_identity;
+    int location_slow_reply;   /* Lane C: 1 available with a paused floor, 2 not now */
+    int loc_measured;                /* LOCATION_NOW's FACT_LOC_MEASURED; -1 leaves it unset */
+    const char *win_rb_version, *win_rb_after_download;
+    int win_drive_chooser_disabled;
+    const char *win_rows, *rb_open_versions;
+    const char *win_scope, *win_scope_versions, *win_scope_affected;
+    const char *win_retry_scope, *win_retry_versions, *win_admin_targets;
+    int win_scope_code, win_root_kept;
+    int dlg_first_change_enabled;
+    const char *loc2_identity;
+#endif
     int loc_now_calls, loc2_from;      /* SO2: from the loc2_from-th LOCATION_NOW on (1-based; 0 never), */
     const char *loc2_dir, *loc2_gate_id;   /* ... this folder and marker id instead */
-    int remove_location_rc, remove_own_rc, self_delete_rc;
+    int remove_location_rc, remove_location_code, remove_own_rc, self_delete_rc;
     int app_fate, dock_flag;
     const char *app_path;
     const char *leftover_id, *leftover_label;
     int64_t request_age;
+    const char *request_features;
     const char *bridge_installed;
+#ifdef CORE_WIN_POLICY
+    const char *win_covered_bridge;
+#endif
     int update_check, update_swap_rc, update_failed;
     const char *update_line;
     int welcomed;
@@ -74,6 +98,9 @@ typedef struct ff {
     const char *set_gb, *set_days, *set_label_path, *set_old_drive;
     int64_t set_size_kind, set_size, set_location;
     int set_unreadable, set_can_choose;
+#ifdef CORE_WIN_POLICY
+    const char *set_timeout_at;
+#endif
     int64_t set_clear;
     int clear_rc;
     const char *pick;              /* the folder picked, NULL: cancelled */
@@ -82,9 +109,14 @@ typedef struct ff {
     int64_t discover;
     const char *disc_dir, *disc_id, *disc_current, *disc_current_id, *disc_old_drive;
     int64_t size_dir, size_this_mac;
+    int size_this_mac_reply;   /* 1 failed, 2 no fact */
+    int size_dir_unavailable;
     int writable, create_rc, write_rc, this_mac_now;
     int64_t create_code;
     const char *create_err;
+#ifdef CORE_WIN_POLICY
+    int create_left_folder, write_code, write_left_folder;
+#endif
     /* admin: one outcome per attempt (the last repeats) */
     int32_t admin_rc[8];            /* | FAKE_NP: the run also says "Operation not permitted" (core_admin_note) */
     int nadmin_rc, admin_attempts;
@@ -144,12 +176,24 @@ typedef struct ff {
     int kept_helper_runs;
     /* the report's lights (REPORT_FACTS) */
     int report_plus, report_loc, report_facts_rc, report_disabled;
+#ifdef CORE_WIN_POLICY
+    int report_chosen_location;
+#endif
     const char *report_drive, *report_engine;
     size_t report_tip_len;          /* REPORT_ZIP's cache tip, whole (the trace keeps 512 bytes) */
     int64_t report_floor;
     const char *report_sha;
+    /* R1 (review WR1), all under mu: CORE_SLOW_R1's answer, or none; what a restore leaves; the
+     * first ask held until released; the asks seen and those with a key; frames while busy */
+    int64_t r1_state, r1_after_restore;
+    int r1_none, r1_hold, r1_released, r1_calls, r1_keyed;
+    int r1_busy_frames, r1_busy_bad;
+    int r1_restored, r1_reenabled;   /* CW3: frames after a restore worked, no action, Put Back on */
+    /* R1's Don't Ask Again (N10), under mu: WIN_R1_DISMISS's return, the version it names, and
+     * whether the R1 answers say dismissed (a write that worked sets it) */
+    int r1_dismiss_rc, r1_dismissed;
 } ff;
-#define FAKE_NP 0x100
+#define FAKE_NP 0x10000
 
 static void tr(ff *f, const char *fmt_piece, ...) {
     /* pieces joined, up to a NULL; no format strings from data */
@@ -256,6 +300,17 @@ static void h_render(void *ctx, core_snap *snap, const core_delta *d) {
         f->flen += k;
         f->frames[f->flen] = 0;
     }
+#ifdef CORE_WIN_POLICY
+    if (f->c && f->c->os == CORE_OS_WIN && f->c->action_running) {   /* R1's Put Back stays off under an action (WR1) */
+        f->r1_busy_frames++;
+        if (core_flag(snap, F_WIN_RESTORE_ENABLED) || core_flag(snap, F_WIN_R1_DISMISS_ENABLED)) f->r1_busy_bad++;   /* N10: Don't Ask Again too */
+    }
+    if (f->c && f->c->os == CORE_OS_WIN && !f->c->action_running && core_flag(snap, F_WIN_RESTORE_ENABLED)) {
+        pthread_mutex_lock(&f->mu);
+        if (f->r1_restored) f->r1_reenabled++;
+        pthread_mutex_unlock(&f->mu);
+    }
+#endif
     core_snap_release(f->held);
     f->held = snap;
 }
@@ -281,6 +336,11 @@ static void h_facts(void *ctx, core_facts *out) {
     core_fact_flag(out, FACT_CACHE_IS_LINK, f->cache_link);
     core_fact_flag(out, FACT_REKORDBOX_INSTALLED, 1);
     core_fact_str(out, FACT_REKORDBOX_VERSION, "7.2.10.0342", CORE_NTS);
+#ifdef CORE_WIN_POLICY
+    if (f->win_rows) core_fact_str(out, FACT_WIN_RB_ROWS, f->win_rows, CORE_NTS);
+    if (f->win_rb_version) core_fact_str(out, FACT_REKORDBOX_VERSION, f->win_rb_version, CORE_NTS);
+    if (f->cache_record_ok) core_fact_flag(out, FACT_CACHE_RECORD_OK, 1);
+#endif
 }
 
 static void h_post_main(void *ctx, core_job *job) { push(ctx, job, NULL, NULL); }
@@ -381,6 +441,9 @@ static void present_on_main(void *p) {
         if (core_dlg_int(d, CORE_DLG_BUTTON_ENABLED, i, 0)) enabled |= 1u << i;
     }
     if (k == 0) snprintf(f->dlg_title0, sizeof f->dlg_title0, "%s", core_dlg_text(d, CORE_DLG_TITLE, 0, 0, NULL));
+#ifdef CORE_WIN_POLICY
+    if (k == 0) f->dlg_first_change_enabled = core_dlg_int(d, CORE_DLG_ROW_BUTTON_ENABLED, 0, 0);
+#endif
     if (k < 32) {
         snprintf(f->dlg_title[k], sizeof f->dlg_title[k], "%s", core_dlg_text(d, CORE_DLG_TITLE, 0, 0, NULL));
         snprintf(f->dlg_msg[k], sizeof f->dlg_msg[k], "%s", core_dlg_text(d, CORE_DLG_MESSAGE, 0, 0, NULL));
@@ -443,10 +506,19 @@ static const char *step_name(core_step k) {
         "LOCATION_DISCOVER", "LOCATION_SIZE", "LOCATION_WRITABLE", "LOCATION_CREATE", "LOCATION_WRITE", "THIS_MAC_DELETE",
         "WATCHER_CHECK", "MIGRATE_LEGACY", "REMOVE_LEFTOVERS", "FREE_SPACE", "STOP_KEEPING", "DATE_TEXT", "WATCHER_STATE",
         "WATCH_LOCK", "WATCH_PAUSE", "WATCH_BUSY", "WATCH_FACTS", "WATCH_REMEMBER", "WATCH_REINSTALL", "WATCH_KEPT", "WATCH_HELPER", "REPORT_FACTS"};
+#ifdef CORE_WIN_POLICY
+    if (k == CORE_STEP_WIN_SCOPE) return "WIN_SCOPE";
+    if (k == CORE_STEP_WIN_ADMIN_TARGETS) return "WIN_ADMIN_TARGETS";
+    if (k == CORE_STEP_WIN_R1_DISMISS) return "WIN_R1_DISMISS";
+#endif
     return (unsigned)k < sizeof names / sizeof *names ? names[k] : "?";
 }
 
 static void s(core_facts *o, core_fact id, const char *v) { if (v) core_fact_str(o, id, v, CORE_NTS); }
+
+#ifdef CORE_WIN_POLICY
+#define TEST_LOCATION_IDENTITY "000000000000000100000000000000020000000000000003"
+#endif
 
 static int32_t h_step_body(void *ctx, core_step k, const char *const *args, int32_t nargs, core_facts *o) {
     ff *f = ctx;
@@ -474,6 +546,12 @@ static int32_t h_step_body(void *ctx, core_step k, const char *const *args, int3
     }
     pthread_mutex_unlock(&f->mu);
     if (n == f->fail_step_at) return 1;
+#ifdef CORE_WIN_POLICY
+    if (f->blocked_picker_check && k == f->blocked_picker_check) {
+        plat_sleep_ms(250);
+        return 1;
+    }
+#endif
     const char *a0 = nargs > 0 ? args[0] : "";
     switch (k) {
     case CORE_STEP_LAUNCH_AGENT_LOAD:
@@ -558,6 +636,7 @@ static int32_t h_step_body(void *ctx, core_step k, const char *const *args, int3
         core_fact_flag(o, FACT_REKORDBOX_OPEN, open);
         core_fact_flag(o, FACT_PIONEER_UPDATING, upd);
 #ifdef CORE_WIN_POLICY
+        if (open) s(o, FACT_WIN_RB_OPEN_VERSIONS, f->rb_open_versions);
         if (f->rb_closing_n > 0 && f->rb_checks >= f->rb_closing_from) {
             core_fact_flag(o, FACT_REKORDBOX_OPEN, 1);
             core_fact_flag(o, FACT_REKORDBOX_CLOSING, 1);
@@ -575,6 +654,7 @@ static int32_t h_step_body(void *ctx, core_step k, const char *const *args, int3
             while (f->fetch_block && !f->fetch_released) pthread_cond_wait(&f->cv, &f->mu);
             pthread_mutex_unlock(&f->mu);
         }
+        if (f->record_lost_at_payload && !strcmp(a0, "latest")) f->cache_record_ok = 0;
         core_fact_i64(o, FACT_PAYLOAD_FETCH, !strcmp(a0, "latest") ? f->payload_fetch : 2);
         core_fact_flag(o, FACT_PAYLOAD_FOUND, f->payload_found);
         if (f->have_age) core_fact_i64(o, FACT_PAYLOAD_AGE, f->payload_age);
@@ -601,11 +681,18 @@ static int32_t h_step_body(void *ctx, core_step k, const char *const *args, int3
             s(o, FACT_ORT_PREFIX, f->c && f->c->os == CORE_OS_WIN ? "9.99" : "1.17");
 #ifdef CORE_WIN_POLICY
             core_fact_flag(o, FACT_ORT_LISTED, !f->ort_unlisted);   /* Windows: by sha256, never the prefix */
+            if (f->c && f->c->os == CORE_OS_WIN) {
+                s(o, FACT_REKORDBOX_VERSION, "7.2.10.0342");
+            }
 #endif
         }
         return 0;
     case CORE_STEP_SPACE: core_fact_i64(o, FACT_STEP_CODE, f->space_need); return f->space_rc;
     case CORE_STEP_DOWNLOAD: case CORE_STEP_UPDATE_SWAP:
+#ifdef CORE_WIN_POLICY
+        if (k == CORE_STEP_DOWNLOAD && !strcmp(a0, "bridge") && f->win_rb_after_download)
+            f->win_rb_version = f->win_rb_after_download;
+#endif
         if (f->c && !f->freed) {
             core_flow_progress(f->c, CORE_PROGRESS_DOWNLOAD, -1, 0);
             core_flow_progress(f->c, CORE_PROGRESS_DOWNLOAD, -2, 0);
@@ -642,6 +729,9 @@ static int32_t h_step_body(void *ctx, core_step k, const char *const *args, int3
         return 0;
     case CORE_STEP_LOCATION_NOW: {
         int later = f->loc2_from && ++f->loc_now_calls >= f->loc2_from;
+#ifdef CORE_WIN_POLICY
+        if (later && f->loc2_delay_ms) plat_sleep_ms(f->loc2_delay_ms);
+#endif
         s(o, FACT_LOC_DIR, later && f->loc2_dir ? f->loc2_dir : f->loc_dir);
         s(o, FACT_LOC_DRIVE, f->loc_drive);
         s(o, FACT_STEP_TEXT2, f->loc_name);
@@ -649,14 +739,20 @@ static int32_t h_step_body(void *ctx, core_step k, const char *const *args, int3
         core_fact_i64(o, FACT_LOC_SIZE_KIND, f->loc_size_kind);
         core_fact_i64(o, FACT_LOC_SIZE, f->loc_size);
         s(o, FACT_LOC_GATE_ID, later ? f->loc2_gate_id : f->loc_gate_id);
+#ifdef CORE_WIN_POLICY
+        if (f->loc_measured >= 0) core_fact_flag(o, FACT_LOC_MEASURED, f->loc_measured);
+        if (later ? f->loc2_gate_id : f->loc_gate_id)
+            s(o, FACT_STEP_PATH, later && f->loc2_identity ? f->loc2_identity : TEST_LOCATION_IDENTITY);
+#endif
         return 0;
     }
     case CORE_STEP_REMOVE_LOCATION:
         if (f->c && !f->freed) core_flow_progress(f->c, CORE_PROGRESS_DELETE, 7, 0);
         if (f->remove_location_rc) {
-            core_fact_i64(o, FACT_STEP_CODE, 4);
-            s(o, FACT_STEP_TEXT2, "Demucs");
-            s(o, FACT_STEP_TEXT, "Resource busy");
+            int code = f->remove_location_code ? f->remove_location_code : 4;
+            core_fact_i64(o, FACT_STEP_CODE, code);
+            if (code == 4 || code == 5) s(o, FACT_STEP_TEXT2, "Demucs");
+            if (code == 4) s(o, FACT_STEP_TEXT, "Resource busy");
         }
         return f->remove_location_rc;
     case CORE_STEP_REMOVE_OWN_FOLDERS: return f->remove_own_rc;
@@ -672,9 +768,20 @@ static int32_t h_step_body(void *ctx, core_step k, const char *const *args, int3
         return 0;
     case CORE_STEP_REQUEST:
         if (!strcmp(a0, "take")) f->request_age = -1;
-        else core_fact_i64(o, FACT_STEP_CODE, f->request_age);
+        else {
+            core_fact_i64(o, FACT_STEP_CODE, f->request_age);
+            s(o, FACT_STEP_TEXT, f->request_features);
+        }
         return 0;
-    case CORE_STEP_BRIDGE_SHA: s(o, FACT_STEP_TEXT, f->bridge_installed); return 0;
+    case CORE_STEP_BRIDGE_SHA:
+#ifdef CORE_WIN_POLICY
+        if (!strcmp(a0, "outdated")) {
+            s(o, FACT_STEP_TEXT, f->win_covered_bridge);
+            return 0;
+        }
+#endif
+        s(o, FACT_STEP_TEXT, f->bridge_installed);
+        return 0;
     case CORE_STEP_UPDATE_CHECK: core_fact_i64(o, FACT_STEP_CODE, f->update_check); return 0;
     case CORE_STEP_UPDATE_RESULT:
         core_fact_flag(o, FACT_STEP_FLAG, f->update_failed);
@@ -698,6 +805,9 @@ static int32_t h_step_body(void *ctx, core_step k, const char *const *args, int3
         if (f->report_drive) s(o, FACT_LOC_DRIVE, f->report_drive);
         s(o, FACT_BRIDGE_MODELS, "aa\nbb");
         s(o, FACT_STEP_TEXT, f->report_sha);
+#ifdef CORE_WIN_POLICY
+        if (f->report_chosen_location) core_fact_i64(o, FACT_CONFIG_LOCATION, 1);
+#endif
         if (f->report_loc) {
             core_fact_flag(o, FACT_LOC_MEASURED, 1);
             core_fact_i64(o, FACT_LOC_KIND, LOC_CHOSEN);
@@ -714,10 +824,19 @@ static int32_t h_step_body(void *ctx, core_step k, const char *const *args, int3
         s(o, FACT_STEP_URL, "https://example.invalid/issue");
         return f->model_copy_rc;
     case CORE_STEP_SETTINGS:
+#ifdef CORE_WIN_POLICY
+        if (f->set_timeout_at && !strcmp(f->set_timeout_at, args[0])) {
+            core_fact_i64(o, FACT_STEP_CODE, WIN_LOCATION_TIMED_OUT);
+            return 1;
+        }
+#endif
         s(o, FACT_SET_GB, f->set_gb);
         s(o, FACT_SET_DAYS, f->set_days);
         core_fact_flag(o, FACT_SET_UNREADABLE, f->set_unreadable);
         core_fact_flag(o, FACT_SET_CAN_CHOOSE, f->set_can_choose);
+#ifdef CORE_WIN_POLICY
+        core_fact_flag(o, FACT_STEP_FLAG, f->win_drive_chooser_disabled);
+#endif
         core_fact_i64(o, FACT_SET_SIZE_KIND, f->set_size_kind);
         core_fact_i64(o, FACT_SET_SIZE, f->set_size);
         core_fact_i64(o, FACT_SET_CLEAR, f->set_clear);
@@ -728,6 +847,9 @@ static int32_t h_step_body(void *ctx, core_step k, const char *const *args, int3
         s(o, FACT_LOC_GATE_ID, f->loc_gate_id);
         s(o, FACT_LOC_DRIVE, f->loc_drive);
         s(o, FACT_STEP_PATH, f->loc_shown);
+#ifdef CORE_WIN_POLICY
+        if (f->loc_gate_id) s(o, FACT_STEP_TEXT2, TEST_LOCATION_IDENTITY);
+#endif
         return 0;
     case CORE_STEP_CLEAR_THIS_MAC: core_fact_flag(o, FACT_STEP_FLAG, f->cache_link); return f->clear_rc;
     case CORE_STEP_LOCATION_PROBE:
@@ -746,20 +868,40 @@ static int32_t h_step_body(void *ctx, core_step k, const char *const *args, int3
         s(o, FACT_LOC_DRIVE, f->disc_old_drive);
         s(o, FACT_STEP_PATH, "<found>");
         return 0;
-    case CORE_STEP_LOCATION_SIZE: core_fact_i64(o, FACT_STEP_CODE, !strcmp(a0, "this_mac") ? f->size_this_mac : f->size_dir); return 0;
+    case CORE_STEP_LOCATION_SIZE: {
+        int local = !strcmp(a0, "this_mac");
+        if (local && f->size_this_mac_reply == 2) return 0;
+        if (!local && f->size_dir_unavailable) return 1;
+        core_fact_i64(o, FACT_STEP_CODE, local ? f->size_this_mac : f->size_dir);
+        if (local && f->size_this_mac_reply == 1) return 1;
+        return 0;
+    }
     case CORE_STEP_LOCATION_WRITABLE: core_fact_flag(o, FACT_STEP_FLAG, f->writable); return 0;
     case CORE_STEP_LOCATION_CREATE:
         s(o, FACT_LOC_DIR, "/Volumes/GLS/DJ/RB Stems Plus Cache");
         s(o, FACT_LOC_GATE_ID, "NEWID");
         core_fact_i64(o, FACT_STEP_CODE, f->create_code);
+#ifdef CORE_WIN_POLICY
+        if (f->create_left_folder) core_fact_flag(o, FACT_STEP_FLAG, 1);
+#endif
         s(o, FACT_STEP_TEXT, f->create_err);
         s(o, FACT_STEP_PATH, "<real>");
         return f->create_rc;
     case CORE_STEP_LOCATION_WRITE:
         s(o, FACT_STEP_TEXT, "<dir>");
         s(o, FACT_STEP_PATH, "/Users/x/config.ini");
+#ifdef CORE_WIN_POLICY
+        core_fact_i64(o, FACT_STEP_CODE, f->write_code);
+        if (f->write_left_folder) core_fact_flag(o, FACT_STEP_FLAG, 1);
+#endif
         return f->write_rc;
     case CORE_STEP_THIS_MAC_DELETE:
+#ifdef CORE_WIN_POLICY
+        if (!strcmp(a0, "target")) {
+            s(o, FACT_STEP_PATH, f->pc_identity);
+            return 0;
+        }
+#endif
         if (!strcmp(a0, "facts")) {
             core_fact_flag(o, FACT_STEP_FLAG, f->tm_flag);
             core_fact_flag(o, FACT_STEP_FLAG2, f->tm_bridge_loc);
@@ -771,6 +913,34 @@ static int32_t h_step_body(void *ctx, core_step k, const char *const *args, int3
         if (!strcmp(a0, "delete")) return f->tm_delete_rc;
         core_fact_flag(o, FACT_STEP_FLAG, f->this_mac_now);
         return 0;
+#ifdef CORE_WIN_POLICY
+    case CORE_STEP_WIN_SCOPE: {
+        int sweep = !strcmp(a0, "uninstall"), restore = !strcmp(a0, "restore");
+        int retry = f->admin_attempts && f->win_retry_scope;
+        int done = !strcmp(a0, "install") && f->cache && f->cache_record_ok &&
+                   f->bridge_installed && !strcmp(f->bridge_installed, f->bridge_sha);
+        s(o, FACT_WIN_SCOPE, sweep ? "*" : retry ? f->win_retry_scope :
+          f->win_scope ? f->win_scope : done ? "" : "7.2.10:1111111111111111");
+        s(o, FACT_WIN_SCOPE_VERSIONS, retry ? f->win_retry_versions :
+          f->win_scope_versions ? f->win_scope_versions : (sweep || done) ? "" : "7.2.10\n");
+        s(o, FACT_WIN_SCOPE_AFFECTED, f->win_scope_affected ? f->win_scope_affected : restore ? "7.2.10\n" : "");
+        core_fact_i64(o, FACT_STEP_CODE, f->win_scope_code);
+        return 0;
+    }
+    case CORE_STEP_WIN_ADMIN_TARGETS:
+        s(o, FACT_STEP_TEXT, f->win_admin_targets);
+        core_fact_flag(o, FACT_STEP_FLAG, f->win_root_kept);
+        return 0;
+    case CORE_STEP_WIN_R1_DISMISS: {   /* N10: "r1:<version>" added to dismissed for each named, or not */
+        pthread_mutex_lock(&f->mu);
+        int rc = f->r1_dismiss_rc;
+        if (rc == 0) f->r1_dismissed = 1;
+        pthread_mutex_unlock(&f->mu);
+        if (rc != 1) s(o, FACT_STEP_TEXT, a0);   /* the versions named, all still to put back */
+        if (rc == 2) core_fact_i64(o, FACT_STEP_CODE, 13);
+        return rc;
+    }
+#endif
     default: return 0;
     }
 }
@@ -786,7 +956,11 @@ static int32_t h_admin_body(void *ctx, int32_t kind, const char *version, const 
     int32_t rc = f->nadmin_rc ? f->admin_rc[i < f->nadmin_rc ? i : f->nadmin_rc - 1] : 0;
     if (rc >= 0 && (rc & FAKE_NP) && f->c && !f->freed) core_admin_note(f->c, CORE_ADMIN_NOTE_NOT_PERMITTED);
     if (rc >= 0) rc &= ~FAKE_NP;
-    if (rc >= 0 && rc != 1223 && f->c && !f->freed) core_flow_progress(f->c, CORE_PROGRESS_ADMIN_ATTEMPT, 1, 0);   /* the password accepted (1223: UAC declined, Windows) */
+    int started = rc >= 0 && rc != 1223;   /* 1223: UAC declined, Windows */
+#ifdef CORE_WIN_POLICY
+    if (rc == ROOT_WIN_START_TIMEOUT) started = 0;
+#endif
+    if (started && f->c && !f->freed) core_flow_progress(f->c, CORE_PROGRESS_ADMIN_ATTEMPT, 1, 0);
     pthread_mutex_lock(&f->mu);
     int om2 = f->om2 == 2;
     if (om2) f->om2 = 3;
@@ -796,6 +970,12 @@ static int32_t h_admin_body(void *ctx, int32_t kind, const char *version, const 
     if (rc >= 0 && f->admin_still_closing && f->c && !f->freed) core_flow_progress(f->c, CORE_PROGRESS_STILL_CLOSING, 0, 0);
     if (rc >= 0 && f->admin_still_closing > 1 && f->c && !f->freed) core_flow_progress(f->c, CORE_PROGRESS_STILL_CLOSING, 1, 0);   /* ... closed */
     if (rc >= 0 && f->admin_restart && f->c && !f->freed) core_admin_note(f->c, CORE_ADMIN_NOTE_RESTART_PENDING);
+    if (rc == 0 && kind == CORE_ADMIN_RESTORE) {   /* Pioneer's file is back: R1's next answer */
+        pthread_mutex_lock(&f->mu);
+        f->r1_state = f->r1_after_restore;
+        f->r1_restored = 1;
+        pthread_mutex_unlock(&f->mu);
+    }
 #endif
     if (rc == 0 && (kind == CORE_ADMIN_CACHE_INSTALL || kind == CORE_ADMIN_CACHE_REINSTALL)) f->cache = f->cache_after_admin;
     if (rc == 0 && kind == CORE_ADMIN_CACHE_UNINSTALL) f->cache = 0;
@@ -807,7 +987,32 @@ static int32_t h_slow_body(void *ctx, core_slow kind, const char *key, size_t ke
     ff *f = ctx;
     (void)key_len;
     TR(f, "slow ", kind == CORE_SLOW_MODEL_SHA ? "MODEL_SHA " : "? ", key);
+    pthread_mutex_lock(&f->mu);
     f->slow_calls++;
+    pthread_mutex_unlock(&f->mu);
+#ifdef CORE_WIN_POLICY
+    if (kind == CORE_SLOW_LOCATION && f->location_slow_reply) {
+        if (f->location_slow_reply == 2) return CORE_SLOW_NOT_NOW;
+        core_fact_flag(out, FACT_LOC_MEASURED, 1);
+        core_fact_i64(out, FACT_LOC_KIND, LOC_CHOSEN);
+        core_fact_i64(out, FACT_LOC_PROBE, PROBE_AVAILABLE);
+        core_fact_i64(out, FACT_LOC_PAUSED_FLOOR, 5LL << 30);
+        s(out, FACT_LOC_DRIVE, "STICK");
+        return 0;
+    }
+    if (kind == CORE_SLOW_R1) {   /* the answer as asked; the first ask may wait for its release */
+        pthread_mutex_lock(&f->mu);
+        int first = f->r1_calls++ == 0, none = f->r1_none, dismissed = f->r1_dismissed;
+        int64_t state = f->r1_state;
+        if (key_len != 0 || (key && *key)) f->r1_keyed++;
+        while (first && f->r1_hold && !f->r1_released) pthread_cond_wait(&f->cv, &f->mu);
+        pthread_mutex_unlock(&f->mu);
+        if (none) return 1;
+        core_fact_i64(out, FACT_R1_STATE, state);
+        if (state != R1_OK) core_fact_flag(out, FACT_R1_DISMISSED, dismissed);   /* N10 */
+        return 0;
+    }
+#endif
     if (!f->installed_sha) return 1;
     core_fact_str(out, FACT_SHA256, f->installed_sha, CORE_NTS);
     return 0;
@@ -860,7 +1065,11 @@ static int32_t h_admin(void *ctx, int32_t kind, const char *version, const char 
 static int32_t h_slow(void *ctx, core_slow kind, const char *key, size_t key_len, core_facts *out) {
     /* the location: the cheap facts' snapshot, as a host without the memo; not counted, so the
      * matrix's calls stay the flows' own (the measure after an action runs beside them) */
-    if (kind == CORE_SLOW_LOCATION) return 1;
+    if (kind == CORE_SLOW_LOCATION
+#ifdef CORE_WIN_POLICY
+        && !((ff *)ctx)->location_slow_reply
+#endif
+    ) return 1;
     host_call(ctx);
     int32_t rc = h_slow_body(ctx, kind, key, key_len, out);
     host_return(ctx);
@@ -883,6 +1092,9 @@ static void ff_init(ff *f) {
     f->installed_sha = NULL;
     f->plus_ok = f->cache_ok = 1;
     f->loc_size_kind = -1;
+#ifdef CORE_WIN_POLICY
+    f->loc_measured = -1;
+#endif
     f->set_size_kind = -1;
     f->bump_status_gen_at = f->change_chosen_at = -1;
     f->hold_dialog_at = -1;
@@ -1375,8 +1587,38 @@ static void t_preflight(void) {
     settle(&f);
     CHECK(f.ndialogs == 2 && !strcmp(f.dlg_title[1], "rekordbox open") &&
           !strcmp(f.dlg_msg[1], "Quit rekordbox (also in other accounts on this Mac), then click Try Again.") && !strcmp(f.dlg_buttons[1], "Try Again|Cancel"));
-    CHECK(has(&f, "log rekordbox is open: nothing changed") && !has(&f, "step MODEL_COPY"));
+    CHECK(has(&f, "log rekordbox is open or updating: nothing changed") && !has(&f, "step MODEL_COPY"));
     ended_clean(&f, "rekordbox opened");
+    ff_end(&f);
+    /* rekordbox's updater started during the downloads (audit a-a6-F1): asked as rekordbox open
+     * is, the model not copied while it runs; Try Again once it is gone copies it */
+    for (int again = 0; again < 2; again++) {
+        const char *ctx = again ? "updater gone after Try Again" : "updater during the downloads, Cancel";
+        ff_init(&f);
+        answers(&f, 2, "Install", again ? "Try Again" : "Cancel");
+        f.updating_n = 1;
+        f.updating_from = 2;   /* preflight's check: idle; the one after the downloads: updating */
+        ev(&f, "{\"ev\":\"click\",\"id\":\"install_plus\"}");
+        settle(&f);
+        CHECKS(f.ndialogs == 2 && !strcmp(f.dlg_title[1], "rekordbox updating")
+                   && !strcmp(f.dlg_msg[1], "Wait until rekordbox's installer or updater has finished, then try again.")
+                   && !strcmp(f.dlg_buttons[1], "Try Again|Cancel"), ctx);
+        if (again) CHECKS(has(&f, "step MODEL_COPY") && f.rb_checks >= 3, ctx);
+        else CHECKS(has(&f, "log rekordbox is open or updating: nothing changed") && !has(&f, "step MODEL_COPY"), ctx);
+        ended_clean(&f, ctx);
+        ff_end(&f);
+    }
+    /* and before a restore: Uninstall Demucs v4 with the updater started after preflight */
+    ff_init(&f);
+    f.plus = f.chosen_model = 1;
+    answers(&f, 2, "Uninstall", "Cancel");
+    f.updating_n = 1;
+    f.updating_from = 2;
+    ev(&f, "{\"ev\":\"click\",\"id\":\"uninstall_plus\"}");
+    settle(&f);
+    CHECK(f.ndialogs == 2 && !strcmp(f.dlg_title[1], "rekordbox updating") && !strcmp(f.dlg_buttons[1], "Try Again|Cancel"));
+    CHECK(has(&f, "log rekordbox is open or updating: Demucs v4 left in place") && !has(&f, "step MODEL_RESTORE"));
+    ended_clean(&f, "updater before the restore");
     ff_end(&f);
 }
 
@@ -1475,6 +1717,37 @@ static void t_uninstall_cache(void) {
                    "log admin run (remove-root-folder), attempt 1", "admin 3   - - 0"));
     CHECK(frame(&f, "Removing the copy of rekordbox's files…|1|2"));
     ended_clean(&f, "root folder");
+    ff_end(&f);
+    /* ... Cancel there changes nothing (audit a-a6-F6): Stems Cache stays chosen, rekordbox_model
+     * isn't written, nothing runs as administrator */
+    ff_init(&f);
+    f.cache = 0;
+    f.chosen_cache = f.traces = 1;
+    f.rb_folder = 0;
+    f.root_folder = 1;
+    f.config_sets = 1;
+    answers(&f, 2, "Uninstall", "Cancel");
+    ev(&f, "{\"ev\":\"click\",\"id\":\"uninstall_cache\"}");
+    settle(&f);
+    CHECK(f.ndialogs == 2 && !strcmp(f.dlg_title[1], "rekordbox missing") && has(&f, "log   user chose: Cancel"));
+    CHECK(f.chosen_cache == 1 && count_of(&f, "step SET_CHOSEN") == 0 && count_of(&f, "step CONFIG_WRITE rekordbox_model") == 0 && count_of(&f, "admin ") == 0);
+    CHECK(has(&f, "log the copy of rekordbox's files stays: Stems Cache's choice kept") && has(&f, "log state: STATE"));
+    ended_clean(&f, "root folder kept");
+    ff_end(&f);
+    /* the updater starts after preflight: Cancel at the third dialog keeps the choice too */
+    ff_init(&f);
+    f.chosen_cache = f.traces = f.root_folder = f.config_sets = 1;
+    f.rb_folder = 0;
+    f.updating_n = 1;
+    f.updating_from = 2;
+    answers(&f, 3, "Uninstall", "Remove", "Cancel");
+    ev(&f, "{\"ev\":\"click\",\"id\":\"uninstall_cache\"}");
+    settle(&f);
+    CHECK(f.ndialogs == 3 && !strcmp(f.dlg_title[2], "rekordbox updating"));
+    CHECK(f.chosen_cache == 1 && count_of(&f, "step SET_CHOSEN") == 0 && count_of(&f, "step CONFIG_WRITE rekordbox_model") == 0 && count_of(&f, "admin ") == 0);
+    CHECK(has(&f, "log   rekordbox is open or updating: stopped"));
+    CHECK(has(&f, "log stopped: Stems Cache's choice kept"));
+    ended_clean(&f, "root folder removal cancelled while updating");
     ff_end(&f);
     /* a standard account: not run, said so */
     ff_init(&f);
@@ -1607,6 +1880,18 @@ static void t_uninstall_all(void) {
                                                    "RB Stems Plus is already changing rekordbox. Wait a moment, then try again."));
     CHECK(has(&f, "log Stems Cache could not be removed: stopping, nothing else deleted"));
     ended_clean(&f, "cache not removed");
+    ff_end(&f);
+    /* the updater starts before the model restore: Cancel keeps the app's files */
+    ff_init(&f);
+    f.plus = f.chosen_model = 1;
+    f.updating_n = 1;
+    f.updating_from = 2;
+    answers(&f, 2, "Uninstall", "Cancel");
+    ev(&f, "{\"ev\":\"menu\",\"id\":\"uninstall_all\"}");
+    settle(&f);
+    CHECK(has(&f, "log rekordbox is open or updating: stopping, nothing else deleted"));
+    CHECK(count_of(&f, "step MODEL_RESTORE") == 0 && count_of(&f, "step REMOVE_OWN_FOLDERS") == 0);
+    ended_clean(&f, "updater before the complete uninstall's restore");
     ff_end(&f);
 }
 
@@ -1940,6 +2225,22 @@ static void t_admin_busy_lost(void) {
     ff_end(&f);
 }
 
+#ifdef CORE_WIN_POLICY
+static void t_win_report_first_timeout(void) {
+    ff f;
+    ff_config = "{\"version\":\"1.4.0\",\"os\":\"win\",\"paths\":{\"home\":\"C:\\\\Users\\\\x\"}}";
+    ff_init(&f);
+    ff_config = NULL;
+    f.report_plus = 1;
+    f.report_chosen_location = 1;
+    answers(&f, 1, "Done");
+    ev(&f, "{\"ev\":\"menu\",\"id\":\"create_report\"}");
+    settle(&f);
+    CHECKS(has(&f, "step REPORT_ZIP 0 Demucs v4 is on. 1 Checking where stems are saved… 1"), f.trace);
+    ff_end(&f);
+}
+#endif
+
 static void t_update_report(void) {
     ff f;
     ff_init(&f);
@@ -2196,6 +2497,25 @@ static void t_settings(void) {
     CHECK(frame(&f, "Looking for saved stems on \"GLS\"…|1|0") && frame(&f, "Deleting the stems saved on this Mac…|1|0"));
     ended_clean(&f, "change location");
     ff_end(&f);
+    /* An unreadable source and destination still get a confirmation with the deletion warning. */
+    ff_init(&f);
+    f.set_gb = "20";
+    f.set_days = "30";
+    f.set_can_choose = 1;
+    f.row_answer[0] = 0;
+    f.pick = f.probe_real = f.probe_mount = "/Volumes/GLS";
+    f.probe_drive = "GLS";
+    f.discover = 2;
+    f.disc_dir = "/Volumes/GLS/RB Stems Plus Cache";
+    f.disc_id = "abc";
+    f.writable = 1;
+    f.size_dir_unavailable = f.size_this_mac_reply = 1;
+    answers(&f, 2, "", "Cancel");
+    ev(&f, "{\"ev\":\"menu\",\"id\":\"settings\"}");
+    settle(&f);
+    CHECK(!strcmp(f.dlg_msg[1], "Stems Cache will use the stems already saved on \"GLS\". "
+                               "The stems saved on this Mac will be deleted: rekordbox separates those tracks again the next time you load them."));
+    ff_end(&f);
     /* the same location, renamed: only cache_dir changes */
     ff_init(&f);
     f.set_gb = "20";
@@ -2429,6 +2749,30 @@ static void t_request_updating(void) {
 
 /* SO14: Reinstall Now reinstalls only what went missing: both chosen, Demucs v4 still there and
  * Stems Cache gone (a rekordbox update) is Stems Cache alone, the model untouched */
+static void t_request_model_offer(void) {
+    ff f;
+    ff_init(&f);
+    f.chosen_model = f.chosen_cache = 1;
+    f.request_age = 30;
+    f.request_features = "model\n";
+    ev(&f, "{\"ev\":\"shown\"}");
+    settle(&f);
+    CHECKS(has(&f, "step MODEL_COPY") && !has(&f, "step BLOCKED cache"), f.trace);
+    ended_clean(&f, "model offer with missing cache");
+    ff_end(&f);
+
+    ff_init(&f);
+    f.chosen_model = f.chosen_cache = 1;
+    f.leftover_id = "reinstall-missing-model";
+    f.leftover_label = "Reinstall Demucs v4";
+    answers(&f, 1, "Continue");
+    ev(&f, "{\"ev\":\"shown\"}");
+    settle(&f);
+    CHECKS(has(&f, "step MODEL_COPY") && !has(&f, "step BLOCKED cache"), f.trace);
+    ended_clean(&f, "resumed model offer with missing cache");
+    ff_end(&f);
+}
+
 static void t_request_cache_only(void) {
     ff f;
     ff_init(&f);
@@ -2951,18 +3295,23 @@ static int reminders_shown(ff *f) {
     return on;
 }
 static void t_watcher_follows(void) {
+#ifdef CORE_WIN_POLICY
+    static const char *const off_line = "log watcher: installed but not running (turned off in Startup apps, or not started): reinstall reminders are off";
+#else
+    static const char *const off_line = "log watcher: installed but not running (turned off in Login Items, or not loaded): reinstall reminders are off";
+#endif
     ff f;
     ff_init(&f);
     f.watcher_off = 1;
     answers(&f, 2, "Install", "Reinstall");
     ev(&f, "{\"ev\":\"click\",\"id\":\"install_plus\"}");
     settle(&f);
-    CHECK(has(&f, "step LAUNCH_AGENT_LOAD") && reminders_shown(&f) && count_of(&f, "log watcher: installed but not running (turned off in Login Items, or not loaded): reinstall reminders are off") == 1);
+    CHECK(has(&f, "step LAUNCH_AGENT_LOAD") && reminders_shown(&f) && count_of(&f, off_line) == 1);
     f.plus = 1;
     f.watcher_off = 0;
     ev(&f, "{\"ev\":\"click\",\"id\":\"reinstall_plus\"}");
     settle(&f);
-    CHECK(count_of(&f, "step LAUNCH_AGENT_LOAD") == 2 && !reminders_shown(&f) && count_of(&f, "log watcher: installed but not running (turned off in Login Items, or not loaded): reinstall reminders are off") == 1);
+    CHECK(count_of(&f, "step LAUNCH_AGENT_LOAD") == 2 && !reminders_shown(&f) && count_of(&f, off_line) == 1);
     ended_clean(&f, "watcher off, then on after Reinstall");
     ff_end(&f);
     ff_init(&f);
@@ -2975,7 +3324,7 @@ static void t_watcher_follows(void) {
     f.watcher_off = 0;   /* the LaunchAgent removed: nothing turned off any more */
     ev(&f, "{\"ev\":\"click\",\"id\":\"uninstall_plus\"}");
     settle(&f);
-    CHECK(has(&f, "step LAUNCH_AGENT_UNLOAD") && !reminders_shown(&f) && count_of(&f, "log watcher: installed but not running (turned off in Login Items, or not loaded): reinstall reminders are off") == 1);
+    CHECK(has(&f, "step LAUNCH_AGENT_UNLOAD") && !reminders_shown(&f) && count_of(&f, off_line) == 1);
     ended_clean(&f, "watcher off, then the last feature removed");
     ff_end(&f);
 }
@@ -3014,7 +3363,7 @@ static void t_watcher(void) {
     CHECK(f.ndialogs == 1 && !strcmp(f.dlg_title[0], "rekordbox put its own stems model back")
           && !strcmp(f.dlg_msg[0], "Demucs v4 is off. Reinstall it to separate tracks with Demucs v4 instead of rekordbox's own model.")
           && !strcmp(f.dlg_buttons[0], "Reinstall Now|Remind Me Later|Don't Ask Again for This Version"));
-    CHECK(in_order(&f, 4, "log user chose: Reinstall Now", "step WATCH_REINSTALL", "step WATCH_LOCK release", "close_reply WATCHER_DONE 1"));
+    CHECK(in_order(&f, 4, "log user chose: Reinstall Now", "step WATCH_REINSTALL model", "step WATCH_LOCK release", "close_reply WATCHER_DONE 1"));
     CHECK(!has(&f, "step WATCH_LOCK again"));   /* the app takes over: no look at the again-mark */
     ff_end(&f);
 
@@ -3328,12 +3677,16 @@ void flows_tests(int *passed, int *failed) {
     RUN(t_uninstall_all);
     RUN(t_uninstall_all_drive_named);
     RUN(t_request_updating);
+    RUN(t_request_model_offer);
     RUN(t_request_cache_only);
     RUN(t_uninstall_cache_gone);
     RUN(t_offer_matching);
     RUN(t_remove_anyway);
     RUN(t_startup);
     RUN(t_update_report);
+#ifdef CORE_WIN_POLICY
+    RUN(t_win_report_first_timeout);
+#endif
     RUN(t_quit_keeps_busy);
     RUN(t_admin_busy_lost);
     RUN(t_update_stops_preparing);

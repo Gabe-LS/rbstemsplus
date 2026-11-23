@@ -196,6 +196,13 @@ static void on_line(void *ctx, const char *s, size_t n) {
     case ADMIN_LINE_FLOOR:
         if (strlen(v) < sizeof l->res->floor) memcpy(l->res->floor, v, strlen(v) + 1);
         break;
+    case ADMIN_LINE_TARGET:
+        if (l->res->ntargets < ADMIN_TARGETS_MAX) {
+            admin_target_result *t = &l->res->targets[l->res->ntargets];
+            if (!admin_target_value(v, t->version, &t->code, t->what)) l->res->ntargets++;
+        }
+        break;
+    case ADMIN_LINE_ROOT_KEPT: l->res->root_kept = 1; break;
     default: break;   /* a newer worker's record: ignored */
     }
 }
@@ -238,16 +245,24 @@ static void release_hold(void *ctx) {
 
 /* exe elevated for verb. sha: the sha256 a bin\ worker was picked by (NULL for the app folder's
  * copy, which admin_client_run checked against own_sha256) */
-static int run_one(const admin_client *c, const char *exe, const char *sha, int verb, const char *version, int force, admin_result *res) {
+static int run_one(const admin_client *c, const char *exe, const char *sha, int verb, const char *targets, int force, admin_result *res) {
     const int bin = exe != c->app_copy;
     admin_args a;
     memset(&a, 0, sizeof a);
     a.verb = verb;
     a.proto = ADMIN_PROTO;
-    snprintf(a.version, sizeof a.version, "%s", version ? version : "");
+    /* --targets: the checked scope for install and restore, "*" for the verbs that sweep */
+    if (verb == ADMIN_INSTALL || verb == ADMIN_RESTORE) {
+        if (admin_targets_parse(targets ? targets : "", &a) || a.all) {
+            if (c->log) c->log(c->ctx, "the scope to change isn't valid", 31);
+            return -1;
+        }
+    } else
+        a.all = 1;
     if (verb == ADMIN_INSTALL || verb == ADMIN_INSTALL_WORKER) {
-        if (!source_ready(c)) return RUN_NO_SOURCE;
+        if (!source_ready(c) || !c->manifest || !payload_is_sha256(c->manifest)) return RUN_NO_SOURCE;
         snprintf(a.source, sizeof a.source, "%s", c->source);
+        memcpy(a.manifest, c->manifest, 65);
     }
     a.force = force != 0;
     unsigned char rnd[16];
@@ -296,7 +311,7 @@ static int run_one(const admin_client *c, const char *exe, const char *sha, int 
     return r ? -1 : code;
 }
 
-int admin_client_run(const admin_client *c, int verb, const char *version, int force, admin_result *res) {
+int admin_client_run(const admin_client *c, int verb, const char *targets, int force, admin_result *res) {
     memset(res, 0, sizeof *res);
     res->code = -1;
     int installed_own = 0;
@@ -343,14 +358,15 @@ int admin_client_run(const admin_client *c, int verb, const char *version, int f
         }
         int x;
         if (pick == ADMIN_PICK_INSTALL_OWN) {
-            x = run_one(c, exe, picked, ADMIN_INSTALL_WORKER, "", 0, res);
+            x = run_one(c, exe, picked, ADMIN_INSTALL_WORKER, "*", 0, res);
             if (x == ADMIN_EXIT_RUN_AGAIN) {
                 installed_own = 1;
                 continue;
             }
         } else
-            x = pick == ADMIN_PICK_APP_COPY ? run_one(c, c->app_copy, NULL, verb, version, force, res) : run_one(c, exe, picked, verb, version, force, res);
+            x = pick == ADMIN_PICK_APP_COPY ? run_one(c, c->app_copy, NULL, verb, targets, force, res) : run_one(c, exe, picked, verb, targets, force, res);
         if (x == RUN_NO_SOURCE) {
+            res->no_source = 1;
             res->update_first = 1;
             return res->code = ADMIN_EXIT_PROTOCOL;
         }

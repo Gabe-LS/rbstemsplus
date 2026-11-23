@@ -29,9 +29,11 @@ cd "$root"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/rbsp-watch.XXXXXX")"
 trap 'rm -rf "${scratch:?}"' EXIT
 
+sh win/c/tests/watch-kept-test.sh "$out" || fails=$((fails + 1))
+
 # the core as the watcher links it (its pure decisions), the win/c modules it uses
 CORE="core/watcher.c core/state.c core/text.c core/arena.c core/json.c core/helper_lines.c core/words.c core/schema.c"
-WATCH="win/c/watch.c win/c/watch_facts.c win/c/compat.c win/c/payload.c win/c/payload_store.c win/c/fs_write.c win/c/sig.c"
+WATCH="win/c/watch.c win/c/watch_facts.c win/c/dismissed.c win/c/compat.c win/c/inventory.c win/c/receipt.c win/c/pe_code.c win/c/native_facts.c win/c/payload.c win/c/payload_store.c win/c/fs_write.c win/c/sig.c"
 FW="-framework Security -framework CoreFoundation -framework Accelerate"
 for v in plain asan; do
   case "$v" in
@@ -40,7 +42,7 @@ for v in plain asan; do
   esac
   # shellcheck disable=SC2086
   if clang $STD $WARN $MAC $san -DCORE_WIN_POLICY -DWATCH_TEST_HOOKS -Icore -Icommon $WATCH $CORE common/plat_mac.c win/c/tests/watch_test.c \
-       win/c/tests/sig_mac.c $FW -o "$out/winc-watch-test-$v" > "$out/watch-build-$v.log" 2>&1; then
+       win/c/tests/sig_mac.c $FW -Wl,-dead_strip -o "$out/winc-watch-test-$v" > "$out/watch-build-$v.log" 2>&1; then
     d="$scratch/$v"; mkdir -p "$d"
     if "$out/winc-watch-test-$v" "$d" "$pe" > "$out/winc-watch-test-$v.log" 2>&1; then echo "ok   the watcher's tests ($v): $(tail -1 "$out/winc-watch-test-$v.log")"
     else tail -30 "$out/winc-watch-test-$v.log"; echo "FAIL the watcher's tests ($v)"; fails=$((fails + 1)); fi
@@ -70,7 +72,11 @@ keysc="$out/watch_keys.c"
 pf="$(scripts/win-deps.sh pocketfft)"
 ver="$(tr -d '[:space:]' < VERSION)"
 v1="${ver%%.*}"; rest="${ver#*.}"; v2="${rest%%.*}"; v3="${rest#*.}"; v3="${v3%%[!0-9]*}"
-CORESRC="arena dialog dialog_texts flow flows helper_lines ids json lights mask menus model schema selftest state text watcher words core dump"
+# The prepared playlist check shares the app's facts and helper process.
+PREPARE="win/c/inventory.c win/c/receipt.c win/c/pe_code.c win/c/host_facts.c win/c/native_facts.c win/c/update.c win/c/update_rules.c win/c/unzip.c
+  win/c/native_location.c win/c/native_config.c win/c/volumes.c win/c/volumes_win.c common/cfg_ini.c common/path_rules.c
+  common/marker.c win/c/helper_proc.c win/c/helper_proc_win.c win/c/admin.c win/c/admin_proto.c"
+CORESRC="$(core/build.sh srcs)"
 for a in x64 arm64; do
   d="$out/watch-$a"
   mkdir -p "$d"
@@ -79,7 +85,7 @@ for a in x64 arm64; do
   ok=1
   for s in $CORESRC; do
     # shellcheck disable=SC2086
-    "$WCC" "$a" $WARN -Wno-unused-command-line-argument -DCORE_WIN_POLICY -Icore -c "core/$s.c" -o "$d/core-$s.o" > "$d/build.log" 2>&1 \
+    "$WCC" "$a" $WARN -Wno-unused-command-line-argument -DCORE_WIN_POLICY -Icore -c "core/$s" -o "$d/core-${s%.c}.o" > "$d/build.log" 2>&1 \
       || { cat "$d/build.log"; echo "FAIL core/$s.c for Windows $a"; ok=0; break; }
   done
   # plat_win.c (PLAT_NO_BLOCKS, as the core and the worker build it) and pocketfft (its own warnings
@@ -97,9 +103,10 @@ for a in x64 arm64; do
   if [ "$ok" = 1 ] \
      && (cd "$d" && "$root/$WCC" --tool "$a" windres watch.rc -O coff -o watch.res.o) > "$d/build.log" 2>&1 \
      && "$WCC" "$a" $WARN -Wno-unused-command-line-argument -municode -mwindows -DCORE_WIN_POLICY "-DRBSP_VERSION=\"$ver\"" -Icore -Icommon -Iwin/c \
-          win/c/watch_win.c win/c/watch.c win/c/watch_facts.c win/c/compat.c win/c/compat_win.c win/c/payload.c win/c/payload_store.c win/c/fs_write.c \
+          $PREPARE win/c/watch_win.c win/c/watch.c win/c/watch_facts.c win/c/dismissed.c win/c/compat.c win/c/compat_win.c win/c/payload.c win/c/payload_store.c win/c/fs_write.c \
           win/c/sig.c win/c/sig_bcrypt.c "$keysc" "$d/watch.res.o" "$lib" \
-          -lcomctl32 -lshell32 -lole32 -luuid -ladvapi32 -luser32 -lntdll -o "$exe" >> "$d/build.log" 2>&1; then
+          -lcomctl32 -lshell32 -lole32 -luuid -ladvapi32 -luser32 -lntdll -Wl,-Map="$exe.map" -o "$exe" >> "$d/build.log" 2>&1; then
+    sh win/c/tests/watch-map.sh release "$exe.map" || fails=$((fails + 1))
     imports="$("$WCC" --tool "$a" llvm-objdump -p "$exe" | sed -n 's/^ *DLL Name: //p' | sort -u | tr '\n' ' ')"
     # shellcheck disable=SC2086
     bad="$(printf '%s\n' $imports | grep -viE '^(KERNEL32|ADVAPI32|USER32|SHELL32|ole32|COMCTL32|ntdll|api-ms-win-crt-[a-z0-9-]+)\.dll$' || true)"
@@ -124,17 +131,13 @@ for a in x64 arm64; do
   # shellcheck disable=SC2086
   if [ "$ok" = 1 ] && (cd common && "$root/$WCC" "$a" $WARN -Wno-unused-command-line-argument -DPLAT_NO_BLOCKS -DPLAT_TEST_PROGRAMS -I"$pf" \
        -c plat_win.c -o "$d/test-plat_win.o") > "$d/test-build.log" 2>&1 \
-     && "$WCC" "$a" $WARN -Wno-unused-command-line-argument -municode -mwindows -DCORE_WIN_POLICY -DWATCH_TEST_PATHS \
-       "-DRBSP_VERSION=\"$ver\"" -Icore -Icommon -Iwin/c win/c/watch_win.c win/c/watch.c win/c/watch_facts.c win/c/compat.c \
+     && "$WCC" "$a" $WARN -Wno-unused-command-line-argument -municode -mwindows -DCORE_WIN_POLICY -DWATCH_TEST_PATHS -DWATCH_TEST_HOOKS \
+       "-DRBSP_VERSION=\"$ver\"" -Icore -Icommon -Iwin/c $PREPARE win/c/watch_win.c win/c/watch.c win/c/watch_facts.c win/c/dismissed.c win/c/compat.c \
        win/c/compat_win.c win/c/payload.c win/c/payload_store.c win/c/fs_write.c win/c/sig.c win/c/sig_bcrypt.c "$keysc" "$d/watch.res.o" "$d/test-plat_win.o" "$lib" \
-       -lcomctl32 -lshell32 -lole32 -luuid -ladvapi32 -luser32 -lntdll -o "$d/rbsp-watch-test-$a.exe" >> "$d/test-build.log" 2>&1; then
+       -lcomctl32 -lshell32 -lole32 -luuid -ladvapi32 -luser32 -lntdll -Wl,-Map="$d/rbsp-watch-test-$a.exe.map" \
+       -o "$d/rbsp-watch-test-$a.exe" >> "$d/test-build.log" 2>&1; then
     echo "ok   rbsp-watch-test-$a.exe (the VM's test build) builds"
-    # Program Files: ProgramFilesDir read by both, the override in the test build only
-    has16() { python3 -I -c 'import sys; sys.exit(0 if sys.argv[2].encode("utf-16-le") in open(sys.argv[1], "rb").read() else 1)' "$1" "$2"; }
-    if has16 "$exe" RBSP_TEST_PROGRAMS; then echo "FAIL rbsp-watch-$a.exe reads RBSP_TEST_PROGRAMS"; fails=$((fails + 1))
-    elif ! has16 "$d/rbsp-watch-test-$a.exe" RBSP_TEST_PROGRAMS; then echo "FAIL rbsp-watch-test-$a.exe doesn't read RBSP_TEST_PROGRAMS"; fails=$((fails + 1))
-    elif ! has16 "$exe" ProgramFilesDir || ! has16 "$d/rbsp-watch-test-$a.exe" ProgramFilesDir; then echo "FAIL rbsp-watch ($a) doesn't read ProgramFilesDir"; fails=$((fails + 1))
-    else echo "ok   rbsp-watch ($a): Program Files from ProgramFilesDir, RBSP_TEST_PROGRAMS in the test build only"; fi
+    sh win/c/tests/watch-map.sh test "$d/rbsp-watch-test-$a.exe.map" || fails=$((fails + 1))
   else
     cat "$d/test-build.log"; echo "FAIL rbsp-watch-test-$a.exe doesn't build"; fails=$((fails + 1))
   fi

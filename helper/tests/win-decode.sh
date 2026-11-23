@@ -36,8 +36,13 @@ app="${RBSP_REKORDBOX_APP:-/Applications/rekordbox 7/rekordbox.app}"
 FLAC_VERSION="$(sed -n 's/^FLAC_VERSION=//p' "$root/bridge/build.sh")"
 flac="$root/build/helper/flac-$FLAC_VERSION"
 [ -f "$flac/lib/libFLAC.a" ] || "$root/helper/build.sh" "$out/helper" > "$out/helper-build.log"   # builds that libFLAC
+FLAC_PREFIX="$flac" sh "$here/pcm-host.sh"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/rbsp-win-decode.XXXXXX")"
 trap 'rm -rf "${scratch:?}"' EXIT
+clang -O2 -Wall -Wextra -Werror -o "$scratch/decode-dump-host" "$here/decode-dump-host.c"
+"$scratch/decode-dump-host" > "$scratch/dump-oom.out" 2> "$scratch/dump-oom.err"
+grep -qx 'fixture.m4a: out of memory' "$scratch/dump-oom.err"
+echo "decode-dump-host: float allocation failure releases the track"
 ln -s "$flac" "$scratch/flac"
 alac="$scratch/alac"
 "$root/scripts/deps.sh" group alac "$alac" > /dev/null
@@ -81,6 +86,9 @@ while IFS=$'\t' read -r n _ _ _; do files+=("$fix/$n"); done < "$fix/expect.txt"
 passed=0 failed=0
 ok() { echo "ok   $*"; passed=$((passed + 1)); }
 bad() { echo "FAIL $*"; failed=$((failed + 1)); }
+for v in mac win win-asan; do
+  if msg="$("$out/decode_dump-$v" --test-chunk 2>&1)"; then ok "$v $msg"; else bad "$v $msg"; fi
+done
 line() { grep -m1 "^$1	" "$2" | cut -f2- || true; }
 while IFS=$'\t' read -r n want why _; do
   m="$(line "$n" "$scratch/mac.txt")" w="$(line "$n" "$scratch/win.txt")"

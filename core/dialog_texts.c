@@ -2,6 +2,9 @@
  * Location.swift, Update.swift, Admin.swift): the flows (M6) show them; the order of the dialogs
  * is the flows'. */
 #include "internal.h"
+#ifdef CORE_WIN_POLICY
+#include "native.h"
+#endif
 
 #include <stdio.h>
 
@@ -26,7 +29,12 @@ void w_install_note(tbuf *b, int32_t plus, int32_t cache, int32_t reinstall, int
 
 void w_uninstall_note(tbuf *b, int32_t cache) { TB_TEXT0(b, cache ? T_UNINSTALL_NOTE_CACHE : T_UNINSTALL_NOTE_PLUS); }
 
+#ifdef CORE_WIN_POLICY
+static void uninstall_all_message(tbuf *b, int32_t others_cache, int32_t no_saved_model, const char *stems, const char *drive,
+                                  int32_t drive_connected, const char *unchecked_dir) {
+#else
 void w_uninstall_all_message(tbuf *b, int32_t others_cache, int32_t no_saved_model, const char *stems, const char *drive, int32_t drive_connected) {
+#endif
     char ab[2048], db[2048];   /* a drive's name: up to 255 UTF-16 units, 765 bytes */
     tbuf about, del;
     sub_text(b, ab, sizeof ab, &about);
@@ -37,6 +45,13 @@ void w_uninstall_all_message(tbuf *b, int32_t others_cache, int32_t no_saved_mod
     }
     sub_text(b, db, sizeof db, &del);
     core_slot sl[2] = {SLOT_S(drive, drive ? drive : ""), SLOT_S(size, stems ? stems : "")};
+#ifdef CORE_WIN_POLICY
+    if (unchecked_dir) {
+        core_slot loc[2] = {sl[0], SLOT_S(dir, unchecked_dir)};
+        if (TB_NAMELESS(&del, drive)) tb_text(&del, nameless_text(T_WIN_UNINSTALL_ALL_DRIVE_UNMEASURED), &loc[1], 1);
+        else tb_text(&del, T_WIN_UNINSTALL_ALL_DRIVE_UNMEASURED, loc, 2);
+    } else
+#endif
     if (drive) {
 #ifdef CORE_WIN_POLICY
         if (drive_connected && TB_NAMELESS(&del, drive)) tb_text(&del, nameless_text(T_UNINSTALL_ALL_DRIVE), &sl[1], 1);
@@ -53,6 +68,16 @@ void w_uninstall_all_message(tbuf *b, int32_t others_cache, int32_t no_saved_mod
     core_slot m[2] = {SLOT_N(message, ab, tb_len(&about)), SLOT_N(why, db, tb_len(&del))};
     tb_text(b, T_UNINSTALL_ALL_MSG, m, 2);
 }
+
+#ifdef CORE_WIN_POLICY
+void w_uninstall_all_message(tbuf *b, int32_t others_cache, int32_t no_saved_model, const char *stems, const char *drive, int32_t drive_connected) {
+    uninstall_all_message(b, others_cache, no_saved_model, stems, drive, drive_connected, NULL);
+}
+
+void w_win_uninstall_all_unmeasured(tbuf *b, int32_t others_cache, int32_t no_saved_model, const char *drive, const char *dir) {
+    uninstall_all_message(b, others_cache, no_saved_model, NULL, drive, 0, dir);
+}
+#endif
 
 void w_own_files_removed(tbuf *b, const char *about, int32_t fate, int32_t others_cache, int32_t cache_link, const char *const *left, int32_t nleft) {
     tb_puts(b, about ? about : "");
@@ -91,7 +116,8 @@ static void old_drive_stays(tbuf *b, const char *old_drive) {
 
 void w_switch_message(tbuf *b, const char *drive, int32_t has_found, int64_t found, int64_t this_mac, const char *old_drive) {
     core_slot d = SLOT_S(drive, drive ? drive : "");
-    if (has_found) {
+    if (has_found && found < 0) tb_text(b, T_SWITCH_FOUND_UNSIZED, &d, 1);
+    else if (has_found) {
         char sb[64];
         tbuf s;
         sub_text(b, sb, sizeof sb, &s);
@@ -100,7 +126,8 @@ void w_switch_message(tbuf *b, const char *drive, int32_t has_found, int64_t fou
         core_slot sl[2] = {SLOT_N(size, sb, tb_len(&s)), d};
         tb_text(b, T_SWITCH_FOUND, sl, 2);
     } else tb_text(b, T_SWITCH_NEW, &d, 1);
-    if (this_mac > 0) {
+    if (this_mac < 0) TB_TEXT0(b, T_SWITCH_LOCAL_DELETED_UNSIZED);
+    else if (this_mac > 0) {
         char sb[64];
         tbuf s;
         sub_text(b, sb, sizeof sb, &s);
@@ -189,6 +216,9 @@ void w_update_failed_message(tbuf *b, int32_t reason) {
 
 int32_t root_problem(int32_t code, core_text_id *title, core_text_id *body) {
     switch (code) {
+#ifdef CORE_WIN_POLICY
+    case ROOT_WIN_START_TIMEOUT: *title = T_WIN_ADMIN_START_FAILED; *body = T_WIN_ADMIN_START_TIMEOUT; return 1;
+#endif
     case ROOT_ALREADY_RUNNING: *title = T_ROOT_ALREADY_TITLE; *body = T_ROOT_ALREADY_MSG; return 1;
     case ROOT_INSTALLER_RUNNING: *title = T_ROOT_UPDATING_TITLE; *body = T_ROOT_UPDATING_MSG; return 1;
     case ROOT_REKORDBOX_MISSING: *title = T_ROOT_MISSING_TITLE; *body = T_ROOT_MISSING_MSG; return 1;
@@ -230,6 +260,11 @@ void w_cache_failure_reason(tbuf *b, int32_t failed, int32_t code, const char *p
 }
 
 #ifdef CORE_WIN_POLICY
+void w_win_batch_why(tbuf *b, int code, const char *programs) {
+    if (code == ROOT_REKORDBOX_OPEN) { TB_TEXT0(b, T_RB_OPEN_MSG); return; }
+    w_cache_failure_reason(b, 1, code, programs);
+}
+
 /* R1's line (W-core, app.md §5.2): what is wrong with rekordbox's ONNX Runtime and the button that
  * puts Pioneer's file back; nothing when there is nothing to put back */
 void w_r1_line(tbuf *b, int64_t state) {

@@ -886,7 +886,11 @@ static void t_menus(void) {
     fake_init(&f);
     core *c = new_core(&f);
     int n = core_menu_count(CORE_OS_MAC);
+#ifdef CORE_WIN_POLICY
+    CHECK(n < CORE_MENU_COUNT);   /* the Windows rows (win_menus.c) aren't the Mac's */
+#else
     CHECK(n == CORE_MENU_COUNT);
+#endif
     core_menu_item it;
     /* today's app-menu order: About, a separator, Update, Settings, Uninstall (C36) */
     CHECK(core_menu_at(CORE_OS_MAC, 1, &it) == CORE_OK && it.id == M_APP_ABOUT && it.kind == CORE_MENU_NATIVE);
@@ -894,13 +898,18 @@ static void t_menus(void) {
     CHECK(core_menu_at(CORE_OS_MAC, 4, &it) == CORE_OK && it.id == M_APP_SETTINGS && it.menu == M_APP && !strcmp(it.key, ",") && !strcmp(it.event, "settings"));
     CHECK(core_menu_at(CORE_OS_MAC, n, &it) == CORE_E_ARG);
     CHECK(core_menu_at(CORE_OS_MAC, 9, &it) == CORE_OK && it.id == M_APP_QUIT && it.kind == CORE_MENU_NATIVE && !strcmp(it.key, "q"));
-    /* nested: Manage › Demucs v4 › Install (C21) */
-    CHECK(core_menu_at(CORE_OS_MAC, M_MANAGE_PLUS_INSTALL, &it) == CORE_OK && it.menu == M_MANAGE_PLUS && core_menu_rows[M_MANAGE_PLUS].parent == M_MANAGE);
-    CHECK(core_menu_at(CORE_OS_MAC, M_HELP_HOME, &it) == CORE_OK && it.mods == CORE_MOD_CMD_OR_CTRL && !strcmp(it.key, "?"));
+    /* nested: Manage › Demucs v4 › Install (C21); a Mac item's place counts the Mac's rows only */
+    int at_install = 0, at_help = 0, before = 0;
+    for (int i = 0; i < CORE_MENU_COUNT; i++) {
+        if (i == M_MANAGE_PLUS_INSTALL) at_install = before;
+        if (i == M_HELP_HOME) at_help = before;
+        before += (core_menu_rows[i].os & 1) != 0;
+    }
+    CHECK(core_menu_at(CORE_OS_MAC, at_install, &it) == CORE_OK && it.id == M_MANAGE_PLUS_INSTALL && it.menu == M_MANAGE_PLUS && core_menu_rows[M_MANAGE_PLUS].parent == M_MANAGE);
+    CHECK(core_menu_at(CORE_OS_MAC, at_help, &it) == CORE_OK && it.id == M_HELP_HOME && it.mods == CORE_MOD_CMD_OR_CTRL && !strcmp(it.key, "?"));
 #ifdef CORE_WIN_POLICY
-    /* the Mac's own rows: About, Hide, Quit, two separators, Edit, Window */
-    CHECK(core_menu_count(CORE_OS_WIN) == n - 7);
-    CHECK(core_menu_at(CORE_OS_WIN, M_HELP_HOME - 7, &it) == CORE_OK && it.id == M_HELP_HOME && !strcmp(it.key, "F1") && it.mods == 0);
+    /* the Mac's own rows: About, Hide, Quit, two separators, Edit, Window (win_menus.c: Windows') */
+    CHECK(core_menu_count(CORE_OS_WIN) == CORE_MENU_COUNT - 7);
 #else
     CHECK(core_menu_count(CORE_OS_WIN) == 0);
 #endif
@@ -1814,6 +1823,25 @@ static void t_dfuzz(void) {
     LEAKCHECK();
 }
 
+#ifdef CORE_WIN_POLICY
+static void t_win_bad_rows(void) {
+    static const char *const bad[] = {
+        "7.2.19\t0\t0\t0\t0\t0\t7.2.19.1",
+        "7.2.19\t0\t0\t0\t0\t0\t7.2.19.1\n7.2.20\t5\t0\t0\t0\t0\t\n",
+        "7.2.19\t0\t0\t2\t0\t0\t\n",
+        "7.2.19\t0\t0\t0\t0\t0\t7.2.19.1\textra\n",
+        "7.2.19\t0\t0\t0\t0\t0\t\n7.2.19\t1\t0\t0\t0\t0\t\n",
+        "7.2.19\t0\t0\t0\t0\t0\t7.2.19.1\n7.2.20\t1\t0\t0\t0\t0\t\n",
+        "7.2.19\t4\t9\t0\t0\t0\t\xff\n",
+    };
+    win_row rows[2];
+    const char valid[] = "7.2.19\t0\t0\t1\t0\t0\t7.2.19.0342\n";
+    CHECK(win_rows_parse(valid, sizeof valid - 1, rows, 2) == 1);
+    for (size_t i = 0; i < sizeof bad / sizeof *bad; i++)
+        CHECK(win_rows_parse(bad[i], strlen(bad[i]), rows, i == 5 ? 1 : 2) == -1);
+}
+#endif
+
 int main(void) {
     t_selftest();
     t_new_refusals();
@@ -1843,6 +1871,9 @@ int main(void) {
     t_pump_in_post_main();
     t_reserved_zero();
     t_win_drain();
+#ifdef CORE_WIN_POLICY
+    t_win_bad_rows();
+#endif
     t_native();
     t_dfuzz();
     swift_vector_tests(&passed, &failed);   /* the pure functions against today's Swift (vectors.c) */
@@ -1851,6 +1882,7 @@ int main(void) {
     win_texts_tests(&passed, &failed);      /* the Windows column (W-core) */
     win_front_tests(&passed, &failed);      /* the Windows in-front policy (W-core) */
     view_tests(&passed, &failed);
+    win_menus_tests(&passed, &failed);      /* menus.def's Windows rows (W-core) */
     printf("%d passed, %d failed (%s, %s)\n", passed, failed,
 #ifdef CORE_WIN_POLICY
            "CORE_WIN_POLICY",

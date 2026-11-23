@@ -86,7 +86,7 @@ int admin_win_elevate(void *ctx, const char *exe, const char *params, const char
     HANDLE srv = INVALID_HANDLE_VALUE, ev = NULL, th = NULL;
     runas_job j;
     memset(&j, 0, sizeof j);
-    int r = -1;
+    int r = -1, stop_worker = 0;
     UINT dl = GetSystemDirectoryW(dir, MAX_PATH + 1);
     if (!we || !wp || !wn || !dl || dl > MAX_PATH) goto out;
     /* the server first: one instance, local clients only, never a pipe someone made before us */
@@ -96,8 +96,9 @@ int admin_win_elevate(void *ctx, const char *exe, const char *params, const char
     OVERLAPPED ov;
     memset(&ov, 0, sizeof ov);
     ov.hEvent = ev;
-    int connected = 0;
-    if (!ConnectNamedPipe(srv, &ov)) {
+    DWORD dummy;
+    int connected = ConnectNamedPipe(srv, &ov);
+    if (!connected) {
         DWORD e = GetLastError();
         if (e == ERROR_PIPE_CONNECTED) connected = 1;
         else if (e != ERROR_IO_PENDING) goto out;
@@ -107,7 +108,10 @@ int admin_win_elevate(void *ctx, const char *exe, const char *params, const char
     j.params = wp;
     j.dir = dir;
     j.owner = (HWND)aw->owner;
-    if (!(th = CreateThread(NULL, 0, runas_thread, &j, 0, NULL))) goto out;
+    if (!(th = CreateThread(NULL, 0, runas_thread, &j, 0, NULL))) {
+        if (!connected) { CancelIo(srv); GetOverlappedResult(srv, &ov, &dummy, TRUE); }   /* ov outlives the connect (audit b-a1b-F1) */
+        goto out;
+    }
     WaitForSingleObject(th, INFINITE);
     /* ShellExecuteExW has returned: the caller's hold on the exe goes now, before the session
      * (the worker's renames and deletes under its folders); the started process's image section
@@ -117,27 +121,37 @@ int admin_win_elevate(void *ctx, const char *exe, const char *params, const char
     if (!j.process) {
         aw->last_err = j.err;
         CancelIo(srv);
+        if (!connected) GetOverlappedResult(srv, &ov, &dummy, TRUE);   /* the cancelled connect done: ov (this stack's) is written no more (audit b-a1b-F1) */
         r = j.err == ERROR_CANCELLED ? ADMIN_EXIT_USER_STOPPED : -1;   /* UAC declined: the user stopped */
         goto out;
     }
     if (!connected) {
+        enum { ADMIN_CONNECT_MS = 60000 };   /* after consent, before the worker's own waits */
         HANDLE hs[2] = {ev, j.process};
-        DWORD w = WaitForMultipleObjects(2, hs, FALSE, INFINITE);
-        if (w != WAIT_OBJECT_0) {
-            /* it ended without connecting (it refused before the pipe, or never got there) */
+        DWORD w = WaitForMultipleObjects(2, hs, FALSE, ADMIN_CONNECT_MS);
+        if (w == WAIT_OBJECT_0) {
+            if (!GetOverlappedResult(srv, &ov, &dummy, FALSE) && GetLastError() != ERROR_PIPE_CONNECTED) goto out;
+        } else {
+            DWORD wait_err = w == WAIT_FAILED ? GetLastError() : ERROR_TIMEOUT;
             CancelIo(srv);
-            DWORD x = 0;
-            if (GetExitCodeProcess(j.process, &x)) *code = (int)x, r = 0;
-            goto out;
+            /* Drain the connect before freeing ov. A connection may have beaten cancellation. */
+            if (!GetOverlappedResult(srv, &ov, &dummy, TRUE) && GetLastError() != ERROR_PIPE_CONNECTED) {
+                if (w == WAIT_OBJECT_0 + 1) {
+                    DWORD x = 0;
+                    if (GetExitCodeProcess(j.process, &x)) *code = (int)x, r = 0;
+                } else {
+                    aw->last_err = wait_err;
+                    stop_worker = 1;
+                }
+                goto out;
+            }
         }
-        DWORD dummy;
-        if (!GetOverlappedResult(srv, &ov, &dummy, FALSE) && GetLastError() != ERROR_PIPE_CONNECTED) goto out;
     }
     /* the client must be the process we started */
     ULONG client = 0;
     if (!GetNamedPipeClientProcessId(srv, &client) || client != GetProcessId(j.process)) {
-        DisconnectNamedPipe(srv);
-        WaitForSingleObject(j.process, INFINITE);
+        aw->last_err = ERROR_PIPE_NOT_CONNECTED;
+        stop_worker = 1;
         goto out;
     }
     read_lines(srv, ev, line, lctx);
@@ -146,10 +160,14 @@ int admin_win_elevate(void *ctx, const char *exe, const char *params, const char
     if (GetExitCodeProcess(j.process, &x)) *code = (int)x, r = 0;
 out:
     if (!told && started) started(sctx);
-    if (j.process) CloseHandle(j.process);
+    if (srv != INVALID_HANDLE_VALUE) CloseHandle(srv);
+    if (j.process) {
+        /* A late worker needs the pipe to start. Termination is best-effort for a runas handle. */
+        if (stop_worker) TerminateProcess(j.process, (UINT)aw->last_err);
+        CloseHandle(j.process);
+    }
     if (th) CloseHandle(th);
     if (ev) CloseHandle(ev);
-    if (srv != INVALID_HANDLE_VALUE) CloseHandle(srv);
     free(we);
     free(wp);
     free(wn);

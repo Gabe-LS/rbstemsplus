@@ -207,6 +207,13 @@ int model_table_append(model *m, core_table t, int32_t rows);
 int model_cell_str(model *m, core_column col, int32_t row, const char *v, size_t n);
 int model_cell_i64(model *m, core_column col, int32_t row, int64_t v);
 int model_cell_f64(model *m, core_column col, int32_t row, double v);
+#ifdef CORE_WIN_POLICY
+/* R1's snapshot fields from FACT_R1_STATE and FACT_R1_DISMISSED (win.c), for M4's refresh; here,
+ * after the model's type (pure.h comes before it) */
+int win_r1_fields(model *m, int64_t r1_state, int dismissed, int action_running);
+/* FACT_STEP_CODE for confirmed Windows LOCATION_CREATE / LOCATION_WRITE and SETTINGS timeouts. */
+enum { WIN_LOCATION_TIMED_OUT = 6, WIN_LOCATION_SAVED_UNCHECKED = 7 };
+#endif
 /* 1 when anything moved since the last render (or there was none yet): a commit renders. */
 int model_needs_render(const model *m);
 /* A snapshot of the model now, +1. With for_render, it carries the delta since the last render,
@@ -478,5 +485,15 @@ struct core_facts {
     size_t len[CORE_FACT_COUNT > 0 ? CORE_FACT_COUNT : 1];
 };
 void facts_init(core_facts *f, arena *a);
+
+#ifdef CORE_WIN_POLICY
+/* A known location memo can still supply its last drive and size while the check is stale. */
+enum { VIEW_LOC_STALE = 2 };
+
+static inline int win_location_unchecked(int32_t os, const core_facts *f) {
+    return os == CORE_OS_WIN && f->set[FACT_CONFIG_LOCATION] &&
+           !(f->set[FACT_LOC_MEASURED] && f->i[FACT_LOC_MEASURED]);
+}
+#endif
 
 #endif

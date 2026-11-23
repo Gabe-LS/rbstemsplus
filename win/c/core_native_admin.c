@@ -36,6 +36,7 @@
 #include "shell.h"
 #include "update.h"
 #include "core_win.h"   /* core_win_warm_facts (host_facts.c) */
+#include "native.h"     /* ROOT_WIN_START_TIMEOUT */
 
 #include <errno.h>
 #include <stdio.h>
@@ -47,6 +48,7 @@ _Static_assert(NA_KIND_INSTALL == CORE_ADMIN_CACHE_INSTALL && NA_KIND_REINSTALL 
                    NA_KIND_FORGET == CORE_ADMIN_FORGET && NA_KIND_RESTORE == CORE_ADMIN_RESTORE,
                "native_admin.h's kinds are core.h's");
 _Static_assert(ADMIN_EXIT_USER_STOPPED == 1223, "UAC declined is the core's 1223");
+_Static_assert(ROOT_WIN_START_TIMEOUT == ERROR_TIMEOUT, "the core's startup timeout is Win32's");
 
 enum { NA_KEYS_MAX = 4, NA_ROOT_MAX = 512 };
 
@@ -57,8 +59,12 @@ struct nw_admin {
     char root[NA_ROOT_MAX];   /* <Program Files>\RB Stems Plus, the worker's (win/admin/main.c) */
     sig_pubkey keys[NA_KEYS_MAX];
     size_t nkeys;
-    SRWLOCK lock;   /* the flow's bridge */
+    SRWLOCK lock;   /* the flow's bridge, and the last run's targets */
     char *bridge_path, *bridge_name;
+    /* the last run's @target and @root-kept records (nw_admin_last_targets); have_last 0: no run
+     * has ended in this process */
+    admin_target_result last[ADMIN_TARGETS_MAX];
+    int nlast, last_root_kept, have_last;
 };
 
 static char *dup_or_null(const char *s) { return s && s[0] ? _strdup(s) : NULL; }
@@ -108,6 +114,27 @@ int nw_admin_set_bridge(nw_admin *a, const char *path, const char *name) {
     a->bridge_name = n;
     ReleaseSRWLockExclusive(&a->lock);
     return 0;
+}
+
+/* ---------------------------------------------------------------- the last run's targets */
+
+int nw_admin_last_targets(nw_admin *a, admin_target_result *out, int max, int *root_kept) {
+    AcquireSRWLockExclusive(&a->lock);
+    int n = a->have_last ? (a->nlast < max ? a->nlast : max) : -1;
+    if (n > 0) memcpy(out, a->last, (size_t)n * sizeof *out);
+    if (root_kept) *root_kept = a->have_last ? a->last_root_kept : 0;
+    ReleaseSRWLockExclusive(&a->lock);
+    return n;
+}
+
+/* the targets one run ended with (none for a run that didn't start) */
+static void keep_targets(nw_admin *a, const admin_result *res) {
+    AcquireSRWLockExclusive(&a->lock);
+    a->have_last = 1;
+    a->nlast = res ? res->ntargets : 0;
+    if (a->nlast > 0) memcpy(a->last, res->targets, (size_t)a->nlast * sizeof a->last[0]);
+    a->last_root_kept = res ? res->root_kept : 0;
+    ReleaseSRWLockExclusive(&a->lock);
 }
 
 /* ---------------------------------------------------------------- R1 */
@@ -237,6 +264,13 @@ int32_t nw_admin_run(nw_admin *a, int32_t kind, const char *version, const char 
         say(a, "  admin: the app's folders or version aren't known: not run");
         return ADMIN_EXIT_FAILED;
     }
+    keep_targets(a, NULL);   /* this call's records from here: none yet */
+    /* --targets: the core's scope token (FACT_WIN_SCOPE) for install and restore, "*" otherwise */
+    char targets[ADMIN_TARGETS_ARG_MAX], scope_manifest[65];
+    if (native_admin_targets(verb, version, targets, sizeof targets, scope_manifest)) {
+        say(a, "  admin: the rekordbox versions to change aren't a scope the worker takes: not run");
+        return ADMIN_EXIT_CHECK_FAILED;
+    }
     char app_copy[ADMIN_PATH_MAX], source[ADMIN_PATH_MAX], payload_dir[ADMIN_PATH_MAX], copy[ADMIN_PATH_MAX];
     if (join2(app_copy, sizeof app_copy, a->app, ADMIN_APP_COPY_DIR "\\" ADMIN_WORKER_NAME) || join2(source, sizeof source, a->support, "admin-source")
         || join2(payload_dir, sizeof payload_dir, a->support, "installed-release")) {
@@ -244,8 +278,9 @@ int32_t nw_admin_run(nw_admin *a, int32_t kind, const char *version, const char 
         return ADMIN_EXIT_FAILED;
     }
     /* the app's own worker: the one its verified installed-release record names; the record is
-     * kept for the install's bridge check */
-    char own_sha[65] = "";
+     * kept for the install's bridge check, with the digest of exactly the bytes that verified
+     * (review finding 6: the copy handed to the worker must be those bytes) */
+    char own_sha[65] = "", verified[65] = "";
     int has_record = 0;
     payload_manifest *m = malloc(sizeof *m);
     if (m) {
@@ -256,7 +291,8 @@ int32_t nw_admin_run(nw_admin *a, int32_t kind, const char *version, const char 
         ue.keys = a->keys;
         ue.nkeys = a->nkeys;
         char at[ADMIN_PATH_MAX];
-        if (update_installed_at(&ue, m, at, sizeof at) == PAYLOAD_OK && m->has_windows) {
+        if (update_installed_at(&ue, m, at, sizeof at) == PAYLOAD_OK && m->has_windows
+            && !native_admin_record(at, a->keys, a->nkeys, a->own, m, verified)) {
             has_record = 1;
             memcpy(own_sha, m->win_app.admin_sha256, sizeof own_sha);
             memcpy(payload_dir, at, strlen(at) + 1);   /* the pair that verified: installed-release or its prev\ (NA5) */
@@ -288,9 +324,10 @@ int32_t nw_admin_run(nw_admin *a, int32_t kind, const char *version, const char 
         char b[160];
         snprintf(b, sizeof b, "  admin: the source folder couldn't be prepared (%s)", strerror(e));
         say(a, b);
-        /* NA6: with a verified record, a check failed (an update wouldn't help); without one, the
-         * verbs that need the folder (install, install-worker) are "update the app first" */
-        if ((rc = native_admin_source_failed(has_record)) >= 0) goto out;
+        /* NA6: with a verified record, a verb that needs the source fails its check (an update
+         * wouldn't help). Restore, uninstall and remove-root-folder can run without it unless
+         * the client has to install the worker first (audit b-a1b-F5). */
+        if ((rc = native_admin_source_failed(has_record, verb)) >= 0) goto out;
         source[0] = 0;
     } else if (with_bridge && bridge_sha) {
         /* exactly the bytes the flow checked. This hash is never memoised: it reads the copy about
@@ -301,6 +338,25 @@ int32_t nw_admin_run(nw_admin *a, int32_t kind, const char *version, const char 
             rc = ADMIN_EXIT_CHECK_FAILED;
             goto out;
         }
+    }
+    /* --manifest: the copied payload.json's sha256 (uncached, as the bridge's): the worker's
+     * staged copy must be these bytes, else nothing changes (15). With a record, the copy must be
+     * the very bytes that verified, and --manifest is their digest */
+    char manifest[65] = "";
+    if (!e && (join2(copy, sizeof copy, source, "payload.json")
+               || (has_record ? !native_admin_copy_is(copy, verified) : nw_file_sha256(copy, manifest)))) {
+        manifest[0] = 0;
+        say(a, has_record ? "  admin: the source folder's payload.json isn't the one checked" : "  admin: the source folder's payload.json couldn't be read");
+        if ((rc = native_admin_source_failed(has_record, verb)) >= 0) goto out;
+    } else if (!e && has_record)
+        memcpy(manifest, verified, sizeof manifest);
+    /* the install's: the payload.json its scope came from, the bytes the worker's staged copy is
+     * compared with (re-review finding 6); another release's is "update first" before any UAC */
+    char copied[65];
+    memcpy(copied, manifest, sizeof copied);
+    if (!e && copied[0] && (rc = native_admin_manifest(verb, scope_manifest, copied, manifest)) != ADMIN_EXIT_OK) {
+        say(a, "  admin: the versions to change were checked with another payload.json than this app's release's: update first");
+        goto out;
     }
     run_ctx r;
     memset(&r, 0, sizeof r);
@@ -317,6 +373,7 @@ int32_t nw_admin_run(nw_admin *a, int32_t kind, const char *version, const char 
     cl.app_copy = app_copy;
     cl.source = source;
     cl.own_sha256 = own_sha;
+    cl.manifest = manifest;
     cl.elevate = native_admin_elevate;
     cl.ctx = &r;
     cl.log = run_log;
@@ -324,12 +381,14 @@ int32_t nw_admin_run(nw_admin *a, int32_t kind, const char *version, const char 
     cl.hold = run_hold;
     cl.release = run_release;
     admin_result res;
-    admin_client_run(&cl, verb, version ? version : "", force, &res);
+    admin_client_run(&cl, verb, targets, force, &res);
+    keep_targets(a, &res);   /* for CORE_STEP_WIN_ADMIN_TARGETS */
     core_win_warm_facts(a->c);   /* the files it changed, read and pinned again here, not on the UI thread (HF2) */
     char line[96];
     native_admin_result_line(verb, res.code, line, sizeof line);   /* the raw code, before the mapping */
     say(a, line);
-    rc = native_admin_code(&res);
+    rc = e && res.no_source ? ADMIN_EXIT_CHECK_FAILED : native_admin_code(&res);
+    if (res.code < 0 && r.aw.last_err == ERROR_TIMEOUT) rc = ROOT_WIN_START_TIMEOUT;
 out:
     free(m);
     free(bpath);

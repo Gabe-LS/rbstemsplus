@@ -25,6 +25,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "plat.h"
 
 enum {
     VOL_PATH_MAX = 1024,
@@ -86,6 +87,9 @@ int vol_fs_allowed(const char *fstype);
  * core's. */
 enum { VOL_OK, VOL_REFUSE_UNREADABLE, VOL_REFUSE_NETWORK, VOL_REFUSE_INTERNAL, VOL_REFUSE_FILE_SYSTEM, VOL_REFUSE_READ_ONLY };
 int vol_refusal(const vol_facts *f);
+/* The picker and saved locations use this verdict. Only the location test build can opt in
+ * to checking paths on internal volumes. */
+int vol_location_refusal(const vol_facts *f);
 /* One line for the log and the real-PC round (J28): the drive type, bus, hot-plug, disks and each
  * node's enumerator and flags, then the verdict. No ID, serial or label (the report masks
  * nothing here). out: n bytes, always terminated. */
@@ -101,6 +105,9 @@ int vol_pick_mount(const char *mounts, size_t len, char *out, size_t n);
 /* A volume GUID path shown through its mount point: "\\?\Volume{...}\Music\X" with mount "E:\"
  * gives "E:\Music\X". 0, or -1 (not a GUID path, or too long). */
 int vol_join_mount(const char *guid_path, const char *mount, char *out, size_t n);
+/* The cache folder in the uninstall texts (review N3R16): out from vol_display_path when the
+ * GUID volume has a mount point, else the path below its root. Other paths pass through. */
+const char *vol_uninstall_path(const char *dir, int (*display)(const char *, char *, size_t), char *out, size_t n);
 /* Whether p is a network path by its form: "\\server\share..." (or with '/'), "\\?\UNC\...";
  * not "\\?\X:\...", a GUID path or a device ("\\.\..."). A mapped drive letter is told by
  * its drive type (vol_facts_of). */
@@ -127,9 +134,8 @@ int vol_device_events(uint32_t event, uint32_t devtype, uint32_t unitmask, const
  * T1a) when that lands. */
 int vol_counts_in_entry_size(const char *name, const char *prefix);
 /* entriesSize (Location.swift:431) through common/plat.h: per entry the allocated size of the
- * files that count, under <64 hex>/<2 hex>/. 0 when folder isn't there; -1 when it can't be read
- * (a link, a file, a listing error). A prefix folder that can't be listed counts nothing, as on
- * the Mac. */
+ * files that count, under <64 hex>/<2 hex>/. 0 when the root isn't there; -1 when the root or
+ * a model or prefix directory in the walk can't be opened or listed. */
 int64_t vol_entries_size(const char *folder);
 
 /* -- from Windows (volumes_win.c; a worker thread only) */
@@ -137,6 +143,15 @@ int64_t vol_entries_size(const char *folder);
 /* The facts of the volume at GUID path guid ("\\?\Volume{...}\"); device: read the device's facts
  * too (the disk, its bus, the device tree). 0, or an errno (ENXIO: not ready). */
 int vol_facts_read(const char *guid, int device, vol_facts *out);
+/* The picker's rules applied to the GUID root of a saved Windows path. */
+int vol_saved_refusal(const char *path);
+/* For the bridge's process-lifetime cache, watch the disk used to get the verdict.
+ * Register before querying eligibility. The callback must not do I/O. */
+typedef struct {
+    void *registration;
+    void (*invalidated)(void);
+} vol_watch;
+int vol_saved_watch(const char *path, vol_watch *watch);
 /* The volumes mounted now (FindFirstVolume), at most max, without the device's facts; how many,
  * or -1 when the list can't be had. */
 int vol_list(vol_facts *out, int max);
@@ -147,6 +162,9 @@ int vol_facts_of(const char *path, vol_facts *out);
 /* The folder's final path (links followed, GetFinalPathNameByHandle) as a volume GUID path
  * ("\\?\Volume{...}\Music\X", the form cache_dir takes); 0, or an errno. */
 int vol_guid_path(const char *path, char *out, size_t n);
+/* The GUID of the volume holding this open directory. */
+int vol_dir_guid(plat_dir dir, char out[VOL_GUID_MAX]);
+int vol_dir_on_volume(plat_dir dir, const char *guid_path);
 /* The same as a drive path ("E:\Music\X"), for the texts and the realpath comparison; 0, or an
  * errno (ENOENT: no drive letter or folder mount shows it; EXDEV: a network path,
  * "\\?\UNC\..."). */

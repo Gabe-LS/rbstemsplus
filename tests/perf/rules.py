@@ -151,7 +151,7 @@ def parse(path=None):
     rows, plans, seen_limits = [], {}, set()
     try:
         lines = open(path, encoding="utf-8").read().splitlines()
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise RuleError("can't read %s: %s" % (path, e))
     for n, line in enumerate(lines, 1):
         t = line.split("#", 1)[0].strip()

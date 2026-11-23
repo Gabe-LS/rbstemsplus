@@ -6,7 +6,7 @@
 
 typedef struct {
     void *owner;              /* the app's main window (an HWND): UAC's prompt in front of it */
-    unsigned long last_err;   /* set by admin_win_elevate: ShellExecuteEx's error when no worker started, else 0 */
+    unsigned long last_err;   /* Win32 startup error when one is available, else 0 */
 } admin_win;
 
 /* admin_elevate_fn; ctx: an admin_win */

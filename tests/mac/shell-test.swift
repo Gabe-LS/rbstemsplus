@@ -567,8 +567,14 @@ func coverageTests(_ root: String) {
         }
         return out
     }
-    let steps = enumValues(between(h, "typedef enum core_step {", "} core_step;"))
+    var stepBody = between(h, "typedef enum core_step {", "} core_step;")
+    // the Windows-only kinds (#ifdef CORE_WIN_POLICY ... #endif: N10's WIN_R1_DISMISS) have no Mac case
+    while let a = stepBody.range(of: "#ifdef CORE_WIN_POLICY"), let b = stepBody.range(of: "#endif", range: a.upperBound..<stepBody.endIndex) {
+        stepBody = Substring(String(stepBody[..<a.lowerBound]) + String(stepBody[b.upperBound...]))
+    }
+    let steps = enumValues(stepBody)
     check(steps.count > 50 && steps["CORE_STEP_STOP_KEEPING"] == Int(CORE_STEP_STOP_KEEPING.rawValue), "core.h's step kinds read (\(steps.count))")
+    check(steps["CORE_STEP_WIN_R1_DISMISS"] == nil && steps["CORE_STEP_REPORT_FACTS"] != nil, "the Windows-only step kinds left out, the Mac's kept")
     let handled = cases(hostSteps, "CORE_STEP_").union(cases(watcherSteps, "CORE_STEP_"))
     let missing = Set(steps.keys).subtracting(handled)
     check(missing.isEmpty, "every step kind of core.h has its case in HostSteps.swift or, the watcher's, WatcherShell.swift (missing: \(missing.sorted()))")
@@ -1153,7 +1159,8 @@ func watcherShellTests() {
           "watcher: Remind Me Later: logged, the lock let go (\(r.log))")
     // Reinstall Now: the step that writes the request and opens the app after this process
     r = watcherRun(missing: true, competing: false, answer: 0)
-    check(r.done && r.steps.contains("\(CORE_STEP_WATCH_REINSTALL.rawValue) ") && r.lockGone, "watcher: Reinstall Now: the request and the app opened (\(r.steps))")
+    check(r.done && r.steps.contains("\(CORE_STEP_WATCH_REINSTALL.rawValue) model") && r.lockGone,
+          "watcher: Reinstall Now: the Demucs v4 request and the app opened (\(r.steps))")
 
     // the prepared playlists' check's reads (WATCH_KEPT), against 1.3.0's on this Mac's live
     // facts: prepareFacts(measured: false), keptSets(), a set's run looked for

@@ -237,6 +237,14 @@ COMMON_API int plat_id_same(plat_id a, plat_id b);
 /* the 64-bit file number (the inode; Windows: the low 64 bits of the FileId — the whole index on
  * NTFS/FAT, not unique per file on ReFS), for names like model-<n> */
 COMMON_API uint64_t plat_id_number(plat_id a);
+/* an identity as 48 lowercase hex digits (vol, file[0], file[1], 16 each) and a NUL: the
+ * Windows worker's receipts (win/c/receipt.h). Inline and used only by win/c, so the Mac's
+ * objects don't change. */
+enum { PLAT_ID_HEX_MAX = 49 };
+static inline void plat_id_hex(plat_id a, char out[PLAT_ID_HEX_MAX]) {
+    snprintf(out, PLAT_ID_HEX_MAX, "%016llx%016llx%016llx", (unsigned long long)a.vol, (unsigned long long)a.file[0],
+             (unsigned long long)a.file[1]);
+}
 
 /* What a name is, never following a link: a regular file, a folder, or OTHER (a link, a FIFO, a
  * device, a reparse point). alloc: the disk space it takes (Mac: st_blocks * 512; Windows:

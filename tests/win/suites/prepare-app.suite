@@ -1,0 +1,35 @@
+# PF4 and W13b N1, from a reverted snapshot with rekordbox 7.2.19 closed, Stems Cache and its Prepare
+# model ready, and a top-level "RBSP PF4" playlist of supported tracks. The first Prepare must
+# run long enough to observe its command line, and finish within two minutes without a dialog.
+# Use a Prepare-enabled TEST payload listing that rekordbox version and matching the snapshot.
+#   tests/win/vm-run.sh stage --build
+#   tests/win/vm-run.sh run "<PF4 snapshot>" prepare-app
+# The restored fixture also has distinct top-level playlists RBSP Pause, RBSP Exit,
+# RBSP Notice A, and RBSP Notice B, with enough unprepared supported audio to observe
+# the helpers live. Pause/Exit need enough headroom to invoke the controls while running.
+# Notice A/B must each finish as fully prepared. Use a clean kept folder and enabled
+# Windows notifications. All scripted UI is scoped to RB Stems Plus. Leave prompts for the operator.
+# SYSTEM renames only the fixture version and restores it after the refusal.
+include lib/vmlib.ps1
+include worker/rblib.ps1
+include uninstall/cases/unlib.ps1
+include shell-ui/shelllib.ps1
+include shell-ui/a11y-lib.ps1
+include prepare/app-lib.ps1
+need http
+need vm
+need file repo/core/texts.def
+need file dist-test/bootstrap.ps1
+need file vm/uia/rbui/rbui.exe
+# MODE       SECS NAME                   SCRIPT
+user         600  install                bootstrap/install.ps1
+user         300  helper-path            prepare/helper-path.ps1
+sys           60  move-version           prepare/version-folder.ps1
+user         120  helper-path-refused    prepare/helper-path.ps1
+sys           60  restore-version        prepare/version-folder.ps1
+user         240  kept-lifecycle         prepare/kept-lifecycle.ps1
+user         180  facts-missing          prepare/facts.ps1
+user         240  pause-stop             prepare/run-controls.ps1
+user         180  paused-exit            prepare/run-controls.ps1
+user         480  notifications          prepare/notifications.ps1
+user         180  capacity               prepare/capacity.ps1

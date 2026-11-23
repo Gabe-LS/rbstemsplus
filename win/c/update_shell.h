@@ -4,8 +4,7 @@
  * the quit the flow's UPDATE_SWAP ends with. Each is core.h's ABI: cdecl, strings in UTF-8,
  * int32_t answers; the names start with core_win_ (the DLL's export gate takes core_* only).
  *
- * Defined in update_win.c for the core DLL build only (CORE_NATIVE_WIN): it is the DLL's own file
- * of this lane; they can move to a file of their own once core/build.sh lists one. The paths
+ * Defined in update_win.c for the core DLL build only (CORE_NATIVE_WIN), except where noted. The paths
  * come from the shell: `support` is %LOCALAPPDATA%\rbstemsplus, `app` the version folder the
  * running exe is in (its parent is the apps folder), `own` the app's version (the start config's
  * "version"). None is rooted in Program Files (PF3). `log` (may be NULL) gets the updater's lines
@@ -47,6 +46,10 @@ CORE_API int32_t CORE_CALL core_win_update_at_start(const char *support, const c
  * watcher). */
 CORE_API int32_t CORE_CALL core_win_update_after_render(const char *support, const char *app, const char *own, core_win_log_fn log,
                                                         void *ctx);
+
+/* About's version as of this call (update_shown_now in update.c). Returns its byte length,
+ * excluding the NUL, or -1 for bad arguments. out has room for at least PAYLOAD_VERSION_MAX. */
+CORE_API int32_t CORE_CALL core_win_update_shown(const char *support, const char *own, char *out, size_t cap);
 
 /* The minimum (app.md §5.9, lifecycle.h's LIFE_MIN_*): Windows' build by RtlGetVersion and .NET
  * Framework's Release. 0 ok (LIFE_OS_OK), 1 Windows too old (LIFE_OS_WINDOWS_OLD), 2 .NET too old

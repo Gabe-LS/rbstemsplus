@@ -9,12 +9,14 @@
 # the same bytes (J18).
 #
 #   win/admin/build.sh OUT                     the release worker: OUT/rbsp-admin.exe
-#   win/admin/build.sh OUT --test-key PEM      a test build (its key, and Program Files
-#                                              movable by RBSP_TEST_PROGRAMS: PLAT_TEST_PROGRAMS)
+#   win/admin/build.sh OUT --test-key PEM      a test build (its key, Program Files movable by
+#                                              RBSP_TEST_PROGRAMS: PLAT_TEST_PROGRAMS, and the
+#                                              worker held by RBSP_TEST_WORKER_HOLD and
+#                                              RBSP_TEST_WORKER_MIDHOLD: ADMIN_TEST_HOLD)
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
-[ $# -ge 1 ] || { sed -n '11,13p' "$0" >&2; exit 2; }
+[ $# -ge 1 ] || { sed -n '11,15p' "$0" >&2; exit 2; }
 out="$1"; shift
 test_key=""
 if [ "${1:-}" = "--test-key" ]; then test_key="$2"; shift 2; fi
@@ -52,7 +54,7 @@ keys="$out/admin_keys.h"
 } > "$keys.part"
 mv -f "$keys.part" "$keys"
 extra=""
-[ -z "$test_key" ] || extra="-DPLAT_TEST_PROGRAMS"
+[ -z "$test_key" ] || extra="-DPLAT_TEST_PROGRAMS -DADMIN_TEST_HOLD"
 
 cd "$root"   # relative names from here on (the prefix map makes the paths "."): the repo's path has spaces
 "$cc" --tool x64 windres -I win/admin win/admin/admin.rc -O coff -o "$out/admin.res.o"
@@ -60,7 +62,7 @@ cd "$root"   # relative names from here on (the prefix map makes the paths "."):
 # shellcheck disable=SC2086
 "$cc" x64 $WARN -Wno-unused-command-line-argument -mwindows -municode -ffunction-sections -fdata-sections -Wl,--gc-sections \
   -DCORE_WIN_POLICY -DPLAT_NO_BLOCKS $extra -Icore -Icommon -Iwin/c -Iwin/admin -I"$out" -I"$pf" \
-  win/admin/main.c win/admin/worker.c win/admin/worker_win.c \
+  win/admin/main.c win/admin/worker.c win/admin/worker_win.c win/c/inventory.c win/c/receipt.c win/c/pe_code.c \
   win/c/admin_proto.c win/c/sig.c win/c/sig_bcrypt.c win/c/payload.c win/c/payload_store.c win/c/fs_write.c win/c/compat.c win/c/compat_win.c \
   common/plat_win.c core/json.c core/arena.c "$out/admin.res.o" "$out/pocketfft.o" \
   -lntdll -ladvapi32 -lshell32 -lole32 -Wl,-Map="$out/rbsp-admin.exe.map" -o "$out/rbsp-admin.exe"

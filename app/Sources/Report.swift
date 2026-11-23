@@ -77,12 +77,12 @@ func buildReport(_ log: (String) -> Void, lights: ReportLights, measure: ReportM
     }
     log("report: \(reports.count) crash or hang report\(reports.count == 1 ? "" : "s") from the last 7 days, \(min(reports.count, 5)) included")
     // the issue's title and details: the last problem, then the short lines, masked
-    let problem = lastProblem(appLog: tail(logPath, 500_000), bridgeLog: tail(bridgeLogPath, 500_000))
     // the issue's link and title name no drive and no path on one (the zip keeps them)
     let stemsDir = readConfigState().location.chosenDir, mounts = currentMounts()
     func linkMask(_ s: String) -> String { mask(maskLocation(s, dir: stemsDir, mounts: mounts)) }
-    let details = issueDetails(problem: linkMask(problem.text), facts: facts.filter(\.link).map { linkMask($0.line) })
-    let title = problem.title.map { "Problem report: " + linkMask($0) } ?? "Problem report"
+    let problem = lastProblem(appLog: tail(logPath, 500_000), bridgeLog: tail(bridgeLogPath, 500_000), mask: linkMask)
+    let details = issueDetails(problem: problem.text, facts: facts.filter(\.link).map { linkMask($0.line) })
+    let title = problem.title.map { "Problem report: " + $0 } ?? "Problem report"
     let zip = tmp + "/" + name + ".zip"
     let r = runTool("/usr/bin/ditto", ["-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--keepParent", dir, zip])
     guard r.0 == 0 else { log("report: zip failed: \(r.1)"); return nil }
@@ -278,8 +278,8 @@ let lastProblemWindow: TimeInterval = 3 * 3600
 /// before a successful install or reinstall run, the bridge's loading errors before "bridge
 /// loaded", and its model reading errors before "Demucs session opened".
 /// `text` is "" and `title` nil when there is no problem; else `title` says what failed, in at
-/// most 60 characters. Not masked: the caller masks both.
-func lastProblem(appLog: String, bridgeLog: String, now: Date = Date()) -> (title: String?, text: String) {
+/// most 60 characters. Each line and the title are masked before they are cut.
+func lastProblem(appLog: String, bridgeLog: String, now: Date = Date(), mask: (String) -> String = { $0 }) -> (title: String?, text: String) {
     let f = DateFormatter()
     f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM-dd HH:mm:ss"
     let hm = DateFormatter()
@@ -349,13 +349,13 @@ func lastProblem(appLog: String, bridgeLog: String, now: Date = Date()) -> (titl
         return out
     }
     func render(_ g: (first: Problem, count: Int, last: Line)) -> String {
-        cut("\(g.first.line.stamp)  \(g.first.line.message)", 200) + (g.count > 1 ? " (\(g.count) times, last at \(hm.string(from: g.last.date)))" : "")
+        cut(mask("\(g.first.line.stamp)  \(g.first.line.message)"), 200) + (g.count > 1 ? " (\(g.count) times, last at \(hm.string(from: g.last.date)))" : "")
     }
     let appGroups = Array(collapse(appProblems).suffix(5)), bridgeGroups = Array(collapse(bridgeProblems).suffix(3))
     var lines = appGroups.map(render)
     if !bridgeGroups.isEmpty { lines += ["bridge.log:"] + bridgeGroups.map(render) }
     guard let title = appGroups.last?.first.title ?? bridgeGroups.last?.first.title else { return (nil, "") }
-    return (cut(title, 60), "Last problem:\n" + lines.joined(separator: "\n"))
+    return (cut(mask(title), 60), "Last problem:\n" + lines.joined(separator: "\n"))
 }
 
 // MARK: masking

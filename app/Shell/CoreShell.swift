@@ -347,6 +347,9 @@ final class CoreShell: NSObject, NSWindowDelegate, NSMenuItemValidation {
     /// AppDelegate.applicationShouldTerminate in the shell: the core decides; the CriticalWork
     /// wait still follows a "now" or a proceed (core.h Close and quit).
     func shouldTerminate() -> NSApplication.TerminateReply {
+        #if TEST_BUILD
+        probeExitPoint("quit.asked")                 // P14's shutdown steps (perf mode only)
+        #endif
         guard let c = core else { return .terminateNow }
         switch Int(core_close_asked(c, CORE_CLOSE_QUIT)) {
         case CORE_CLOSE_NOW: return terminateAfterCriticalWork() ? .terminateNow : .terminateLater
@@ -380,7 +383,12 @@ final class CoreShell: NSObject, NSWindowDelegate, NSMenuItemValidation {
     }
 
     /// The app is quitting: dialogs not shown yet answer "not shown" (core.h Dialogs).
-    func willTerminate() { DialogPresenter.shared.shutDown() }
+    func willTerminate() {
+        DialogPresenter.shared.shutDown()
+        #if TEST_BUILD
+        probeExitPoint("shell.willTerminate.end")    // P14's shutdown steps (perf mode only)
+        #endif
+    }
 
     // MARK: render
 

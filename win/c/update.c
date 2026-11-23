@@ -6,6 +6,7 @@
 #include "compat.h"
 #include "fs_write.h"
 #include "unzip.h"
+#include "update_shell.h"
 
 #include <stdarg.h>
 #include <stdatomic.h>
@@ -481,17 +482,29 @@ static int write_installed(const update_env *e, const char *json, size_t jn, con
 }
 
 static int read_shown(const update_env *e, update_shown *out) {
-    char p[UPDATE_PATH_MAX], *b;
-    size_t n;
-    if (join(p, sizeof p, e->support, shown_name, NULL) || read_small(p, 64, &b, &n)) return 0;
-    int ok = update_shown_parse(b, n, out);
-    free(b);
-    return ok;
+    plat_dir d;
+    if (plat_dir_open(e->support, &d)) return 0;
+    plat_file f;
+    char b[64];
+    int64_t n;
+    int r = plat_file_open_at(d, shown_name, sizeof b, &n, &f);
+    plat_dir_close(d);
+    if (r) return 0;
+    r = plat_read_all(f, b, (size_t)n);
+    plat_file_close(f);
+    return !r && update_shown_parse(b, (size_t)n, out);
 }
 
 void update_shown_now(const update_env *e, char out[PAYLOAD_VERSION_MAX]) {
     update_shown r;
     copy_str(out, PAYLOAD_VERSION_MAX, update_shown_version(e->own, read_shown(e, &r) ? &r : NULL));
+}
+
+CORE_API int32_t CORE_CALL core_win_update_shown(const char *support, const char *own, char *out, size_t cap) {
+    if (!support || !support[0] || !own || !update_is_version(own) || !out || cap < PAYLOAD_VERSION_MAX) return -1;
+    update_env e = {.support = support, .own = own};
+    update_shown_now(&e, out);
+    return (int32_t)strlen(out);
 }
 
 /* the saved payload pair (payload\), checked again, if it is m: written as installed-release */
@@ -1212,6 +1225,31 @@ static int swap_stub(const update_env *e, const payload_manifest *m) {
     return 0;
 }
 
+static int note_watcher(const update_env *e, const char *upd) {
+    int r = STEP(UPDATE_STEP_MARKER);
+    if (!r) r = win_write_atomic(upd, watcher_name, "1\n", 2);
+    if (r) say(e, "update: couldn't note the watcher restart (%s)", strerror(r));
+    return r;
+}
+
+static int restart_watcher(const update_env *e, const char *dir) {
+    if (!e->os->watchers_in) return ENOSYS;
+    if (e->os->watchers_in(e->os->ctx, dir) == 1) return 0;
+    char stub[UPDATE_PATH_MAX];
+    if (join(stub, sizeof stub, e->apps, APP_EXE, NULL)) return ENAMETOOLONG;
+    const char *args[] = {"--watcher", NULL};
+    int r = e->os->spawn(e->os->ctx, stub, args);
+    if (r) return r;
+
+    /* The stub starts a separate watcher process. Give it time to appear in this session. */
+    uint64_t started = plat_now_mono_ns();
+    for (;;) {
+        if (e->os->watchers_in(e->os->ctx, dir) == 1) return 0;
+        if (plat_now_mono_ns() - started >= 1000000000u) return ETIMEDOUT;
+        plat_sleep_ms(50);
+    }
+}
+
 static int commit(const update_env *e, const update_pending *p) {
     char upd[UPDATE_PATH_MAX], line[PAYLOAD_VERSION_MAX + 2];
     if (join(upd, sizeof upd, e->support, update_dir, NULL)) return ENAMETOOLONG;
@@ -1261,34 +1299,37 @@ static int commit(const update_env *e, const update_pending *p) {
      * (by full path and this session, watchers_in: never another process under the folder) was
      * running is noted first (update\watcher), so a commit stopped between the two still starts
      * the new one when it runs again, unless a watcher already runs from this app's folder. */
-    char old[UPDATE_PATH_MAX], cur[PAYLOAD_VERSION_MAX], stub[UPDATE_PATH_MAX], mark[UPDATE_PATH_MAX], ownd[UPDATE_PATH_MAX];
-    if (strcmp(p->from, e->own) && !join(old, sizeof old, e->apps, p->from, NULL) && !join(mark, sizeof mark, upd, watcher_name, NULL) &&
-        !join(ownd, sizeof ownd, e->apps, e->own, NULL)) {
-        int had = size_of(mark) >= 0;
+    if (strcmp(p->from, e->own)) {
+        char old[UPDATE_PATH_MAX], cur[PAYLOAD_VERSION_MAX], mark[UPDATE_PATH_MAX], ownd[UPDATE_PATH_MAX];
+        if (join(old, sizeof old, e->apps, p->from, NULL) || join(mark, sizeof mark, upd, watcher_name, NULL) ||
+            join(ownd, sizeof ownd, e->apps, e->own, NULL)) return ENAMETOOLONG;
+        plat_stat marker;
+        int mr = plat_stat_path(mark, 0, &marker);
+        if (mr && mr != ENOENT) return mr;
+        int had = !mr && marker.kind == PLAT_FILE;
         int w = e->os->watchers_in ? e->os->watchers_in(e->os->ctx, old) : 0;
-        /* noted before it is stopped; a failed note stops here, the watcher running. A list that
-         * can't be read (-1) isn't noted: the stop still finds a watcher of this session, and its
-         * 1 starts the new one, unless its own list is cut short too or holds an uninspectable
-         * watcher (-1): then none starts until the next logon's Run value (review UF5); a commit
-         * cut off after it is repaired by the next logon's Run
-         * value (review GH3) */
+        /* Note a confirmed watcher before stopping it. If the scan was inconclusive, a
+         * successful stop also gives us evidence and we note that before attempting launch. */
         if (!had && w == 1) {
-            int mr = STEP(UPDATE_STEP_MARKER);
-            if (!mr) mr = win_write_atomic(upd, watcher_name, "1\n", 2);
-            if (mr) {
-                say(e, "update: couldn't note the running watcher (%s): the next start finishes the update", strerror(mr));
-                return mr;
-            }
+            mr = note_watcher(e, upd);
+            if (mr) return mr;
             had = 1;   /* noted: a stop that gives -1 still starts the new one (review GH2) */
         }
         int s = e->os->stop_watchers(e->os->ctx, old);
         int stop = STEP(UPDATE_STEP_WATCHER);
         if (stop) return stop;   /* test builds: a stop between the two */
-        int spawn = s == 1 || (had && (!e->os->watchers_in || e->os->watchers_in(e->os->ctx, ownd) != 1));
-        if (spawn && !join(stub, sizeof stub, e->apps, APP_EXE, NULL)) {
-            const char *args[] = {"--watcher", NULL};
-            int sp = e->os->spawn(e->os->ctx, stub, args);
-            say(e, "update: the watcher restarted from %s%s", e->own, sp ? " FAILED" : "");
+        if (s == 1 && !had) {
+            mr = note_watcher(e, upd);
+            if (mr) return mr;
+            had = 1;
+        }
+        if (had) {
+            int wr = restart_watcher(e, ownd);
+            if (wr) {
+                say(e, "update: the watcher restart from %s couldn't be confirmed (%s); the next start retries it", e->own, strerror(wr));
+                return wr;
+            }
+            say(e, "update: the watcher is running from %s", e->own);
         }
         /* the old app's folder, only while current (read through the same handle: review UH3)
          * doesn't name it, and only when the stop gave >= 0 and nothing runs from it (running_under

@@ -82,19 +82,19 @@ TEXT(T_PICK_FOLDER_MESSAGE, all, "Choose a folder on an external drive. Stems Ca
 TEXT(T_PICK_FOLDER_CHOOSE,  all, "Choose", "Choose")
 
 /* menus (main.swift) */
-TEXT(T_MENU_SETTINGS,    all, "Settings…", "Settings…")
-TEXT(T_MENU_UPDATE,      all, "Update RB Stems Plus…", "Update RB Stems Plus…")
-TEXT(T_MENU_UNINSTALL,   all, "Uninstall RB Stems Plus…", "Uninstall RB Stems Plus…")
-TEXT(T_MENU_PREPARE,     all, "Prepare", "Prepare")
-TEXT(T_MENU_CHECK_AGAIN, all, "Check Again", "Check Again")
-TEXT(T_MENU_PAUSE,       all, "Pause", "Pause")
-TEXT(T_MENU_RESUME,      all, "Resume", "Resume")
-TEXT(T_MENU_MANAGE,      all, "Manage", "Manage")
-TEXT(T_MENU_DEMUCS,      all, "Demucs v4", "Demucs v4")
-TEXT(T_MENU_INSTALL,     all, "Install", "Install")
-TEXT(T_MENU_HELP,        all, "Help", "Help")
-TEXT(T_MENU_HELP_HOME,   all, "RB Stems Plus Help", "RB Stems Plus Help")
-TEXT(T_MENU_REPORT,      all, "Create Report", "Create Report")
+TEXT(T_MENU_SETTINGS,    all, "Settings…", "_Settings…")
+TEXT(T_MENU_UPDATE,      all, "Update RB Stems Plus…", "_Update RB Stems Plus…")
+TEXT(T_MENU_UNINSTALL,   all, "Uninstall RB Stems Plus…", "U_ninstall RB Stems Plus…")
+TEXT(T_MENU_PREPARE,     all, "Prepare", "_Prepare")
+TEXT(T_MENU_CHECK_AGAIN, all, "Check Again", "Check _Again")
+TEXT(T_MENU_PAUSE,       all, "Pause", "Pa_use")
+TEXT(T_MENU_RESUME,      all, "Resume", "_Resume")
+TEXT(T_MENU_MANAGE,      all, "Manage", "_Manage")
+TEXT(T_MENU_DEMUCS,      all, "Demucs v4", "_Demucs v4")
+TEXT(T_MENU_INSTALL,     all, "Install", "_Install")
+TEXT(T_MENU_HELP,        all, "Help", "_Help")
+TEXT(T_MENU_HELP_HOME,   all, "RB Stems Plus Help", "RB Stems Plus _Help")
+TEXT(T_MENU_REPORT,      all, "Create Report", "Create _Report")
 
 /* ---------------------------------------------------------------- M5: every text, by source */
 
@@ -421,9 +421,9 @@ TEXT(T_OTHER_ACCOUNT_TITLE, all, "Stems Cache from another account", "Stems Cach
 TEXT(T_OTHER_ACCOUNT_MSG,   all, "Stems Cache was installed from another account on this Mac. Removing it turns it off in every account.", "Stems Cache was installed from another account on this PC. Removing it turns it off in every account.")
 TEXT(T_DELETING_DRIVE,      all, "Deleting the stems saved on \"{drive}\"…", "Deleting the stems saved on \"{drive}\"…")
 TEXT(T_DELETING_DRIVE_N,    all, "Deleting the stems saved on \"{drive}\"… {n} files", "Deleting the stems saved on \"{drive}\"… {n} files")
-TEXT(T_LEFT_DRIVE_PARTLY,   all, "Some of the stems saved on \"{drive}\" couldn't be deleted: delete the folder \"{dir}\" in Finder.", "Some of the stems saved on \"{drive}\" couldn't be deleted: delete the folder \"{dir}\" in File Explorer.")
-TEXT(T_LEFT_DRIVE_NOT_CONNECTED, all, "The stems saved on \"{drive}\" stay: it isn't connected. To delete them, delete the folder \"{dir}\" in Finder.", "The stems saved on \"{drive}\" stay: it isn't connected. To delete them, delete the folder \"{dir}\" in File Explorer.")
-TEXT(T_LEFT_DRIVE_NOT_NAMED, all, "The stems saved on \"{drive}\" stay. To delete them, delete the folder \"{dir}\" in Finder.", "The stems saved on \"{drive}\" stay. To delete them, delete the folder \"{dir}\" in File Explorer.")
+TEXT(T_LEFT_DRIVE_PARTLY,   all, "Some of the stems saved on \"{drive}\" couldn't be deleted: delete the folder \"{dir}\" in Finder.", "Stems Cache cleanup on \"{drive}\" couldn't be completed. The last known folder was \"{dir}\".")
+TEXT(T_LEFT_DRIVE_NOT_CONNECTED, all, "The stems saved on \"{drive}\" stay: it isn't connected. To delete them, delete the folder \"{dir}\" in Finder.", "The stems saved on \"{drive}\" stay. The last known folder was \"{dir}\".")
+TEXT(T_LEFT_DRIVE_NOT_NAMED, all, "The stems saved on \"{drive}\" stay. To delete them, delete the folder \"{dir}\" in Finder.", "The stems saved on \"{drive}\" stay. The last known folder was \"{dir}\".")
 TEXT(T_LEFT_LIBRARY,        all, "Some of its files in your Library folder couldn't be deleted.", "Some of its files in your AppData folder couldn't be deleted.")
 TEXT(T_SELF_DELETE_FAILED,  all, "RB Stems Plus's own folder couldn't be removed: move RB Stems Plus to the Trash.", "RB Stems Plus's own folder couldn't be removed: delete it in File Explorer.")   /* SELF_DELETE couldn't start: the app stays open (owner decided 2026-11-12; not 1.3.0's words) */
 TEXT(T_ACTION_INTERRUPTED,  all, "Action interrupted", "Action interrupted")
@@ -583,28 +583,29 @@ TEXT(T_REPORT_SAVED_MSG,    all, "It's saved as {path}. To get help, click Open 
 TEXT(T_OPEN_ISSUE,          all, "Open GitHub Issue", "Open GitHub Issue")
 TEXT(T_ISSUE_BODY,          all, "### What happened?\n\n\n\n### Technical details\nPlease also drag in the report zip that RB Stems Plus just showed in Finder (it has the full logs).\n\n```\n{details}\n```", "### What happened?\n\n\n\n### Technical details\nPlease also drag in the report zip that RB Stems Plus just showed in File Explorer (it has the full logs).\n\n```\n{details}\n```")
 
-/* the menus (main.swift) not in the starter rows */
-TEXT(T_MENU_ABOUT,          all, "About RB Stems Plus", "About RB Stems Plus")
+/* the menus (main.swift) not in the starter rows. Windows: the titles carry WPF's access keys ("_"
+ * before the letter, app.md §4.5), one per menu level */
+TEXT(T_MENU_ABOUT,          all, "About RB Stems Plus", "_About RB Stems Plus")
 TEXT(T_MENU_HIDE,           all, "Hide RB Stems Plus", "")
-TEXT(T_MENU_QUIT,           all, "Quit RB Stems Plus", "Exit")
-TEXT(T_MENU_EDIT,           all, "Edit", "Edit")
-TEXT(T_MENU_CUT,            all, "Cut", "Cut")
-TEXT(T_MENU_COPY,           all, "Copy", "Copy")
-TEXT(T_MENU_PASTE,          all, "Paste", "Paste")
-TEXT(T_MENU_SELECT_ALL,     all, "Select All", "Select All")
-TEXT(T_MENU_VIEW,           all, "View", "View")
-TEXT(T_MENU_PREPARE_PLAYLIST, all, "Prepare Playlist…", "Prepare Playlist…")
-TEXT(T_MENU_STOP,           all, "Stop", "Stop")
-TEXT(T_MENU_STEMS_CACHE,    all, "Stems Cache", "Stems Cache")
-TEXT(T_MENU_REINSTALL,      all, "Reinstall", "Reinstall")
-TEXT(T_MENU_UNINSTALL_PART, all, "Uninstall…", "Uninstall…")
-TEXT(T_MENU_SHOW_LOG,       all, "Show Log", "Show Log")
+TEXT(T_MENU_QUIT,           all, "Quit RB Stems Plus", "E_xit")
+TEXT(T_MENU_EDIT,           all, "Edit", "_Edit")
+TEXT(T_MENU_CUT,            all, "Cut", "Cu_t")
+TEXT(T_MENU_COPY,           all, "Copy", "_Copy")
+TEXT(T_MENU_PASTE,          all, "Paste", "_Paste")
+TEXT(T_MENU_SELECT_ALL,     all, "Select All", "Select _All")
+TEXT(T_MENU_VIEW,           all, "View", "_View")
+TEXT(T_MENU_PREPARE_PLAYLIST, all, "Prepare Playlist…", "Prepare _Playlist…")
+TEXT(T_MENU_STOP,           all, "Stop", "_Stop")
+TEXT(T_MENU_STEMS_CACHE,    all, "Stems Cache", "Stems _Cache")
+TEXT(T_MENU_REINSTALL,      all, "Reinstall", "_Reinstall")
+TEXT(T_MENU_UNINSTALL_PART, all, "Uninstall…", "_Uninstall…")
+TEXT(T_MENU_SHOW_LOG,       all, "Show Log", "Show _Log")
 TEXT(T_MENU_WINDOW,         all, "Window", "")
 TEXT(T_MENU_CLOSE,          all, "Close", "")
 TEXT(T_MENU_MINIMIZE,       all, "Minimize", "")
-TEXT(T_MENU_TROUBLESHOOTING, all, "RB Stems Plus Troubleshooting", "RB Stems Plus Troubleshooting")
-TEXT(T_MENU_REPORT_ISSUE,   all, "Report an Issue", "Report an Issue")
-TEXT(T_MENU_STATUS,         all, "Status", "Status")
+TEXT(T_MENU_TROUBLESHOOTING, all, "RB Stems Plus Troubleshooting", "RB Stems Plus _Troubleshooting")
+TEXT(T_MENU_REPORT_ISSUE,   all, "Report an Issue", "Report an _Issue")
+TEXT(T_MENU_STATUS,         all, "Status", "_Status")
 TEXT(T_ABOUT_CREDITS,       all, "\n\nFree and open source (MIT licence).\n\nNot made or supported by\nAlphaTheta / Pioneer DJ.", "\n\nFree and open source (MIT licence).\n\nNot made or supported by\nAlphaTheta / Pioneer DJ.")
 
 /* ---------------------------------------------------------------- Windows only (W-core, app.md §9) */
@@ -661,7 +662,7 @@ TEXT(T_WIN_LOC_READ_ONLY_NAMELESS,     win, "", "Stems Cache's drive is read-onl
 TEXT(T_WIN_LOC_NO_PERMISSION_NAMELESS, win, "", "RB Stems Plus isn't allowed to use Stems Cache's drive. Check the folder's permissions (Properties › Security in File Explorer).")
 TEXT(T_WIN_CACHE_PAUSED_NAMELESS,      win, "", "Stems Cache stopped saving stems: its drive has less than {gb} GB free.")
 TEXT(T_WIN_CACHE_PAUSED_AT_INSTALL_NAMELESS, win, "", "Stems Cache will stop saving stems while its drive has less than {gb} GB free.")
-TEXT(T_WIN_LEFT_DRIVE_NOT_CONNECTED_NAMELESS, win, "", "The stems saved on Stems Cache's drive stay: it isn't connected. To delete them, delete the folder \"{dir}\" in File Explorer.")
+TEXT(T_WIN_LEFT_DRIVE_NOT_CONNECTED_NAMELESS, win, "", "The stems saved on Stems Cache's drive stay. The last known folder was \"{dir}\".")
 TEXT(T_WIN_REMOVAL_NOTE_NOT_CONNECTED_NAMELESS, win, "", " (its stems on Stems Cache's drive, which isn't connected, stay)")
 TEXT(T_WIN_UNINSTALL_ALL_DRIVE_GONE_NAMELESS, win, "", "RB Stems Plus will be deleted. Its stems on Stems Cache's drive, which isn't connected, stay: connect it first to delete them too.")
 TEXT(T_WIN_OLD_DRIVE_STAYS_NAMELESS,   win, "", "The stems saved on the previous drive stay there.")
@@ -672,8 +673,8 @@ TEXT(T_WIN_UNINSTALL_ALL_DRIVE_NAMELESS, win, "", "RB Stems Plus will be deleted
 TEXT(T_WIN_REMOVAL_NOTE_CONNECTED_NAMELESS, win, "", ", including all stems saved in its folder on Stems Cache's drive{size}, also any saved there by other computers or accounts")
 TEXT(T_WIN_DELETING_DRIVE_NAMELESS,    win, "", "Deleting the stems saved on Stems Cache's drive…")
 TEXT(T_WIN_DELETING_DRIVE_N_NAMELESS,  win, "", "Deleting the stems saved on Stems Cache's drive… {n} files")
-TEXT(T_WIN_LEFT_DRIVE_PARTLY_NAMELESS, win, "", "Some of the stems saved on Stems Cache's drive couldn't be deleted: delete the folder \"{dir}\" in File Explorer.")
-TEXT(T_WIN_LEFT_DRIVE_NOT_NAMED_NAMELESS, win, "", "The stems saved on Stems Cache's drive stay. To delete them, delete the folder \"{dir}\" in File Explorer.")
+TEXT(T_WIN_LEFT_DRIVE_PARTLY_NAMELESS, win, "", "Stems Cache cleanup on its drive couldn't be completed. The last known folder was \"{dir}\".")
+TEXT(T_WIN_LEFT_DRIVE_NOT_NAMED_NAMELESS, win, "", "The stems saved on Stems Cache's drive stay. The last known folder was \"{dir}\".")
 TEXT(T_WIN_CLEAR_LOCATION_MSG_NAMELESS, win, "", "Deletes all stems saved in this folder on Stems Cache's drive, including any saved there by other computers or accounts.")
 TEXT(T_WIN_CLEARING_DRIVE_NAMELESS,    win, "", "Clearing saved stems on Stems Cache's drive…")
 TEXT(T_WIN_CLEARING_DRIVE_N_NAMELESS,  win, "", "Clearing saved stems on Stems Cache's drive… {n} files")
@@ -686,7 +687,86 @@ TEXT(T_WIN_LOCATION_LABEL_NAMELESS,    win, "", "Stems Cache location: Stems Cac
 TEXT(T_WIN_REFUSE_NAMELESS,            win, "", "That folder's drive has no name and no drive letter. Choose another folder.")
 /* appended (owner, 2026-11-16): the after-exit's one dialog (win/c/afterexit.c), when it kept the
  * app files and the Apps & features entry because a program still ran from the apps folder after
- * the 60 s wait, or the process list stayed unknown; no program named (its path is in the log) */
+ * the 60 s wait; no program named (its path is in the log) */
 TEXT(T_WIN_UNINSTALL_KEPT,             win, "", "RB Stems Plus couldn't be fully uninstalled because part of it is still running, maybe in another session of your Windows account. Restart Windows, then uninstall it again from Apps & features.")
+/* the first menu's title with its access key (menus.c gives it to M_APP on Windows; T_APP_NAME
+ * stays the app's name everywhere else) */
+TEXT(T_WIN_MENU_APP,          win, "", "_RB Stems Plus")
+/* the uninstall confirmation when the chosen drive couldn't be checked now (review N3R20) */
+TEXT(T_WIN_UNINSTALL_ALL_DRIVE_UNMEASURED, win, "", "RB Stems Plus will be deleted. The stems saved on \"{drive}\" will stay. The last known folder was \"{dir}\".")
+TEXT(T_WIN_UNINSTALL_ALL_DRIVE_UNMEASURED_NAMELESS, win, "", "RB Stems Plus will be deleted. The saved stems on Stems Cache's drive will stay. The last known folder was \"{dir}\".")
+TEXT(T_WIN_UNINSTALL_KEPT_UNKNOWN,     win, "", "RB Stems Plus couldn't be fully uninstalled. The cause is unknown because Windows couldn't determine whether part of the app was still running. Restart Windows, then uninstall it again from Apps & features.")
+
+TEXT(T_WIN_SWITCH_FOUND_UNSIZED,       win, "", "Stems Cache will use the stems already saved on \"{drive}\".")
+TEXT(T_WIN_SWITCH_THIS_PC_DELETED_UNSIZED, win, "", " The stems saved on this PC will be deleted: rekordbox separates those tracks again the next time you load them.")
+TEXT(T_WIN_CREATE_FAILED,             win, "", "RB Stems Plus couldn't set up its cache folder. Try again.")
+TEXT(T_WIN_CREATE_LEFT_FOLDER,        win, "", "RB Stems Plus left an unfinished cache folder. Choose another folder.")
+
+/* appended (multi-version rekordbox, .orchestration/mv-spec.md §2.4-§2.6). {rekordbox} takes one
+ * version or a composed list ("7.2.19 and 7.2.20", "7.2.19, 7.2.20 and 7.2.21"); {done} and
+ * {failed} the same for a partial run's versions; {why} the failing target's exit-code text. With
+ * one version the dialogs keep the texts above (T_INSTALL_NOTE_CACHE, T_UNINSTALL_NOTE_CACHE,
+ * T_WIN_RESTORE_MSG, T_RB_OPEN_*) */
+SLOT(done,   win)
+SLOT(failed, win)
+/* the confirmations naming the versions an action covers (2 or more) */
+TEXT(T_WIN_INSTALL_NOTE_CACHE_VERSIONS, win, "", "Saves the stems rekordbox {rekordbox} separates, with either stems model, so they load much faster the next time.")
+TEXT(T_WIN_REINSTALL_NOTE_VERSIONS,  win, "", "Installs the latest version of {features} again, for rekordbox {rekordbox}.")
+TEXT(T_WIN_UNINSTALL_NOTE_CACHE_VERSIONS, win, "", "Stops saving stems and puts the original files of rekordbox {rekordbox} back. The stems already saved are kept.")
+TEXT(T_WIN_RESTORE_MSG_VERSION,      win, "", "Puts Pioneer's onnxruntime.dll back in rekordbox {rekordbox}. Stems Cache stays off in that version until you reinstall it.")
+TEXT(T_WIN_RESTORE_MSG_VERSIONS,     win, "", "Puts Pioneer's onnxruntime.dll back in rekordbox {rekordbox}. Stems Cache stays off in those versions until you reinstall it.")
+/* "rekordbox open" when every running rekordbox.exe's version is known (the gate stays system-wide) */
+TEXT(T_WIN_RB_OPEN_VERSION_MSG,      win, "", "Close rekordbox {rekordbox} (also in other accounts on this PC), then try again.")
+TEXT(T_WIN_RB_OPEN_VERSION_TRY,      win, "", "Close rekordbox {rekordbox} (also in other accounts on this PC), then click Try Again.")
+/* a run that changed some versions and not the others (worker exit 16, or the root kept) */
+TEXT(T_WIN_CACHE_PARTIAL_INSTALLED,  win, "", "Stems Cache was installed in rekordbox {done}, but not in rekordbox {failed}. {why}")
+TEXT(T_WIN_CACHE_PARTIAL_REMOVED,    win, "", "Stems Cache was removed from rekordbox {done}, but not from rekordbox {failed}. {why}")
+TEXT(T_WIN_RESTORE_PARTIAL,          win, "", "Pioneer's file is back in rekordbox {done}, but not in rekordbox {failed}. {why}")
+/* the worker's scope differed twice (exit 15), and an incomplete inventory */
+TEXT(T_WIN_SCOPE_CHANGED_MSG,        win, "", "The installed versions of rekordbox changed while RB Stems Plus was checking them. Stems Cache was left as it was. Try again.")
+TEXT(T_WIN_CACHE_CHECKING,           win, "", "RB Stems Plus couldn't check every installed version of rekordbox just now. Nothing was changed. Try again in a moment.")
+/* Manage with 2 or more versions: the summary, each row's text and its reason line */
+TEXT(T_WIN_CACHE_SUMMARY,            win, "", "Stems Cache on in {n} of {m} versions")
+TEXT(T_WIN_ROW_ON,                   win, "", "{rekordbox} · On")
+TEXT(T_WIN_ROW_READY,                win, "", "{rekordbox} · Ready to install")
+TEXT(T_WIN_ROW_UNSUPPORTED,          win, "", "{rekordbox} · Unsupported")
+TEXT(T_WIN_ROW_REPAIR,               win, "", "{rekordbox} · Needs repair")
+TEXT(T_WIN_ROW_UNVERIFIED,           win, "", "{rekordbox} · Couldn't verify")
+TEXT(T_WIN_ROW_RUNNING,              win, "", " · Running")
+TEXT(T_WIN_ROW_READY_TIP,            win, "", "Click Install Stems Cache to add it to rekordbox {rekordbox}.")
+TEXT(T_WIN_ROW_BUILD_UNLISTED,       win, "", "Stems Cache doesn't support this build of rekordbox {rekordbox} yet.")
+TEXT(T_WIN_ROW_ORT_UNLISTED,         win, "", "Stems Cache doesn't support the ONNX Runtime in rekordbox {rekordbox} yet.")
+TEXT(T_WIN_ROW_R1_MISSING,           win, "", "The onnxruntime.dll of rekordbox {rekordbox} is missing, so that version can't separate stems. Click Put Back Pioneer's File.")
+TEXT(T_WIN_ROW_R1_FOREIGN,           win, "", "The onnxruntime.dll of rekordbox {rekordbox} isn't Pioneer's or RB Stems Plus's, so that version may not separate stems. Click Put Back Pioneer's File.")
+TEXT(T_WIN_ROW_R1_ORT_MISSING,       win, "", "Stems Cache's copy of the ONNX Runtime is missing, so rekordbox {rekordbox} can't separate stems. Click Put Back Pioneer's File.")
+TEXT(T_WIN_ROW_DELISTED,             win, "", "Stems Cache doesn't support rekordbox {rekordbox} any more. Click Put Back Pioneer's File.")
+TEXT(T_WIN_ROW_NOT_VERIFIED,         win, "", "RB Stems Plus couldn't verify rekordbox {rekordbox}. Reinstall it using Pioneer's installer.")
+TEXT(T_WIN_ROW_NO_ANSWER,            win, "", "RB Stems Plus couldn't check rekordbox {rekordbox} just now.")
+/* our bridge with no matching receipt (an interrupted swap): never adopted (decision D13) */
+TEXT(T_WIN_ROW_NOT_RECORDED,         win, "", "Stems Cache wasn't fully installed in rekordbox {rekordbox}. Click Put Back Pioneer's File.")
+TEXT(T_WIN_BTN_R1_DISMISS_MANY,      win, "", "Don't Ask Again for These Versions")
+TEXT(T_WIN_SETTINGS_MSG_VERSIONS,    win, "", "Stems Cache uses these settings the next time each version of rekordbox opens.")
+/* the watcher: one grouped ask for the versions Stems Cache can now be added to, and one notice per
+ * unsupported new version */
+TEXT(T_WIN_W_ADD_CACHE,              win, "", "Stems Cache isn't on in rekordbox {rekordbox} yet.")
+TEXT(T_WIN_W_INSTALL_NOW,            win, "", "Install Now")
+TEXT(T_WIN_W_DONT_ASK_THESE,         win, "", "Don't Ask Again for These Versions")
+TEXT(T_WIN_W_UNSUPPORTED,            win, "", "Stems Cache doesn't support rekordbox {rekordbox} yet. RB Stems Plus asks you to add it once it can.")
+TEXT(T_WIN_UNINSTALL_ALL_CACHE_VERSIONS, win, "", "Stems Cache is removed from rekordbox {rekordbox}.")
+/* a refused install whose undo couldn't restore everything (worker exit 17) */
+TEXT(T_WIN_UNDO_INCOMPLETE_MSG,      win, "", "Stems Cache couldn't finish undoing its changes. Click Reinstall Stems Cache, or Put Back Pioneer's File.")
+TEXT(T_WIN_FIRST_INSTALL_UNDO_INCOMPLETE_MSG, win, "", "Stems Cache couldn't finish undoing its changes. Click Install Stems Cache to try again.")
+TEXT(T_WIN_ADMIN_START_FAILED,      win, "", "Administrator step didn't start")
+TEXT(T_WIN_ADMIN_START_TIMEOUT,     win, "", "Windows didn't start the administrator step in time. Try again.")
+TEXT(T_WIN_LOCATION_SAVING, win, "", "Saving the Stems Cache location…")
+TEXT(T_WIN_LOCATION_TIMEOUT, win, "", "The drive didn't respond in time. Stems are still saved where they were. Try again.")
+TEXT(T_WIN_LOCATION_TIMEOUT_LEFT, win, "", "The drive didn't respond in time, and RB Stems Plus may have left an unfinished cache folder there. Stems are still saved where they were. Choose another folder.")
+TEXT(T_WIN_LOCATION_UNCHECKED, win, "", "The new location is saved, but its drive didn't respond in time to be checked.")
+TEXT(T_WIN_LOCATION_LOCAL_KEPT, win, "", " The stems on this PC weren't deleted.")
+/* The same unsized switch texts on both platforms. Keep the earlier Windows text IDs in place. */
+TEXT(T_SWITCH_FOUND_UNSIZED, all, "Stems Cache will use the stems already saved on \"{drive}\".", "Stems Cache will use the stems already saved on \"{drive}\".")
+TEXT(T_SWITCH_LOCAL_DELETED_UNSIZED, all, " The stems saved on this Mac will be deleted: rekordbox separates those tracks again the next time you load them.", " The stems saved on this PC will be deleted: rekordbox separates those tracks again the next time you load them.")
+TEXT(T_WIN_SETTINGS_READ_TIMEOUT, win, "", "Windows didn't read the Stems Cache settings in time. Try again.")
+TEXT(T_WIN_CACHE_NO_TARGETS, win, "", "No installed version of rekordbox is ready for this change.")
 #undef SLOT
 #undef TEXT

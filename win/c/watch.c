@@ -112,6 +112,7 @@ static int depth_below(const char *name, const char *prefix) {
 }
 
 int watch_classify(int kind, const char *current, int action, const char *name) {
+    (void)current;
     if (!name || !*name) return 0;
     const char *sep = first_sep(name);
     size_t c = sep ? (size_t)(sep - name) : strlen(name);
@@ -127,9 +128,8 @@ int watch_classify(int kind, const char *current, int action, const char *name) 
         if (deeper || !compat_folder_version(comp, v, sizeof v)) return 0;
         /* a version folder added, removed or renamed: an update (or an uninstall) */
         if (!rest && action != WATCH_MODIFIED) return WATCH_ROUND | WATCH_R1;
-        /* a name directly in a version folder (or the folder's own times): the current one's
-         * only; while it is unknown, any version folder's */
-        if (!current || !*current || equal_ci_n(comp, c, current)) return WATCH_ROUND | WATCH_R1;
+        if (rest && (equal_ci_n(rest, strlen(rest), "rekordbox.exe") ||
+                     equal_ci_n(rest, strlen(rest), "onnxruntime.dll"))) return WATCH_ROUND | WATCH_R1;
         return 0;
     }
     case WD_ROOT: return !deeper && equal_ci_n(comp, c, "ort") ? WATCH_R1 : 0;
@@ -290,6 +290,11 @@ int watch_engine_read(watch_engine *e, int slot, int status, const watch_note *n
 
 void watch_sched_note(watch_sched *s, int flags) { s->pending |= flags; }
 
+void watch_sched_registry(watch_sched *s, uint64_t generation, int periodic) {
+    if (generation != s->registry_gen || periodic) watch_sched_note(s, WATCH_REGISTRY);
+    s->registry_gen = generation;
+}
+
 int watch_sched_poll(watch_sched *s, int64_t now_ms, int64_t *wait_ms) {
     *wait_ms = -1;
     if (s->running || !s->pending) return 0;
@@ -338,11 +343,6 @@ size_t watch_r1_key(const char *version, const compat_r1 *r, char *out, size_t n
     return k < 0 ? 0 : (size_t)k;
 }
 
-size_t watch_r1_dismissed_key(const char *version, char *out, size_t n) {
-    int k = snprintf(out, n, "r1:%s", version ? version : "");
-    return k < 0 ? 0 : (size_t)k;
-}
-
 /* what R1 found, for the log */
 static void r1_words(char *b, size_t n, const char *v, const compat_r1 *r) {
     switch (r->live) {
@@ -380,17 +380,6 @@ static void add_line(char *list, size_t cap, const char *key) {
     memcpy(list + n, key, kn);
     list[n + kn] = '\n';
     list[n + kn + 1] = 0;
-}
-
-/* Compat.swift's listed: "7.2.19.0342" matches "7.2.19" */
-static int listed_version(const char *v, const payload_manifest *m) {
-    if (!v || !*v || !m) return 0;
-    size_t vn = strlen(v);
-    for (int i = 0; i < m->n_win_rekordbox; i++) {
-        size_t en = strlen(m->win_rekordbox[i]);
-        if (!strcmp(v, m->win_rekordbox[i]) || (vn > en && !memcmp(v, m->win_rekordbox[i], en) && v[en] == '.')) return 1;
-    }
-    return 0;
 }
 
 static int listed_engine(const char *e, const payload_manifest *m) {
@@ -444,6 +433,9 @@ static void remember(const watch_ops *o, const watch_facts *f, const keyset *hav
 
 /* a text in the column os; 0 when it isn't written yet (or doesn't fit) */
 #ifdef WATCH_TEST_HOOKS
+#ifdef _WIN32
+__attribute__((section(".data$rbsp_test_watch_text")))
+#endif
 int watch_test_unwritten_text = -1;
 #endif
 
@@ -460,6 +452,169 @@ static int os_text(int os, core_text_id id, char *b, size_t n) {
     return !t.err && t.len < n;
 }
 
+static void sha_text(plat_sha256_ctx *hash, const char *s) {
+    plat_sha256_update(hash, s, strlen(s) + 1);
+}
+
+static int row_digest(const inv_row_view *r, unsigned char out[32]) {
+    plat_sha256_ctx hash;
+    if (plat_sha256_init(&hash)) return -1;
+    int values[] = {r->state, r->why, r->r1, r->running};
+    plat_sha256_update(&hash, values, sizeof values);
+    sha_text(&hash, r->version);
+    sha_text(&hash, r->name);
+    sha_text(&hash, r->display_version);
+    return plat_sha256_final(&hash, out);
+}
+
+/* A strict subset of the previous rows is a silent removal, even when the candidate changes. */
+static int observe_rows(const watch_ops *o, watch_state *st, const watch_facts *f,
+                        const unsigned char list[32], int *flags) {
+    unsigned char rows[INV_MAX][32], digest[32];
+    for (int i = 0; i < f->nrows; i++)
+        if (row_digest(&f->rows[i], rows[i])) return 0;
+    plat_sha256_ctx hash;
+    if (plat_sha256_init(&hash)) return 0;
+    plat_sha256_update(&hash, rows, (size_t)f->nrows * sizeof rows[0]);
+    plat_sha256_update(&hash, &f->rb_state, sizeof f->rb_state);
+    plat_sha256_update(&hash, &f->inv_complete, sizeof f->inv_complete);
+    sha_text(&hash, f->folder);
+    sha_text(&hash, f->watch_name);
+    sha_text(&hash, f->rekordbox_version);
+    if (plat_sha256_final(&hash, digest)) return 0;
+
+    /* A disk-only bridge stays visible for cleanup after its registered installation goes. */
+    int nrows = 0;
+    for (int i = 0; i < f->nrows; i++) {
+        const inv_row_view *row = &f->rows[i];
+        if (row->why == WHY_DELISTED_BRIDGE && row->r1 == 0) continue;
+        if (nrows != i) memcpy(rows[nrows], rows[i], sizeof rows[i]);
+        nrows++;
+    }
+    int same_list = st->observed && !memcmp(st->list_digest, list, sizeof st->list_digest);
+    int changed = !st->observed || memcmp(st->rows_digest, digest, sizeof digest);
+    int removal = changed && same_list && st->inv_complete && f->inv_complete && nrows < st->nrows;
+    for (int i = 0; removal && i < nrows; i++) {
+        int j = 0;
+        while (j < st->nrows && memcmp(rows[i], st->row_digests[j], sizeof rows[i])) j++;
+        if (j == st->nrows) removal = 0;
+    }
+    st->observed = 1;
+    st->nrows = nrows;
+    st->inv_complete = f->inv_complete;
+    memcpy(st->rows_digest, digest, sizeof digest);
+    memcpy(st->row_digests, rows, (size_t)nrows * sizeof rows[0]);
+    memcpy(st->list_digest, list, sizeof st->list_digest);
+    if (changed) {
+        if (o->refresh_app) o->refresh_app(o->ctx);
+        *flags |= WATCH_R1;
+    }
+    return !removal && (changed || !same_list || *flags != WATCH_REGISTRY);
+}
+
+static void request_app(const watch_ops *o, const char *name, const char *features) {
+    switch (o->request(o->ctx, features)) {
+    case 0: break;
+    case WATCH_NO_REQUEST: olog(o, "couldn't write the %s request", name); break;
+    default: o->log(o->ctx, "couldn't open RB Stems Plus"); break;
+    }
+}
+
+static int ask_cache(const watch_ops *o, const watch_facts *f, watch_set *s, const keyset *dismissed,
+                     int unsupported_row, const char *list_id) {
+    char keys[INV_MAX][COMPAT_VERSION_MAX + 80], permanent[INV_MAX][COMPAT_VERSION_MAX + 16];
+    pstr versions[INV_MAX], add[INV_MAX], dont_ask[INV_MAX];
+    int n = 0;
+    for (int i = 0; i < f->nrows; i++) {
+        const inv_row_view *row = &f->rows[i];
+        if (row->state != (unsupported_row ? INV_ROW_UNSUPPORTED : INV_ROW_READY) || row->r1 != 0) continue;
+        size_t vn = strlen(row->version);
+        int pn = snprintf(permanent[n], sizeof permanent[n], "%s:%s", unsupported_row ? "unsupported" : "cache", row->version);
+        if (keyset_has(dismissed, permanent[n], (size_t)pn)) continue;
+        int kn = unsupported_row ? snprintf(keys[n], sizeof keys[n], "unsupported:%s:%s", list_id, row->version)
+                                 : snprintf(keys[n], sizeof keys[n], "%s", permanent[n]);
+        if (keyset_has(dismissed, keys[n], (size_t)kn) || listed_line(s->put_off, keys[n])) continue;
+        versions[n] = (pstr){row->version, vn};
+        add[n] = (pstr){keys[n], (size_t)kn};
+        dont_ask[n] = (pstr){permanent[n], (size_t)pn};
+        n++;
+    }
+    if (!n) return 1;
+
+    char title[256], labels[3][128], version_list[INV_MAX * (COMPAT_VERSION_MAX + 2)];
+    char message[sizeof version_list + 256];
+    join_keys(version_list, sizeof version_list, versions, n);
+    tbuf b;
+    tb_init(&b, CORE_OS_WIN, message, sizeof message);
+    core_slot slot = SLOT_S(rekordbox, version_list);
+    tb_text(&b, unsupported_row ? T_WIN_W_UNSUPPORTED : T_WIN_W_ADD_CACHE, &slot, 1);
+    core_text_id dismiss = n == 1 ? T_W_DONT_ASK : T_WIN_W_DONT_ASK_THESE;
+    core_text_id ids[] = {unsupported_row ? T_OK : T_WIN_W_INSTALL_NOW, unsupported_row ? dismiss : T_W_REMIND_LATER, dismiss};
+    int nb = unsupported_row ? 2 : 3;
+    int ok = !b.err && os_text(o->text_os, T_W_TITLE_UPDATED, title, sizeof title);
+    const char *buttons[3];
+    for (int i = 0; ok && i < nb; i++) {
+        ok = os_text(o->text_os, ids[i], labels[i], sizeof labels[i]);
+        buttons[i] = labels[i];
+    }
+    if (!ok) {
+        o->log(o->ctx, "the Stems Cache question's texts aren't written for Windows yet: not asking");
+        return 1;
+    }
+
+    olog(o, "asking about Stems Cache in rekordbox %s", version_list);
+    int pressed = o->ask(o->ctx, title, message, buttons, nb);
+    olog(o, "user chose: %s", pressed >= 0 && pressed < nb ? buttons[pressed] : "");
+    if (pressed == 0 && !unsupported_row) {
+        request_app(o, "cache", "cache");
+        return 0;
+    }
+    if (pressed == nb - 1) remember(o, f, dismissed, dont_ask, n);
+    else if (unsupported_row && pressed == 0) remember(o, f, dismissed, add, n);
+    for (int i = 0; i < n; i++) add_line(s->put_off, sizeof s->put_off, keys[i]);
+    return 1;
+}
+
+static int check_cache(const watch_ops *o, watch_set *s, const watch_facts *f,
+                       const unsigned char list[32], int flags, int *opened) {
+    arena a = {0};
+    keyset dismissed = {0};
+    if (keyset_parse(&a, f->dismissed, f->dismissed_n, &dismissed)) {
+        arena_free(&a);
+        return 1;
+    }
+    if (flags & WATCH_R1) {
+        for (int i = 0; i < f->nrows; i++) {
+            const inv_row_view *row = &f->rows[i];
+            if (row->state != INV_ROW_REPAIR || row->r1 <= 0) continue;
+            char key[COMPAT_VERSION_MAX + 32], vkey[COMPAT_VERSION_MAX + 8];
+            snprintf(key, sizeof key, "%s:%d:%d", row->version, row->why, row->r1);
+            watch_r1_dismissed_key(row->version, vkey, sizeof vkey);
+            if (keyset_has(&dismissed, vkey, strlen(vkey)) || listed_line(s->st->r1_opened, key)) continue;
+            if (!*opened) {
+                olog(o, "rekordbox %s needs repair: opening Manage", row->version);
+                if (o->open_app(o->ctx)) {
+                    o->log(o->ctx, "couldn't open RB Stems Plus");
+                    break;
+                }
+                *opened = 1;
+            }
+            add_line(s->st->r1_opened, sizeof s->st->r1_opened, key);
+        }
+    }
+    int next = 1;
+    if (f->chosen_cache && f->have_lists) {
+        if (f->inv_complete) next = ask_cache(o, f, s, &dismissed, 0, NULL);
+        if (next) {
+            char list_id[65];
+            for (int i = 0; i < 32; i++) snprintf(list_id + i * 2, 3, "%02x", (unsigned)list[i]);
+            next = ask_cache(o, f, s, &dismissed, 1, list_id);
+        }
+    }
+    arena_free(&a);
+    return next;
+}
+
 int watch_check(const watch_ops *o, watch_set *s, int flags) {
     watcher_settle_ops so = {o->ctx, o->updating, o->app_busy, o->rekordbox_open, o->pause, o->half_uninstalled, o->in_session, o->log};
     if (!watcher_settle(&so)) {
@@ -473,11 +628,61 @@ int watch_check(const watch_ops *o, watch_set *s, int flags) {
     watch_facts f;
     memset(&f, 0, sizeof f);
     if (o->facts(o->ctx, &f)) return 1;
+    if (f.rb_unsettled) {
+        /* An installer can publish the registry entry before its files or finish it after the
+         * folder arrives. Give that round one more read, within the same process and busy gates. */
+        o->pause(o->ctx, 2);
+        if (!watcher_settle(&so)) return 0;
+        flags |= o->take(o->ctx);
+        memset(&f, 0, sizeof f);
+        if (o->facts(o->ctx, &f)) return 1;
+    }
     if (o->set_current) o->set_current(o->ctx, f.watch_name);
-    olog(o, "run: RB Stems Plus Watcher %s; rekordbox %s, engine %s, Demucs v4 %s, Stems Cache %s; chosen: model=%s cache=%s",
-         f.version ? f.version : "", f.rekordbox_version, f.engine, f.plus_present ? "on" : "off", f.cache_present ? "on" : "off",
-         f.chosen_model ? "true" : "false", f.chosen_cache ? "true" : "false");
+    int legacy = 0, opened = 0;
+#ifdef WATCH_TEST_HOOKS
+    legacy = o->text_os == CORE_OS_MAC;
+#endif
+    int supported = payload_win_rekordbox_supported(f.m, f.rekordbox_version);
+    unsigned char compatibility[32];
+    if (!legacy) {
+        if (inv_list_digest(f.m, compatibility) || !observe_rows(o, s->st, &f, compatibility, &flags)) return 1;
+    } else {
+        watch_state *st = s->st;
+        int changed = !st->observed || st->rb_state != f.rb_state || st->cache_present != f.cache_present ||
+                      st->supported != supported || st->live != f.r1.live || st->ort_copy != f.r1.ort_copy ||
+                      st->offer_restore != f.r1.offer_restore || strcmp(st->observed_folder, f.folder) ||
+                      strcmp(st->observed_version, f.rekordbox_version);
+        if (changed) {
+            st->observed = 1;
+            st->rb_state = f.rb_state;
+            st->cache_present = f.cache_present;
+            st->supported = supported;
+            st->live = f.r1.live;
+            st->ort_copy = f.r1.ort_copy;
+            st->offer_restore = f.r1.offer_restore;
+            snprintf(st->observed_folder, sizeof st->observed_folder, "%s", f.folder);
+            snprintf(st->observed_version, sizeof st->observed_version, "%s", f.rekordbox_version);
+            if (o->refresh_app) o->refresh_app(o->ctx);
+            if (flags & WATCH_REGISTRY) flags |= WATCH_R1;
+        } else if (flags == WATCH_REGISTRY) return 1;
+    }
+    if (!legacy) {
+        char states[INV_STATE_TEXT_MAX];
+        inv_state_text(f.rows, f.nrows, states, sizeof states);
+        olog(o, "state: rekordbox %s; RB Stems Plus Watcher %s, engine %s, Demucs v4 %s; chosen: model=%s cache=%s",
+             states, f.version ? f.version : "", f.engine, f.plus_present ? "on" : "off",
+             f.chosen_model ? "true" : "false", f.chosen_cache ? "true" : "false");
+    } else {
+        olog(o, "run: RB Stems Plus Watcher %s; rekordbox %s, engine %s, Demucs v4 %s, Stems Cache %s; chosen: model=%s cache=%s",
+             f.version ? f.version : "", f.rekordbox_version, f.engine, f.plus_present ? "on" : "off", f.cache_present ? "on" : "off",
+             f.chosen_model ? "true" : "false", f.chosen_cache ? "true" : "false");
+    }
 
+    if (!legacy) {
+        if (!check_cache(o, s, &f, compatibility, flags, &opened)) return 0;
+        f.chosen_cache = 0;
+        f.r1_known = 0;
+    }
     /* nothing is asked about a rekordbox that isn't there or isn't verified (the app says why) */
     if (f.rb_state == COMPAT_RB_NOT_INSTALLED) {
         o->log(o->ctx, "rekordbox isn't installed: nothing to ask");
@@ -563,7 +768,7 @@ int watch_check(const watch_ops *o, watch_set *s, int flags) {
         tb_init(&m, (core_os)o->text_os, mb, sizeof mb);
         watcher_dialog d;
         watcher_dialog_build(&m, &d, model_off, cache_off, f.engine, f.rekordbox_version, listed_engine(f.engine, f.m),
-                             listed_version(f.rekordbox_version, f.m), f.chosen_model && f.plus_present);
+                             supported, f.chosen_model && f.plus_present);
         int ok = !m.err && os_text(o->text_os, d.title, title, sizeof title);
         const char *buttons[3];
         for (int32_t i = 0; ok && i < d.nbuttons; i++) {
@@ -580,11 +785,7 @@ int watch_check(const watch_ops *o, watch_set *s, int flags) {
             case WANSWER_REINSTALL:
                 /* the app does the reinstall: it reads the request at start, or when it is
                  * started again while open */
-                switch (o->reinstall(o->ctx)) {
-                case 0: break;
-                case WATCH_NO_REQUEST: o->log(o->ctx, "couldn't write the reinstall request"); break;
-                default: o->log(o->ctx, "couldn't open RB Stems Plus"); break;
-                }
+                request_app(o, "reinstall", d.reinstall);
                 r = 0;
                 break;
             case WANSWER_REMEMBER:
@@ -619,7 +820,7 @@ int watch_check(const watch_ops *o, watch_set *s, int flags) {
         }
     }
     arena_free(&a);
-    return r;
+    return opened ? 0 : r;
 }
 
 typedef struct {

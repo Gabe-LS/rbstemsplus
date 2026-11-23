@@ -7,6 +7,7 @@
 #include "check.h"
 
 #include "../update.h"
+#include "../update_shell.h"
 #include "plat.h"
 #include "sig_mac.h"
 
@@ -14,6 +15,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <setjmp.h>
+#include <stdatomic.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -178,6 +180,7 @@ static struct {
     int nspawn, spawn_fail;
     char spawn_exe[16][1024], spawn_arg[16][64];
     int watcher_running, nstop;
+    int replacement_running, stub_only;
     char stopped[1024];
     char display[64];
     int ndisplay;
@@ -203,6 +206,7 @@ static int fo_spawn(void *ctx, const char *exe, const char *const *args) {
     int i = fo.nspawn++ % 16;
     snprintf(fo.spawn_exe[i], sizeof fo.spawn_exe[i], "%s", exe);
     snprintf(fo.spawn_arg[i], sizeof fo.spawn_arg[i], "%s", args[0] ? args[0] : "");
+    if (args[0] && !strcmp(args[0], "--watcher") && !fo.stub_only) fo.replacement_running = 1;
     return 0;
 }
 static int fo_wait(void *ctx, uint32_t pid, int64_t started, uint32_t ms) {
@@ -233,14 +237,14 @@ static int fo_running(void *ctx, const char *dir) {
     return 0;
 }
 static int fo_watchers(void *ctx, const char *dir) {
-    (void)ctx, (void)dir;
+    (void)ctx;
     fo.nwatch++;
     if (fo.watchers_fail) return -1;
     if (fo.watchers_left > 0) {
         fo.watchers_left--;
         return 1;
     }
-    return 0;
+    return fo.replacement_running && strcmp(dir, fo.stopped) != 0;
 }
 static int fo_rm(void *ctx, const char *path) {
     (void)ctx;
@@ -1189,7 +1193,7 @@ static void shell_steps(const char *scratch) {
 /* ------------------------------------------------------------------ WC3: the sweep never takes a folder being staged */
 
 static update_env sweep_env;
-static volatile int sweep_held, sweep_go;
+static atomic_int sweep_held, sweep_go, swap_started, swap_done;
 static int sweep_hook(int step) {
     if (step == UPDATE_STEP_SWEEP) {
         sweep_held = 1;
@@ -1205,7 +1209,9 @@ static void *after_render_thread(void *arg) {
 static int swap_r = -9;
 static void *step_swap_thread(void *arg) {
     (void)arg;
+    swap_started = 1;
     swap_r = update_step_swap(&sweep_env, quit_cb, NULL);
+    swap_done = 1;
     return NULL;
 }
 
@@ -1215,21 +1221,32 @@ static void sweep_during_swap(const char *scratch) {
     char p[1200];
     installed_152(&w, scratch, "sweepswap", &r);
     sweep_env = w.e;
-    sweep_held = sweep_go = 0;
+    sweep_held = sweep_go = swap_started = swap_done = 0;
     quits = 0;
     update_test_step = sweep_hook;
     pthread_t a, b;
-    pthread_create(&a, NULL, after_render_thread, NULL);
+    int err = pthread_create(&a, NULL, after_render_thread, NULL);
+    CHECK(!err, "WC3: started the sweep thread (%d)", err);
+    if (err) goto done;
     for (int i = 0; !sweep_held && i < 2000; i++) plat_sleep_ms(5);   /* the sweep is about to list the apps folder (10 s at most) */
     CHECK(sweep_held, "WC3: the after-render sweep reached its listing");
-    pthread_create(&b, NULL, step_swap_thread, NULL);
-    plat_sleep_ms(300);                     /* unlocked, UPDATE_SWAP would stage 1.5.3 by now */
+    err = pthread_create(&b, NULL, step_swap_thread, NULL);
+    CHECK(!err, "WC3: started the swap thread (%d)", err);
+    if (!err) {
+        for (int i = 0; !swap_started && i < 200; i++) plat_sleep_ms(5);
+        CHECK(swap_started, "WC3: the swap thread entered its work");
+        /* Give an unlocked swap a chance to stage and launch before the sweep lists the folders. */
+        for (int i = 0; !swap_done && i < 200; i++) plat_sleep_ms(5);
+    }
     sweep_go = 1;
     pthread_join(a, NULL);
-    pthread_join(b, NULL);
+    if (!err) {
+        pthread_join(b, NULL);
+        path(p, sizeof p, w.apps, "1.5.3");
+        CHECK(swap_r == 0 && quits == 1 && fo.nspawn == 1 && exists(p), "WC3: UPDATE_SWAP during the sweep: the staged folder survives and the new app starts (%d)", swap_r);
+    }
+done:
     update_test_step = NULL;
-    path(p, sizeof p, w.apps, "1.5.3");
-    CHECK(swap_r == 0 && quits == 1 && fo.nspawn == 1 && exists(p), "WC3: UPDATE_SWAP during the sweep: the staged folder survives and the new app starts (%d)", swap_r);
     release_free(&r);
 }
 
@@ -1551,6 +1568,42 @@ static void watcher_restart(const char *scratch) {
     release_free(&r);
 }
 
+static void watcher_restart_failure(const char *scratch) {
+    for (int stub_only = 0; stub_only <= 1; stub_only++) {
+        world w;
+        char file[1200], marker[1200], pending[1200], record[UPDATE_RECORD_MAX];
+        update_pending next = {.from = "1.5.2", .to = "1.5.3", .pid = 1, .started = 1};
+        const char *scenario = stub_only ? "watcher-stub-only" : "watcher-spawn-fails";
+        world_new(&w, scratch, scenario, next.from);
+        path(file, sizeof file, w.apps, next.to);
+        mkdir(file, 0755);
+        path(file, sizeof file, w.apps, "1.5.3/RB Stems Plus.exe");
+        wfile(file, "new app", 7);
+        path(file, sizeof file, w.support, "update");
+        mkdir(file, 0755);
+        path(pending, sizeof pending, file, "pending");
+        size_t length = update_pending_format(&next, record, sizeof record);
+        wfile(pending, record, length);
+        update_env n = as(&w, next.to);
+        fo.watcher_running = 1;
+        fo.watchers_left = 1;
+        fo.spawn_fail = stub_only ? 0 : EACCES;
+        fo.stub_only = stub_only;
+        path(marker, sizeof marker, w.support, "update/watcher");
+
+        int error = update_after_render(&n);
+        CHECK(error == (stub_only ? ETIMEDOUT : EACCES) && exists(marker) && exists(pending) && !fo.replacement_running &&
+                  strstr(logbuf, "the next start retries it") && !strstr(logbuf, " -> 1.5.3 done"),
+              "review 5: %s leaves the update and restart marker pending and reports the failure", scenario);
+
+        fo.spawn_fail = fo.stub_only = 0;
+        int before = fo.nspawn;
+        CHECK(update_at_start(&n) == UPDATE_FAIL_NONE && update_after_render(&n) == 0 && fo.nspawn == before + 1 &&
+                  fo.replacement_running && !exists(marker) && !exists(pending),
+              "review 5: %s retries successfully on the next start and clears the records", scenario);
+    }
+}
+
 /* installed-release's write stopped between the signature and payload.json: the record before it
  * still counts */
 static void installed_tear(const char *scratch) {
@@ -1758,11 +1811,26 @@ static void fetch_assets(const char *scratch) {
     free(bridge);
 }
 
+static void shown_now(const char *scratch) {
+    char dir[1200], record[1200], target[1200], shown[PAYLOAD_VERSION_MAX];
+    path(dir, sizeof dir, scratch, "shown-now");
+    CHECK(!mkdir(dir, 0755), "About's support folder");
+    path(record, sizeof record, dir, "shown-version");
+    CHECK(core_win_update_shown(dir, "1.5.0", shown, sizeof shown) == 5 && !strcmp(shown, "1.5.0"), "About without a record: the app's version");
+    wfile(record, "1.5.1\n1.5.0\n", 12);
+    CHECK(core_win_update_shown(dir, "1.5.0", shown, sizeof shown) == 5 && !strcmp(shown, "1.5.1"), "About after a carried release: the shown version");
+    CHECK(core_win_update_shown(dir, "1.4.0", shown, sizeof shown) == 5 && !strcmp(shown, "1.4.0"), "About in another app: its own version");
+    path(target, sizeof target, dir, "other-record");
+    CHECK(!rename(record, target) && !symlink(target, record), "replace shown-version with a link");
+    CHECK(core_win_update_shown(dir, "1.5.0", shown, sizeof shown) == 5 && !strcmp(shown, "1.5.0"), "About does not follow a shown-version link");
+}
+
 void test_update(const char *scratch, const char *pedir) {
     pe_dir = pedir;
     CHECK(test_key_new(&rel) == 0 && test_key_new(&oth) == 0, "keys");
     keys[0].name = "release";
     memcpy(keys[0].xy, rel.xy, 64);
+    shown_now(scratch);
     check_final(scratch);
     handles(scratch);
     where_codes(scratch);
@@ -1774,6 +1842,7 @@ void test_update(const char *scratch, const char *pedir) {
     sweep_during_swap(scratch);
     commit_stops(scratch);
     watcher_restart(scratch);
+    watcher_restart_failure(scratch);
     commit_kills(scratch);
     installed_tear(scratch);
     installed_suffixed(scratch);

@@ -172,6 +172,49 @@ static void t_paths(void) {
     static const char *bad[] = {"D:\\a\\\\b", "D:\\.\\b", "D:\\a\\..\\b", "D:\\a\\..", "relative", "D:\\\xc3"};
     for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) CHECK(wr_nt_path(bad[i], w, 400) == -1, "refused: %s", bad[i]);
     CHECK(wr_nt_path("D:\\abcdef", w, 10) == -1 && wr_nt_path("D:\\abcdef", w, 14) == 13, "the NUL must fit");
+    /* UNC: never a path kind the cache, the bridge or the core take (the UNC ruling) */
+    static const char *unc[] = {"\\\\srv\\share\\x.mp3", "//srv/share/x.mp3", "\\\\?\\UNC\\srv\\share\\x.mp3"};
+    for (size_t i = 0; i < sizeof unc / sizeof unc[0]; i++)
+        CHECK(!wr_path_kind(unc[i], &rest) && wr_nt_path(unc[i], w, 400) == -1, "UNC isn't a cache or location path: %s", unc[i]);
+    /* a track's NT path (helper.md T13, option B): wr_nt_path's, and validated UNC */
+    CHECK(wr_track_nt_path("C:/Music/a.mp3", w, 400) > 0 && same16(w, u"\\??\\C:\\Music\\a.mp3"), "track: a drive path as wr_nt_path's");
+    CHECK(wr_track_nt_path("\\\\srv\\share\\m\\x.mp3", w, 400) > 0 && same16(w, u"\\??\\UNC\\srv\\share\\m\\x.mp3"), "track: \\\\server\\share");
+    CHECK(wr_track_nt_path("//srv/share/m/x.mp3", w, 400) > 0 && same16(w, u"\\??\\UNC\\srv\\share\\m\\x.mp3"), "track: //server/share, '/' made '\\'");
+    CHECK(wr_track_nt_path("\\\\srv/share\\m/x.mp3", w, 400) > 0 && same16(w, u"\\??\\UNC\\srv\\share\\m\\x.mp3"), "track: mixed separators");
+    CHECK(wr_track_nt_path("\\\\?\\UNC\\srv\\share\\x.mp3", w, 400) > 0 && same16(w, u"\\??\\UNC\\srv\\share\\x.mp3")
+              && wr_track_nt_path("\\\\?\\unc\\srv\\share\\x.mp3", w, 400) > 0, "track: \\\\?\\UNC\\ (either case)");
+    CHECK(wr_track_nt_path("\\\\nas.local\\M\xc3\xbcsik\\J\xc3\xbcrgen\\\xe6\x97\xa5\xe6\x9c\xac.flac", w, 400) > 0
+              && same16(w, u"\\??\\UNC\\nas.local\\M\u00fcsik\\J\u00fcrgen\\\u65e5\u672c.flac"), "track: Unicode server, share and names");
+    CHECK(wr_track_nt_path("\\\\192.168.1.5\\share\\x\\", w, 400) > 0, "track: an IP server, a trailing separator");
+    CHECK(wr_track_nt_path("\\\\srv\\pipes\\x", w, 400) > 0 && wr_track_nt_path("\\\\srv\\ipc\\x", w, 400) > 0
+              && wr_track_nt_path("\\\\srv\\music\\pipe\\x", w, 400) > 0, "track: names near pipe/IPC$, and pipe as a folder, are files");
+    static const char *tbad[] = {"\\\\srv", "\\\\srv\\", "\\\\srv\\share", "\\\\srv\\share\\", "\\\\\\share\\x", "\\\\srv\\\\x",
+                                 "\\\\.\\C:\\x", "\\\\.\\PhysicalDrive0\\x", "\\\\?\\GLOBALROOT\\Device\\x", "\\\\?\\pipe\\x",
+                                 "\\\\?\\UNC\\srv", "\\\\?\\UNCX\\srv\\share\\x", "\\\\..\\share\\x", "\\\\srv\\..\\x", "\\\\srv\\.\\x",
+                                 "\\\\srv\\share\\..\\x", "\\\\srv\\share\\a\\.\\x", "\\\\srv\\share\\a\\\\x", "\\\\s:rv\\share\\x",
+                                 "\\\\srv\\sh*re\\x", "\\\\srv\\sh|re\\x", "\\\\s\x01rv\\share\\x", "\\\\srv\\share\\\xc3", "\\??\\UNC\\srv\\share\\x",
+                                 "srv\\share\\x", "\\srv\\share\\x", "\\\\?\\srv\\share\\x", "\\\\?\\C:x", "",
+                                 "\\\\localhost\\pipe\\foo", "\\\\srv\\PIPE\\x", "\\\\srv\\mailslot\\x", "\\\\srv\\MailSlot\\x",
+                                 "\\\\srv\\IPC$\\x", "\\\\srv\\ipc$\\x", "//srv/pipe/x", "\\\\?\\UNC\\srv\\pipe\\x"};
+    for (size_t i = 0; i < sizeof tbad / sizeof tbad[0]; i++) CHECK(wr_track_nt_path(tbad[i], w, 400) == -1, "track refused: %s", tbad[i]);
+    {
+        char srv[300];
+        memset(srv, 'a', 256);
+        snprintf(srv + 256, sizeof srv - 256, "\\share\\x");
+        char p2[310] = "\\\\";
+        strcat(p2, srv);
+        CHECK(wr_track_nt_path(p2, w, 400) == -1, "track refused: a 256-byte server name");
+    }
+    {
+        /* over MAX_PATH: a long folder chain under a share is fine up to WR_NT_MAX */
+        static char lp[2200];
+        static uint16_t lw[WR_NT_MAX + 1];
+        snprintf(lp, sizeof lp, "\\\\srv\\share");
+        for (int i = 0; i < 40; i++) strcat(lp, "\\abcdefghijklmnopqrstuvwxyz0123456789-dir");
+        strcat(lp, "\\x.wav");
+        long u = wr_track_nt_path(lp, lw, WR_NT_MAX + 1);
+        CHECK(u > 1000 && wr_track_nt_path(lp, w, 400) == -1, "track: over 260 characters (%ld units), and the NUL must fit", u);
+    }
     uint16_t small[10];
     CHECK(wr_nt_path("\\\\?\\Volume{0a1b2c3d-0000-1111-2222-333344445555}\\x", small, 10) == -1, "a GUID root that doesn't fit");
     CHECK(wr_nt_path("\\\\?\\Volume{0a1b2c3d-0000-1111-2222-333344445555}\\", w, 50) == 49

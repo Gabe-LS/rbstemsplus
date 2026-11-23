@@ -20,28 +20,31 @@
  * must be plat_home()'s; else AX_BAD_ARGS. Then:
  *  a. waits for the app to exit, on the inherited handle, at most AX_PARENT_WAIT_MS; still
  *     running: nothing is deleted or removed;
- *  b. the Run value and its StartupApproved value go first (a logon meanwhile starts nothing);
+ *  b. tries AX_INSTALL_LOCK without waiting. If held (a reinstall is under way) or unavailable,
+ *     returns AX_LEFT without removing app files or records, scheduling only its temp cleanup (g.);
+ *  c. the Run value and its StartupApproved value go first (a logon meanwhile starts nothing);
  *     then it stops every watcher running from a version folder (update_os's stop_watchers: its
  *     stop event, then its process handle, found by full path, never by image name), then waits
  *     while any process runs from an exe under the apps folder (by full path: another copy of the
  *     app, a --swap), at most AX_OTHERS_WAIT_MS; a process list that can't be read is waited on as
  *     one that runs (review UN4);
- *  c. only once nothing runs from the apps folder (confirmed): deletes the CLR's UsageLogs entry
+ *  d. only once nothing runs from the apps folder (confirmed): deletes the CLR's UsageLogs entry
  *     of our exe (%LOCALAPPDATA%\Microsoft\CLR_v4.0\UsageLogs\RB Stems Plus.exe.log, and
  *     CLR_v4.0_32's): each folder opened from %LOCALAPPDATA%'s handle, never through a link, the
- *     entry a plain file only (review UN3); not confirmed: kept, with d. and e.,
+ *     entry a plain file only (review UN3); not confirmed: kept, with e. and f.,
  *     AX_LEFT, and ax_os.kept_dialog tells the user to restart Windows and uninstall again (the
- *     program's path in the log only; owner 2026-11-16), before f.;
- *  d. deletes the apps folder %LOCALAPPDATA%\Programs\RB Stems Plus (the stub, `current`, every
+ *     program's path in the log only; owner 2026-11-16), after the lock is released and before g.;
+ *  e. deletes the apps folder %LOCALAPPDATA%\Programs\RB Stems Plus (the stub, `current`, every
  *     version folder) by handle, never following a link (plat_remove_tree): after the 60 s, what
  *     can go goes (app.md, as on the Mac); the apps folder is never handed to cmd or RunOnce,
  *     which could delete a later reinstall;
- *  e. the other records last (a watcher's toast meanwhile can't make them again): the Apps &
+ *  f. the other records last (a watcher's toast meanwhile can't make them again): the Apps &
  *     features entry, the Start menu shortcut, the notification settings of our AppUserModelID
- *     (lifecycle.h); kept when d. failed (not ENOENT) and the app still starts (the stub,
- *     `current` and current's <version>\RB Stems Plus.exe there, through a fresh apps handle), so
- *     the uninstall can be run again from Apps & features: AX_LEFT (review GH6);
- *  f. its own temp folder can't be deleted while its exe runs: a cmd.exe from System32 started
+ *     (lifecycle.h); kept when e. failed (not ENOENT) and the app still starts (the stub,
+ *     `current`, current's <version>\RB Stems Plus.exe and the after-exit launch files there,
+ *     through a fresh apps handle), so
+ *     the uninstall can be run again from Apps & features: AX_LEFT (review GH6). Releases the lock;
+ *  g. its own temp folder can't be deleted while its exe runs: a cmd.exe from System32 started
  *     with no window, its working folder %TEMP%, deletes it once this process has ended (it tries
  *     for about a minute): it sees only the folder's relative name, deletes the two files by name
  *     and the folder without /s, and calls PING.EXE by its System32 path (reviews UN1, UN6, UN10,
@@ -67,6 +70,7 @@
 #define AX_APPS_REL "Programs" AX_SEP "RB Stems Plus"
 #define AX_EXE "RB Stems Plus.exe"
 #define AX_DLL "rbsp-core.dll"
+#define AX_INSTALL_LOCK "Local\\io.github.rbstemsplus.install"   /* bootstrap.ps1's $InstallLock */
 #define AX_RUNONCE_NAME "RB Stems Plus cleanup"   /* a prefix: each value is "<it> <16 hex>" (ax_runonce_name) */
 #ifdef _WIN32
 #  define AX_SEP "\\"
@@ -155,9 +159,11 @@ typedef struct {
     int (*wait_parent)(void *ctx, uint64_t parent, uint32_t ms);
     /* update_os's: stops the watchers running from dir (1 one was, 0 none, -1 the list couldn't be read) */
     int (*stop_watchers)(void *ctx, const char *dir);
-    /* update_os's: whether a process runs from an exe under dir (1, 0, -1 the list couldn't be read
-     * or one with one of our names couldn't be inspected: a refused open counts only for an error
-     * other than ERROR_ACCESS_DENIED or ERROR_INVALID_PARAMETER, update_open_skips) */
+    /* update_os's: whether a process runs from an exe under dir, in any session (1, 0, -1 the list
+     * couldn't be read or one with one of our names couldn't be inspected). A refused open is
+     * judged by its path from the system's list (update_listed_verdict, review K2): under dir it
+     * counts (this account's watcher in session 0 or another logon), elsewhere it doesn't (another
+     * account's own copy, GH1), unreadable it is unknown by our names */
     int (*running_under)(void *ctx, const char *dir);
     /* update_os's: deletes the tree at path, never following a link: 0, ENOENT, or an errno */
     int (*remove_tree)(void *ctx, const char *path);
@@ -182,8 +188,16 @@ typedef struct {
      * again; no program named), in the user's session, only when b.'s wait kept the app files and
      * the Apps & features entry (a program still ran from the apps folder, or the list stayed
      * unknown); returns once it is closed. May be NULL (owner 2026-11-16) */
-    void (*kept_dialog)(void *ctx);
+    void (*kept_dialog)(void *ctx, int scan_unknown);
     void *ctx;
+    /* the install lock (AX_INSTALL_LOCK, a named mutex scripts/bootstrap.ps1 holds from before its
+     * .bootstrap-<pid> folder until it has started the new app; audit b-a2b-F2), taken with no
+     * wait once the app has quit, before the Run value: 1 taken, 0 another holds it (a reinstall is
+     * under way: nothing is deleted or removed, AX_LEFT), -1 it can't be made (the same). Released
+     * by unlock after the records (before the kept dialog). Both may be NULL: no lock */
+    int (*lock)(void *ctx);
+    void (*unlock)(void *ctx);
+    const char *arch;   /* the after-exit copy's architecture: x64 or arm64 */
 } ax_os;
 
 /* the after-exit's order (afterexit.h's checks and a-f): AX_DONE, AX_PARENT_RUNS, AX_LEFT or

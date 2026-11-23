@@ -624,11 +624,33 @@ bench() {
   expect '[[ "$out" == "start outer_ns="*" hooked=1" ]]' "bench start: OrtGetApiBase and GetApi timed, the hooks in place: got \"$out\""
 }
 
+# The model checksum's memo name, size and time and the hash come from one open file: a model
+# replaced while the bridge is at it (RBSTEMS_TEST_HASH_DELAY: after the memo's name is taken,
+# before anything is read) never gets the other file's checksum under its memo (BX3)
+swapped() {
+  if [ -z "$have_model" ]; then skip "swapped (needs Pioneer's library and python3)"; return; fi
+  point "$real"; fresh swapped
+  local d="$scratch/swap-$arch" c="$h/Library/Caches/rbstemsplus" ino sa sb memo mover moved
+  rm -rf "$d"; mkdir -p "$d"
+  cp "$scratch/model/hdemucs.onnx" "$d/hdemucs.onnx" && cp "$scratch/pmodel/good/hdemucs.onnx" "$d/other.onnx"
+  ino="$(stat -f %i "$d/hdemucs.onnx")"
+  sa="$(shasum -a 256 < "$d/hdemucs.onnx" | cut -c1-64)"; sb="$(shasum -a 256 < "$d/other.onnx" | cut -c1-64)"
+  # replaced once the bridge is in its 3 s pause (memo name and `want` taken, nothing read yet);
+  # out of process, as the hash runs inside CreateSession. No pause line within 15 s: a failure
+  (for _ in $(seq 150); do has "test: pause RBSTEMS_TEST_HASH_DELAY" && exec mv -f "$d/other.onnx" "$d/hdemucs.onnx"; sleep 0.1; done; exit 1) & mover=$!
+  RBSTEMS_TEST_HASH_DELAY=3 harness run "$d/hdemucs.onnx" a > /dev/null 2>&1
+  wait "$mover"; moved=$?
+  memo="$(cat "$c/model-$ino.sha256" 2> /dev/null)"
+  expect '[ "$moved" = 0 ] && has "test: pause RBSTEMS_TEST_HASH_DELAY" && [ -n "$memo" ] && [ "${memo##* }" = "$sa" ]' \
+    "a model replaced mid-hash: memo model-$ino.sha256 holds \"$memo\", want the first file's checksum $sa (the second's: $sb)"
+  expect 'has "Demucs session opened: model ${sa:0:12}" && ! has "${sb:0:12}"' "the session is named by the file the memo was named for"
+}
+
 . "$here/location.sh"
 
 # ONLY="location losses" runs just those (one case at a time while debugging); SANITIZE=1 runs
 # the storage tests, arm64 only, with the bridge and the harness built with ASan and UBSan
-tests="loading configs fixtures logs homes cache nearoff kept foreign space memory rebuilt bench location entries losses faults companions images midway"
+tests="loading configs fixtures logs homes cache nearoff kept foreign space memory rebuilt bench swapped location entries losses faults companions images midway"
 if [ "${SANITIZE:-}" = 1 ]; then tests="configs fixtures cache nearoff kept foreign location entries losses faults companions images midway"; archs=(arm64); fi
 tests="${ONLY:-$tests}"
 case " $tests " in *" images "*|*" midway "*) attach_images ;; esac

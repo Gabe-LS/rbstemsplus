@@ -3,8 +3,9 @@
  *
  *  - Files: the NT layer, relative to a folder's handle (NtCreateFile with RootDirectory and
  *    FILE_OPEN_REPARSE_POINT; a reparse point at the last component is refused as the Mac's
- *    O_NOFOLLOW refuses a link: ELOOP). Every open shares READ|WRITE|DELETE, so a rename or a
- *    delete by another process is never blocked by us. Errors come from the NTSTATUS through
+ *    O_NOFOLLOW refuses a link: ELOOP). Ordinary opens share READ|WRITE|DELETE. Directory
+ *    handles that protect a cache mutation deny DELETE until that operation finishes.
+ *    Errors come from the NTSTATUS through
  *    win_rules.h's map (I83, r4:I47). Absolute paths are opened as NT paths ("\??\X:\..."), so a
  *    DLL needs no long-path opt-in; only the follow-link opens (plat_stat_path with follow,
  *    plat_file_open_path) also take relative, dotted and UNC paths (wr_full_path). Listing is one pass of FileIdExtdDirectoryInformation
@@ -913,6 +914,26 @@ COMMON_API int plat_dir_open_at(plat_dir d, const char *name, plat_dir *out) {
     return e;
 }
 
+COMMON_API int plat_dir_open_at_held(plat_dir d, const char *name, plat_dir *out) {
+    HANDLE h;
+    int e = pw_open_share(d.h, name, PW_DIR_ACCESS, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN,
+                          FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT, WR_OP_OPEN, &h);
+    if (!e && (e = pw_no_reparse(h))) NtClose(h);
+    out->h = e ? NULL : h;
+    return e;
+}
+
+COMMON_API int plat_dir_open_at_for_removal(plat_dir d, const char *name, plat_dir *out) {
+    HANDLE h;
+    int e = pw_open_share(d.h, name, PW_DIR_ACCESS | DELETE, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_OPEN,
+                          FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT, WR_OP_RENAME_DELETE, &h);
+    if (!e && (e = pw_no_reparse(h))) NtClose(h);
+    out->h = e ? NULL : h;
+    return e;
+}
+
+COMMON_API int plat_dir_dispose(plat_dir d) { return pw_dispose(d.h); }
+
 COMMON_API int plat_dir_open_follow(const char *path, plat_dir *out) {
     /* without FILE_OPEN_REPARSE_POINT: a junction or a folder symlink at the last component is
      * resolved, as the ancestors always are */
@@ -926,6 +947,26 @@ COMMON_API int plat_mkdir_at(plat_dir d, const char *name) {
     HANDLE h;
     int e = pw_open(d.h, name, FILE_LIST_DIRECTORY, FILE_CREATE, FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT, WR_OP_OPEN, &h);
     if (!e) NtClose(h);
+    return e;
+}
+
+/* Windows cache creation needs the handle returned by FILE_CREATE itself. */
+COMMON_API int plat_mkdir_open_at(plat_dir d, const char *name, int not_indexed, plat_dir *out) {
+    HANDLE h;
+    ACCESS_MASK access = PW_DIR_ACCESS | DELETE;
+    if (not_indexed) access |= FILE_WRITE_ATTRIBUTES;
+    int e = pw_open_share(d.h, name, access, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_CREATE,
+                          FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT, WR_OP_OPEN, &h);
+    if (!e && not_indexed) {
+        ULONG attrs;
+        if (!pw_attrs(h, &attrs)) {
+            pw_basic_info b = {0};   /* leave the timestamps alone */
+            b.FileAttributes = (attrs & ~(FILE_ATTRIBUTE_NORMAL | FILE_ATTRIBUTE_DIRECTORY)) | FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
+            IO_STATUS_BLOCK io;
+            NtSetInformationFile(h, &io, &b, sizeof b, PW_CLASS(PW_FileBasicInformation));
+        }
+    }
+    out->h = e ? NULL : h;
     return e;
 }
 
@@ -963,6 +1004,7 @@ COMMON_API int plat_dir_name_is(plat_dir d, const char *name) {
 }
 
 COMMON_API int plat_dir_stat(plat_dir d, plat_stat *st) { return pw_stat_h(d.h, st); }
+COMMON_API int plat_dir_identity(plat_dir d, plat_id *out) { return pw_id(d.h, out); }
 
 /* the security descriptor of a handle opened with READ_CONTROL, malloc'd (r4:I48: read from the
  * handle, never GetSecurityInfo, so no on-demand DLL load) */
@@ -1161,11 +1203,18 @@ COMMON_API int plat_rename_noreplace_at(plat_dir from, const char *a, plat_dir t
  * FILE_OPEN_REPARSE_POINT (a reparse point is opened, and deleted, as itself), the listing and the
  * deletion by handle. */
 
+#ifdef PLAT_TEST_REMOVE_TREE
+void (*plat_test_tree_before_open)(const uint16_t *name, size_t n);
+#endif
+
 static int pw_tree_open(void *ctx, void *parent, const uint16_t *name, size_t n, void **h, int *is_dir) {
     (void)ctx;
     *h = NULL;
     *is_dir = 0;
     if (!n || n > 32767) return EINVAL;
+#ifdef PLAT_TEST_REMOVE_TREE
+    if (plat_test_tree_before_open) plat_test_tree_before_open(name, n);
+#endif
     UNICODE_STRING us = {(USHORT)(n * 2), (USHORT)(n * 2), (PWSTR)(uintptr_t)name};
     OBJECT_ATTRIBUTES oa;
     InitializeObjectAttributes(&oa, &us, OBJ_CASE_INSENSITIVE, (HANDLE)parent, NULL);
@@ -1312,6 +1361,27 @@ COMMON_API int plat_file_create_at(plat_dir d, const char *name, int rw, plat_fi
     int e = pw_open(d.h, name, FILE_GENERIC_WRITE | (rw ? FILE_GENERIC_READ : 0), FILE_CREATE,
                     FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT, WR_OP_OPEN, &h);
     out->h = e ? NULL : h;
+    return e;
+}
+
+COMMON_API int plat_file_append_at(plat_dir d, const char *name, const void *p, size_t n) {
+    if (!plat_dir_ok(d)) return EINVAL;
+    if (n > MAXDWORD) return E2BIG;
+    HANDLE h;
+    int e = pw_open_nofollow(d.h, name, FILE_APPEND_DATA | FILE_READ_ATTRIBUTES, FILE_OPEN_IF,
+                             FILE_NON_DIRECTORY_FILE, WR_OP_OPEN, &h);
+    if (e) return e;
+    pw_standard_info info;
+    IO_STATUS_BLOCK io;
+    NTSTATUS s = NtQueryInformationFile(h, &io, &info, sizeof info, PW_CLASS(PW_FileStandardInformation));
+    if (s) e = pw_nt(s, WR_OP_OPEN);
+    else if (info.Directory || info.NumberOfLinks != 1 || GetFileType(h) != FILE_TYPE_DISK) e = PLAT_EFTYPE;
+    else {
+        DWORD written;
+        if (!WriteFile(h, p, (DWORD)n, &written, NULL)) e = pw_last(WR_OP_OPEN);
+        else if (written != n) e = EIO;
+    }
+    NtClose(h);
     return e;
 }
 
@@ -1774,6 +1844,7 @@ static int pw_pf_registry(void *ctx, uint16_t *buf, size_t cap, size_t *n) {
 
 #ifdef PLAT_TEST_PROGRAMS
 /* test builds only: RBSP_TEST_PROGRAMS, the VM's fake trees (app.md §7) */
+__attribute__((noinline, section(".text$rbsp_test_watch_programs")))
 static int pw_pf_test(void *ctx, uint16_t *buf, size_t cap, size_t *n) {
     (void)ctx;
     DWORD k = GetEnvironmentVariableW(L"RBSP_TEST_PROGRAMS", (wchar_t *)buf, (DWORD)cap);

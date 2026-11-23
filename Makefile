@@ -8,7 +8,8 @@
 #   make bridge   only the bridge, into build/bridge/
 #   make helper   the prepare helper (helper/build.sh), into build/helper/: not released yet
 #   make check    quick checks: shell syntax, the two Info.plist files, the bundle gates' tests,
-#                 the G3 tart run's selftest (tests/mac/g3-test.sh: no VM)
+#                 the G3 tart run's selftest (tests/mac/g3-test.sh: no VM), the docs checks
+#                 (tests/docs/docs-check.sh: links, page rules, IDs, private values and names)
 #   make test     the app's safety checks (app/Tests), built from the app's sources and run
 #   make bridge-test  the bridge's tests (bridge/tests/run.sh, disk images included), again with
 #                 ASan and UBSan, and the fuzz targets; fails when any test is skipped (a release
@@ -18,7 +19,8 @@
 #                 --branch, the pin), carry-test.sh (the Mac carry-forward, --plan, --mac),
 #                 windows-assets-test.sh (build.sh's Windows files in a plan's shape),
 #                 carry-file-guard-test.sh (build-windows.sh's --carry-file guard),
-#                 windows-test.sh (the Windows assets, carry-forward and VM record, T13); and
+#                 windows-test.sh (the Windows assets, carry-forward and VM record, T13),
+#                 perf-gate-test.sh (the performance records, --accept-perf, the gate archive, T27); and
 #                 tests/mac/bundle-compare-test.sh (the compare on small real bundles); and
 #                 build-lists-test. Run outside a sandbox: it needs a pseudo-terminal and actool.
 #   make build-lists-test  helper/build.sh's and bridge/build.sh's input lists when the depfile
@@ -48,12 +50,15 @@
 #                 UBSan and with TSan; the shared modules against tests/config-fixtures.txt and
 #                 tests/marker-fixtures.txt; the core's unit tests built on common/plat.h instead
 #                 of its shim
-#   make helper-win  the Windows prepare helper's parts (helper/build-win.sh), into build/helper-win/:
-#                 x64 with the pinned llvm-mingw, -Werror, and its gates (imports, manifest, key,
-#                 sin/pow, reproducible); the exes are for the VM
+#   make helper-win  the Windows prepare helper, rbsp-prepare.exe, and its test exes
+#                 (helper/build-win.sh), into build/helper-win/: x64 with the pinned llvm-mingw,
+#                 -Werror, and its gates (imports, manifest, key, sin/pow, reproducible)
 #   make helper-win-test  its Mac tests: the platform calls (win-plat.sh), SQLCipher with LibTomCrypt
 #                 (win-sqlcipher.sh), the decoders against AudioToolbox (win-decode.sh, win-alac.sh,
-#                 win-mp3.sh). Run outside a sandbox (the account's temporary folder, afconvert).
+#                 win-mp3.sh), the stdin Stop's line rule and the track rules on library.c and
+#                 manifest.c (win-helper.sh), model.c's Windows logic with its mutants
+#                 (model-win-host.sh). Run outside a sandbox (the account's temporary
+#                 folder, afconvert).
 #   make winc-test   the Windows app's C modules (win/c/tests/run.sh, app.md §5.1-5.4, §7): their
 #                 Mac-native tests against today's Swift's fixtures, plain and with ASan and UBSan,
 #                 the fuzz driver, and the Windows x64 and arm64 builds with their import gate;
@@ -66,7 +71,7 @@
 #                 the revert, the steps, the timeouts, the record against a fake prlctl; no VM
 #   make clean    remove build/, dist/ and dist-test/ (they may hold a copy of the model)
 
-.PHONY: all app windows bridge helper helper-win helper-win-test check test bridge-test release-test build-lists-test carry-test mac-unchanged core-test common-test winc-test winboot-test winvm-test win-shell clean
+.PHONY: all app windows bridge helper helper-win helper-win-test helper-aac-host-test check test bridge-test release-test build-lists-test carry-test mac-unchanged core-test common-test winc-test winboot-test winvm-test win-shell clean
 
 all:
 	scripts/build.sh
@@ -86,12 +91,23 @@ helper:
 helper-win:
 	helper/build-win.sh build/helper-win
 
-helper-win-test:
+helper-win-test: helper-aac-host-test
+	sh helper/tests/build-win-host.sh
+	sh helper/tests/model-win-host.sh
+	sh helper/tests/kept-host.sh
+	sh helper/tests/prepare-host.sh
+	sh helper/tests/rate-host.sh
+	sh helper/tests/resample-win.sh
+	sh helper/tests/prepare-cache.sh
 	helper/tests/win-plat.sh
 	helper/tests/win-sqlcipher.sh
 	helper/tests/win-decode.sh
 	helper/tests/win-alac.sh
 	helper/tests/win-mp3.sh
+	helper/tests/win-helper.sh
+
+helper-aac-host-test:
+	sh helper/tests/win-aac-host.sh
 
 check:
 	bash -n scripts/build.sh
@@ -113,10 +129,14 @@ check:
 	bash -n helper/tests/win-decode-vm.sh
 	sh -n helper/tests/win-alac.sh
 	bash -n helper/tests/win-mp3.sh
+	sh -n helper/tests/win-helper.sh
+	sh -n helper/tests/win-vm-stage.sh
 	python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' helper/tests/win-decode-fixtures.py
 	bash -n bridge/tests/perf.sh
 	bash -n helper/tests/perf.sh
 	bash -n tests/perf/b0.sh
+	bash -n tests/perf/archive-release.sh
+	python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' tests/perf/record.py
 	python3 -I tests/perf/perfstats.py selftest > /dev/null
 	python3 -I tests/perf/rules.py check
 	helper/tests/same-as-bridge.sh
@@ -160,6 +180,7 @@ check:
 	bash -n scripts/build-windows.sh
 	bash -n scripts/windows-assets.sh
 	bash -n tests/release/windows-assets-test.sh
+	bash -n tests/release/perf-gate-test.sh
 	python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' scripts/win-carry.py
 	python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' scripts/win-version.py
 	bash -n win/shell/vm/run.sh
@@ -167,7 +188,14 @@ check:
 	python3 -I core/tools/win_texts_table.py > /dev/null
 	plutil -lint app/Info.plist
 	plutil -lint app/Watcher-Info.plist
+	tests/harness/netcheck-test.sh
+	tests/release/public-scan-test.sh
+	bash tests/release/head-export-scan.sh
+	bash tests/docs/docs-check.sh
 	tests/harness/selftest.sh
+	tests/rekordbox/win/pc-session-test.sh
+	tests/rekordbox/mac/vm-session-test.sh
+	tests/rekordbox/analysis/dump-compare-test.sh
 	@# the release notes, unwrapped for GitHub (release.sh), keep every word
 	@for f in docs/release-notes/*.md; do \
 	  [ "$$(tr -s ' \n' '  ' < "$$f")" = "$$(python3 -I scripts/unwrap-notes.py "$$f" | tr -s ' \n' '  ')" ] \
@@ -205,6 +233,7 @@ release-test: build-lists-test
 	tests/release/branch-test.sh
 	tests/release/carry-test.sh
 	tests/release/windows-test.sh
+	tests/release/perf-gate-test.sh
 	tests/mac/bundle-compare-test.sh
 
 build-lists-test:
@@ -238,6 +267,7 @@ common-test:
 	common/tests/run.sh build/common
 
 winc-test:
+	win/c/tests/pe_code_test.sh
 	win/c/tests/run.sh build/winc
 	core/tests/dll-keys.sh
 	core/build.sh dll build/core-dll

@@ -39,7 +39,34 @@ COMMON_API int paths_same_win(const char *a, const char *b) {
     }
 }
 
-#if !defined(_WIN32)
+#if defined(_WIN32) || defined(PATHS_WIN_FORM) || defined(PATHS_WIN_TRACKS)
+static size_t pr_unc_root(const char *p, size_t at) {       /* at: the server's start; up to the share's end */
+    size_t i = at;
+    while (p[i] && !pr_sep(p[i])) i++;                       /* the server */
+    if (!p[i]) return i;
+    i++;
+    while (p[i] && !pr_sep(p[i])) i++;                       /* the share */
+    return i;
+}
+
+COMMON_API size_t paths_other_drive_win(const char *p, char sys) {
+    size_t o = 0;
+    if (pr_sep(p[0]) && pr_sep(p[1]) && (p[2] == '?' || p[2] == '.') && pr_sep(p[3])) {   /* \\?\ or \\.\ */
+        o = 4;
+        if ((p[4] | 0x20) == 'u' && (p[5] | 0x20) == 'n' && (p[6] | 0x20) == 'c' && pr_sep(p[7])) return pr_unc_root(p, 8);
+        size_t g = paths_root_win(p);
+        if (g == 49) return g;                               /* \\?\Volume{GUID}\ */
+    }
+    if (pr_letter(p[o]) && p[o + 1] == ':') {
+        if (sys && (p[o] | 0x20) == (sys | 0x20)) return 0;
+        return pr_sep(p[o + 2]) ? o + 3 : !p[o + 2] ? o + 2 : 0;
+    }
+    if (!o && pr_sep(p[0]) && pr_sep(p[1])) return pr_unc_root(p, 2);
+    return 0;
+}
+#endif
+
+#if !defined(_WIN32) && !defined(PATHS_WIN_TRACKS)
 COMMON_API size_t paths_other_drive(const char *p) {
     if (strncmp(p, "/Volumes/", 9)) return 0;
     const char *e = strchr(p + 9, '/');

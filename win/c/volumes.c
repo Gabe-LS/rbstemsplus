@@ -72,10 +72,22 @@ int vol_fs_allowed(const char *fstype) {
 int vol_refusal(const vol_facts *f) {
     if (!f) return VOL_REFUSE_UNREADABLE;
     if (f->drive_type == VOL_DRIVE_REMOTE) return VOL_REFUSE_NETWORK;
+    if (f->drive_type == VOL_DRIVE_UNKNOWN || f->drive_type == VOL_DRIVE_NO_ROOT) return VOL_REFUSE_UNREADABLE;
     if (f->system || !vol_external(f)) return VOL_REFUSE_INTERNAL;
     if (!vol_fs_allowed(f->fstype)) return VOL_REFUSE_FILE_SYSTEM;
     if (f->readonly) return VOL_REFUSE_READ_ONLY;
     return VOL_OK;
+}
+
+int vol_location_refusal(const vol_facts *f) {
+    int refusal = vol_refusal(f);
+#ifdef VOL_TEST_INTERNAL_OK
+    /* Supplied by the test executable and set before any location worker starts. */
+    extern int vol_test_internal_ok;
+    if (vol_test_internal_ok && refusal == VOL_REFUSE_INTERNAL && vol_fs_allowed(f->fstype))
+        return f->readonly ? VOL_REFUSE_READ_ONLY : VOL_OK;
+#endif
+    return refusal;
 }
 
 void vol_facts_line(const vol_facts *f, char *out, size_t n) {
@@ -128,6 +140,11 @@ int vol_join_mount(const char *guid_path, const char *mount, char *out, size_t n
     size_t g = vol_guid_root(guid_path), m = mount ? strlen(mount) : 0;
     if (!g || !m || mount[m - 1] != '\\') return -1;
     return copy(out, n, mount, m, guid_path + g);
+}
+
+const char *vol_uninstall_path(const char *dir, int (*display)(const char *, char *, size_t), char *out, size_t n) {
+    if (vol_guid_root(dir) && !display(dir, out, n)) return out;
+    return dir;
 }
 
 int vol_path_remote(const char *p) {
@@ -236,26 +253,32 @@ static int each_file(void *ctx, const char *name, const plat_stat *st) {
     return 0;
 }
 
-static int each_prefix(void *ctx, const char *name, const plat_stat *st) {
-    walk *w = ctx;
-    if (st->kind != PLAT_DIR || strlen(name) != 2 || !lower_hex(name, 2)) return 0;
-    walk in = {{0}, name, 0};
-    if (plat_dir_open_at(w->dir, name, &in.dir)) return 0;
-    plat_dir_each(in.dir, each_file, &in);                 /* a listing error counts what it read */
+static int walk_subdir(walk *w, const char *name, const char *prefix, plat_each_fn each) {
+    walk in = {{0}, prefix, 0};
+    int e = plat_dir_open_at(w->dir, name, &in.dir);
+    if (e) {
+        errno = e;
+        return -1;
+    }
+    int r = plat_dir_each(in.dir, each, &in);
+    e = errno;
     plat_dir_close(in.dir);
+    if (r) {
+        errno = e;
+        return -1;
+    }
     w->total += in.total;
     return 0;
 }
 
+static int each_prefix(void *ctx, const char *name, const plat_stat *st) {
+    if (st->kind != PLAT_DIR || strlen(name) != 2 || !lower_hex(name, 2)) return 0;
+    return walk_subdir(ctx, name, name, each_file);
+}
+
 static int each_model(void *ctx, const char *name, const plat_stat *st) {
-    walk *w = ctx;
     if (st->kind != PLAT_DIR || strlen(name) != 64 || !lower_hex(name, 64)) return 0;
-    walk in = {{0}, NULL, 0};
-    if (plat_dir_open_at(w->dir, name, &in.dir)) return 0;
-    plat_dir_each(in.dir, each_prefix, &in);
-    plat_dir_close(in.dir);
-    w->total += in.total;
-    return 0;
+    return walk_subdir(ctx, name, NULL, each_prefix);
 }
 
 int64_t vol_entries_size(const char *folder) {

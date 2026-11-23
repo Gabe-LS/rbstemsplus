@@ -11,14 +11,17 @@ func publicReleaseTests() {
     let dev = dir + "/dev", devOrigin = dir + "/dev-origin.git"
     let publicBare = dir + "/Gabe-LS/rbstemsplus.git", publicClone = dir + "/RB Stems Plus (public)"
     let ghState = dir + "/gh", bin = dir + "/bin"
-    for d in [dev + "/scripts", dev + "/keys", dev + "/docs/release-notes", dir + "/Gabe-LS", ghState, bin] {
+    let archive = dir + "/gates-archive"
+    let version = "1.5.0", tag = "v\(version)"
+    for d in [dev + "/scripts", dev + "/keys", dev + "/docs/release-notes", dir + "/Gabe-LS", ghState, bin, archive] {
         try! fm.createDirectory(atPath: d, withIntermediateDirectories: true)
     }
     // git sees only this configuration: no global identity, signing or hooks
     let gitConfig = dir + "/gitconfig"
     fm.createFile(atPath: gitConfig, contents: Data("[init]\n\tdefaultBranch = main\n[advice]\n\tdetachedHead = false\n".utf8))
     let env = ["PATH": bin + ":/usr/bin:/bin:/usr/sbin:/sbin", "HOME": dir, "TMPDIR": dir, "LANG": "en_US.UTF-8",
-               "GIT_CONFIG_GLOBAL": gitConfig, "GIT_CONFIG_NOSYSTEM": "1", "FAKE_GH": ghState, "FAKE_PUBLIC": publicBare]
+               "GIT_CONFIG_GLOBAL": gitConfig, "GIT_CONFIG_NOSYSTEM": "1", "FAKE_GH": ghState, "FAKE_PUBLIC": publicBare,
+               "GATES_ARCHIVE": archive]
     func run(_ exe: String, _ args: [String]) -> (Int32, String) {
         runTool("/usr/bin/env", env.map { "\($0.key)=\($0.value)" } + [exe] + args)
     }
@@ -29,12 +32,16 @@ func publicReleaseTests() {
 
     // the development repository
     try! fm.copyItem(atPath: fm.currentDirectoryPath + "/scripts/release.sh", toPath: dev + "/scripts/release.sh")
-    for f in ["unwrap-notes.py", "bundle-compare.sh", "mac-inputs.py"] {
+    for f in ["unwrap-notes.py", "bundle-compare.sh", "mac-inputs.py", "public-scan.py"] {
         try! fm.copyItem(atPath: fm.currentDirectoryPath + "/scripts/" + f, toPath: dev + "/scripts/" + f)
     }
     // the real G3 check (release.sh runs tests/mac/g3.sh check before it builds)
     try! fm.createDirectory(atPath: dev + "/tests/mac", withIntermediateDirectories: true)
     try! fm.copyItem(atPath: fm.currentDirectoryPath + "/tests/mac/g3.sh", toPath: dev + "/tests/mac/g3.sh")
+    try! fm.createDirectory(atPath: dev + "/tests/perf", withIntermediateDirectories: true)
+    for f in ["archive.sh", "archive-release.sh"] {
+        try! fm.copyItem(atPath: fm.currentDirectoryPath + "/tests/perf/" + f, toPath: dev + "/tests/perf/" + f)
+    }
     write(dev + "/scripts/build.sh", """
         #!/bin/bash
         # a fake build: every asset, with the commit it was built from in payload.json (the first
@@ -56,17 +63,29 @@ func publicReleaseTests() {
         echo "fake build of $commit"
 
         """, mode: 0o755)
-    write(dev + "/VERSION", "9.9.8\n")
+    write(dev + "/VERSION", "\(version)\n")
     write(dev + "/NOTICE", "RB Stems Plus\nCopyright (c) 2026 Gabe-LS.\n")
     write(dev + "/LICENSE", "MIT License\n")
     write(dev + "/README.md", "# RB Stems Plus\n\nThe design is private.\n")
     write(dev + "/.gitignore", "build/\ndist/\ndist-test/\n")
-    write(dev + "/.publicignore", "# private\ndocs/PRIVATE-NOTES.md\ndocs/internal\n")
+    write(dev + "/.publicallow", """
+        hostname\tgithub.com
+        hostname\thost\ttests/mac/g3.sh
+        hostname\tserver\ttests/mac/g3.sh
+        email\t12345678+Gabe-LS@users.noreply.github.com
+        email\tgit@github.com
+        home-path\t/Users/admin\ttests/mac/g3.sh
+        home-path\t/Users/Shared\ttests/mac/g3.sh
+        private-ip\t192.168.64.1\ttests/mac/g3.sh
+        hostname\twww.apple.com\ttests/mac/g3.sh
+
+        """)
+    write(dev + "/.publicignore", "# private\ndocs/PRIVATE-NOTES.md\ndocs/hidden\n")
     write(dev + "/docs/PRIVATE-NOTES.md", "the plan\n")
-    try! fm.createDirectory(atPath: dev + "/docs/internal", withIntermediateDirectories: true)
-    write(dev + "/docs/internal/vm.md", "the VM\n")
+    try! fm.createDirectory(atPath: dev + "/docs/hidden", withIntermediateDirectories: true)
+    write(dev + "/docs/hidden/vm.md", "the VM\n")
     write(dev + "/docs/public.md", "hello\n")
-    write(dev + "/docs/release-notes/9.9.8.md", "The notes\nof 9.9.8.\n")
+    write(dev + "/docs/release-notes/\(version).md", "The notes\nof \(version).\n")
     let key = dir + "/release-key.pem"
     check(run("/usr/bin/openssl", ["ecparam", "-name", "prime256v1", "-genkey", "-noout", "-out", key]).0 == 0
           && run("/usr/bin/openssl", ["ec", "-in", key, "-pubout", "-out", dev + "/keys/release.pub.pem"]).0 == 0
@@ -81,7 +100,7 @@ func publicReleaseTests() {
           && git(dev, "push", "-q", "origin", "main").0 == 0,
           "public release: a development repository and two bare origins")
     let release = dev + "/scripts/release.sh"
-    func dryRun() -> (Int32, String) { run("/bin/bash", [release, "v9.9.8", "--dry-run"]) }
+    func dryRun() -> (Int32, String) { run("/bin/bash", [release, tag, "--dry-run"]) }
     func publicRefs() -> String { git(publicBare, "for-each-ref").1 }
 
     // the fake gh: one release, kept in a folder; create needs the tag on the public origin
@@ -132,8 +151,8 @@ func publicReleaseTests() {
     check(r.0 != 0 && r.1.contains("no public clone at \(publicClone)"), "public release: the default public clone is the sibling folder: \(r.1)")
     check(git(dir, "clone", "-q", publicBare, publicClone).0 == 0, "public release: an empty public clone")
     r = dryRun()
-    check(r.0 == 0 && r.1.contains("left out: .publicignore docs/PRIVATE-NOTES.md docs/internal") && r.1.contains("new: docs/public.md")
-          && !r.1.contains("new: docs/PRIVATE-NOTES.md") && !r.1.contains("new: docs/internal") && r.1.contains("Gabe-LS <\(email)>"),
+    check(r.0 == 0 && r.1.contains("left out: .publicignore .publicallow docs/PRIVATE-NOTES.md docs/hidden") && r.1.contains("new: docs/public.md")
+          && !r.1.contains("new: docs/PRIVATE-NOTES.md") && !r.1.contains("new: docs/hidden") && r.1.contains("Gabe-LS <\(email)>"),
           "public release: the dry run lists what would be published, without the private paths: \(r.1)")
     check(publicRefs().isEmpty && git(publicClone, "rev-parse", "-q", "--verify", "HEAD").0 != 0, "public release: the dry run changes nothing")
 
@@ -148,67 +167,113 @@ func publicReleaseTests() {
     write(dev + "/README.md", "# RB Stems Plus\n\nWritten by Dev Person.\n")
     _ = git(dev, "commit", "-q", "-am", "name")
     r = dryRun()
-    check(r.0 != 0 && r.1.contains("developer's own name or email") && r.1.contains("README.md"), "public release: the developer's git name is refused: \(r.1)")
+    check(r.0 != 0 && r.1.contains("README.md:3: [personal-name]"), "public release: the developer's git name is refused: \(r.1)")
     write(dev + "/README.md", "# RB Stems Plus\n\nMail DEV.PERSON@example.org.\n")
     _ = git(dev, "commit", "-q", "-am", "email")
     r = dryRun()
-    check(r.0 != 0 && r.1.contains("developer's own name or email"), "public release: the developer's git email is refused, in any case")
-    write(dev + "/.publicignore", "docs/PRIVATE-NOTES.md\ndocs/internal\ndocs/gone.md\n")
+    check(r.0 != 0 && r.1.contains("README.md:3: [email]"), "public release: the developer's git email is refused, in any case")
+    write(dev + "/.publicignore", "docs/PRIVATE-NOTES.md\ndocs/hidden\ndocs/gone.md\n")
     write(dev + "/README.md", "# RB Stems Plus\n\nBy Gabe-LS.\n")
     _ = git(dev, "commit", "-q", "-am", "a missing private path")
     r = dryRun()
     check(r.0 != 0 && r.1.contains("docs/gone.md, which isn't in"), "public release: a .publicignore path missing from the commit is refused")
-    write(dev + "/.publicignore", "docs/PRIVATE-NOTES.md\ndocs/internal\n")
+    write(dev + "/.publicignore", "docs/PRIVATE-NOTES.md\ndocs/hidden\n")
     _ = git(dev, "commit", "-q", "-am", "fixed")
     _ = git(dev, "push", "-q", "origin", "main")
     r = dryRun()
     check(r.0 == 0, "public release: a clean tree passes the dry run: \(r.1)")
 
     // MARK: the release, in a terminal, with the fake gh: its plan first (release.sh --plan)
-    r = runInTerminal(["/bin/bash", release, "v9.9.8", "--key", key], env: env, answer: "no\n")
+    let releaseArgs = ["/bin/bash", release, tag, "--key", key]
+    r = runInTerminal(releaseArgs, env: env, answer: "no\n")
     check(r.0 != 0 && r.1.contains("no plan for"), "public release: refused without its plan: \(r.1.suffix(300))")
-    r = run("/bin/bash", [release, "v9.9.8", "--plan"])
-    check(r.0 == 0 && r.1.contains("Plan written: ") && r.1.contains("Mac app         new: 9.9.8 (no release yet)"),
+    r = run("/bin/bash", [release, tag, "--plan"])
+    check(r.0 == 0 && r.1.contains("Plan written: ") && r.1.contains("Mac app         new: \(version) (no release yet)"),
           "public release: the plan, with no release yet: \(r.1.suffix(300))")
     check(publicRefs().isEmpty && git(publicClone, "rev-parse", "-q", "--verify", "HEAD").0 != 0, "public release: the plan changes nothing")
     // G3 (release.md §6.1): the real check, tests/mac/g3.sh check, refuses a commit with no tart run
-    r = runInTerminal(["/bin/bash", release, "v9.9.8", "--key", key], env: env, answer: "no\n")
+    let fetchHead = publicClone + "/.git/FETCH_HEAD"
+    if fm.fileExists(atPath: fetchHead) { try! fm.removeItem(atPath: fetchHead) }
+    let (objectStatus, objects) = git(publicClone, "count-objects", "-v")
+    r = runInTerminal(releaseArgs, env: env, answer: "no\n")
     check(r.0 != 0 && r.1.contains("no passing G3 tart run for") && r.1.contains("no G3 record") && !r.1.contains("Type yes to go on:"),
           "public release: refused without a G3 record, before anything is built: \(r.1.suffix(300))")
-    // then a passing record of HEAD, as tests/mac/g3.sh run writes one (tests/release/sandbox.sh's
-    // g3_record): a fake TEST payload in dist-test/, this plan, every required scenario passed
-    let g3Record = #"""
-        set -eu
+    let (afterStatus, afterObjects) = git(publicClone, "count-objects", "-v")
+    let (refsStatus, refs) = git(publicClone, "for-each-ref")
+    let (worktreeStatus, changes) = git(publicClone, "--no-optional-locks", "status", "--porcelain", "--ignored")
+    check(objectStatus == 0 && afterStatus == 0 && objects == afterObjects && !fm.fileExists(atPath: fetchHead)
+          && refsStatus == 0 && refs.isEmpty && worktreeStatus == 0 && changes.isEmpty,
+          "public release: a G3 refusal leaves the public clone's fetch state, objects, refs and worktree untouched")
+    // Step 4b still verifies the archive below 1.5.1, and step 10 archives the TEST build.
+    // Use the real archive scripts and the same fixture shape as tests/release/sandbox.sh.
+    write(archive + "/toolchain.txt", "fixture baseline\n")
+    let testBuildAndG3 = #"""
+        set -euo pipefail
         dev="$1"; c="$(git -C "$dev" rev-parse HEAD)"; r="$dev/build/gates/$c/g3-mac.ok"
-        mkdir -p "$dev/dist-test"; echo "{\"commit\": \"$c\"}" > "$dev/dist-test/payload.json"
-        req="$(cd "$dev" && GATES_ARCHIVE="$dev/no-archive" tests/mac/g3.sh _t required "$c" rb26-template)"
+        A="$GATES_ARCHIVE"; . "$dev/tests/perf/archive.sh"; seal
+        d="$dev/dist-test"; test_signer="$dev/build/test-keys"
+        mkdir -p "$d" "$test_signer"
+        /usr/bin/openssl ecparam -name prime256v1 -genkey -noout -out "$test_signer/test-key.pem"
+        /usr/bin/openssl ec -in "$test_signer/test-key.pem" -pubout -out "$test_signer/test.pub.pem"
+        (
+          cd "$d"
+          files=(rbstemsplus-app.zip libonnxruntime.1.18.0.dylib bootstrap.sh)
+          for f in "${files[@]}"; do echo "TEST $f $c" > "$f"; done
+          printf '{"payload_version":"%s","commit":"%s","app":{"sha256":"%s"},"bridge":{"sha256":"%s"}}\n' \
+            "$2" "$c" "$(shasum -a 256 "${files[0]}" | cut -c1-64)" "$(shasum -a 256 "${files[1]}" | cut -c1-64)" > payload.json
+          /usr/bin/openssl dgst -sha256 -sign "$test_signer/test-key.pem" -out payload.json.sig payload.json
+          shasum -a 256 "${files[@]}" payload.json > SHA256SUMS
+        )
+        req="$(cd "$dev" && tests/mac/g3.sh _t required "$c" rb26-template)"
         [ -n "$req" ]
-        { echo "g3 1"; echo "commit $c"; echo "payload_sha256 $(shasum -a 256 "$dev/dist-test/payload.json" | cut -c1-64)"
+        { echo "g3 1"; echo "commit $c"; echo "payload_sha256 $(shasum -a 256 "$d/payload.json" | cut -c1-64)"
           echo "plan_sha256 $(shasum -a 256 "${r%/*}/plan" | cut -c1-64)"; echo "guests rb26-template"; echo "guest_versions rb26-template=26.6.2"
           while read -r g n; do echo "scenario $g $n pass 1min clicks=none"; done <<< "$req"
           echo "coverage ok"; echo "result pass"; } > "$r"
         """#
-    r = run("/bin/bash", ["-c", g3Record, "g3-record", dev])
-    check(r.0 == 0, "public release: a passing G3 record of the commit: \(r.1)")
-    r = runInTerminal(["/bin/bash", release, "v9.9.8", "--key", key], env: env, answer: "no\n")
+    r = run("/bin/bash", ["-c", testBuildAndG3, "test-build-and-g3", dev, version])
+    check(r.0 == 0, "public release: a sealed archive, TEST build and passing G3 record: \(r.1)")
+    r = runInTerminal(releaseArgs, env: env, answer: "no\n")
     check(r.0 != 0 && r.1.contains("stopped: nothing was pushed or uploaded"), "public release: anything but yes stops before pushing: \(r.1.suffix(300))")
     check(publicRefs().isEmpty && !fm.fileExists(atPath: ghState + "/release"), "public release: no push, no draft")
-    let unpushed = git(publicClone, "rev-parse", "HEAD").1
-    r = runInTerminal(["/bin/bash", release, "v9.9.8", "--key", key], env: env, answer: "yes\n")
-    check(r.0 == 0 && r.1.contains("Draft v9.9.8 is on Gabe-LS/rbstemsplus") && r.1.contains("G3 tart run: passed for"),
+    let (unpushedStatus, unpushed) = git(publicClone, "rev-parse", "--verify", "refs/heads/main")
+    r = runInTerminal(releaseArgs, env: env, answer: "yes\n")
+    check(r.0 == 0 && r.1.contains("Draft \(tag) is on Gabe-LS/rbstemsplus") && r.1.contains("G3 tart run: passed for"),
           "public release: the release goes through, its G3 record checked: \(r.1.suffix(600))")
-    let pubCommit = git(publicBare, "rev-parse", "main").1
-    check(pubCommit == unpushed && r.1.contains("from an earlier run"), "public release: the earlier run's unpushed commit is reused, not made twice")
-    check(git(publicBare, "log", "-1", "--format=%an <%ae>|%cn <%ce>|%B", "main").1 == "Gabe-LS <\(email)>|Gabe-LS <\(email)>|RB Stems Plus 9.9.8",
+    let (pubStatus, pubCommit) = git(publicBare, "rev-parse", "--verify", "refs/heads/main")
+    check(unpushedStatus == 0 && pubStatus == 0 && pubCommit == unpushed && r.1.contains("from an earlier run"),
+          "public release: the retry reuses the public clone's unpushed commit")
+    check(git(publicBare, "log", "-1", "--format=%an <%ae>|%cn <%ce>|%B", "main").1 == "Gabe-LS <\(email)>|Gabe-LS <\(email)>|RB Stems Plus \(version)",
           "public release: one commit by Gabe-LS, named after the version: \(git(publicBare, "log", "-1", "--format=%an <%ae>|%cn <%ce>|%B", "main").1)")
     check(git(publicBare, "rev-list", "--count", "main").1 == "1", "public release: the public history is the release alone")
     let files = git(publicBare, "ls-tree", "-r", "--name-only", "main").1.split(separator: "\n").map(String.init)
-    check(files.contains("docs/public.md") && files.contains("scripts/release.sh") && !files.contains(".publicignore")
-          && !files.contains { $0.hasPrefix("docs/internal") || $0.contains("PRIVATE-NOTES") }, "public release: no private path is published: \(files)")
-    check(git(publicBare, "rev-parse", "v9.9.8^{commit}").1 == pubCommit
-          && git(publicBare, "for-each-ref", "--format=%(objecttype) %(taggername) %(taggeremail)", "refs/tags/v9.9.8").1 == "tag Gabe-LS <\(email)>",
-          "public release: an annotated tag v9.9.8 by Gabe-LS on the public commit")
-    check(git(devOrigin, "rev-parse", "v9.9.8^{commit}").1 == git(dev, "rev-parse", "HEAD").1, "public release: the development tag is on the development commit")
+    check(files.contains("docs/public.md") && files.contains("scripts/release.sh") && !files.contains(".publicignore") && !files.contains(".publicallow")
+          && !files.contains { $0.hasPrefix("docs/hidden") || $0.contains("PRIVATE-NOTES") }, "public release: no private path is published: \(files)")
+    check(git(publicBare, "rev-parse", "\(tag)^{commit}").1 == pubCommit
+          && git(publicBare, "for-each-ref", "--format=%(objecttype) %(taggername) %(taggeremail)", "refs/tags/\(tag)").1 == "tag Gabe-LS <\(email)>",
+          "public release: an annotated tag \(tag) by Gabe-LS on the public commit")
+    let devCommit = git(dev, "rev-parse", "HEAD").1
+    check(git(devOrigin, "rev-parse", "\(tag)^{commit}").1 == devCommit, "public release: the development tag is on the development commit")
+    let testPayload = dev + "/dist-test/payload.json"
+    let (hashStatus, hashLine) = run("/usr/bin/shasum", ["-a", "256", testPayload])
+    let testHash = hashLine.split(separator: " ").first ?? ""
+    let waiver = try? String(contentsOfFile: dev + "/build/gates/\(devCommit)/perf-mac-waived.txt", encoding: .utf8)
+    check(hashStatus == 0 && waiver == """
+          tag \(tag)
+          commit \(devCommit)
+          payload_sha256 \(testHash)
+          reason Owner decision 2026-11-19: Move the Mac performance test to 1.5.1.
+
+          """, "public release: the Mac performance waiver records the tag, development commit and TEST payload")
+    let checkArchive = #"""
+        set -e
+        A="$GATES_ARCHIVE"; . "$1"; verify
+        cd "$A"
+        cmp "tag-$2/payload.json" "$3"
+        grep -qxF "$(shasum -a 256 "tag-$2/payload.json")" SHA256SUMS
+        """#
+    let archived = run("/bin/bash", ["-c", checkArchive, "check-archive", dev + "/tests/perf/archive.sh", tag, testPayload])
+    check(archived.0 == 0, "public release: the archive is sealed over the TEST payload: \(archived.1)")
     let payload = (try? String(contentsOfFile: ghState + "/release/payload.json", encoding: .utf8)) ?? ""
     check(payload.contains("\"commit\": \"\(pubCommit)\""), "public release: the draft's payload.json names the public commit: \(payload)")
     let uploaded = ((try? fm.contentsOfDirectory(atPath: ghState + "/release")) ?? []).sorted()
@@ -218,13 +283,13 @@ func publicReleaseTests() {
           "public release: the draft's payload.json is signed with the release key")
     let args = (try? String(contentsOfFile: ghState + "/args", encoding: .utf8)) ?? ""
     let notes = (try? String(contentsOfFile: ghState + "/notes", encoding: .utf8)) ?? ""
-    check(args.contains("--draft") && args.contains("--repo Gabe-LS/rbstemsplus") && args.contains("--notes-file /") && notes == "The notes of 9.9.8.\n",
+    check(args.contains("--draft") && args.contains("--repo Gabe-LS/rbstemsplus") && args.contains("--notes-file /") && notes == "The notes of \(version).\n",
           "public release: a draft on the public repository, with the version's notes unwrapped: \(args) \(notes)")
-    r = runInTerminal(["/bin/bash", release, "v9.9.8", "--key", key], env: env, answer: "yes\n")
-    check(r.0 != 0 && r.1.contains("GitHub has a release v9.9.8 already"), "public release: a release that exists is never replaced")
+    r = runInTerminal(releaseArgs, env: env, answer: "yes\n")
+    check(r.0 != 0 && r.1.contains("GitHub has a release \(tag) already"), "public release: a release that exists is never replaced")
 
     // MARK: the public clone must be the public repository's, clean and in step
-    _ = git(publicClone, "remote", "set-url", "origin", dir + "/Gabe-LS/rbstemsplus-dev.git")
+    _ = git(publicClone, "remote", "set-url", "origin", dir + "/Gabe-LS/other-repository.git")
     r = dryRun()
     check(r.0 != 0 && r.1.contains("not Gabe-LS/rbstemsplus"), "public release: a clone of another repository is refused")
     _ = git(publicClone, "remote", "set-url", "origin", publicBare)
@@ -238,13 +303,14 @@ func publicReleaseTests() {
     _ = git(dev, "remote", "set-url", "origin", devOrigin)
 
     // MARK: after a release with a "windows" block, this script (which writes none) stops
-    write(ghState + "/release/payload.json", "{\"payload_version\": \"9.9.8\", \"windows\": {\"app\": {\"version\": \"9.9.8\"}}}\n")
-    write(dev + "/VERSION", "9.9.9\n")
-    _ = git(dev, "commit", "-q", "-am", "9.9.9")
+    write(ghState + "/release/payload.json", "{\"payload_version\": \"\(version)\", \"windows\": {\"app\": {\"version\": \"\(version)\"}}}\n")
+    let nextVersion = "1.5.1"
+    write(dev + "/VERSION", "\(nextVersion)\n")
+    _ = git(dev, "commit", "-q", "-am", nextVersion)
     _ = git(dev, "push", "-q", "origin", "main")
-    r = run("/bin/bash", [release, "v9.9.9", "--plan"])
+    r = run("/bin/bash", [release, "v\(nextVersion)", "--plan"])
     check(r.0 != 0 && r.1.contains("has a \"windows\" block"), "public release: a latest release with a windows block stops the release (its plan): \(r.1.suffix(300))")
-    check(git(publicBare, "rev-parse", "-q", "--verify", "refs/tags/v9.9.9").0 != 0, "public release: nothing pushed after the windows block refusal")
+    check(git(publicBare, "rev-parse", "-q", "--verify", "refs/tags/v\(nextVersion)").0 != 0, "public release: nothing pushed after the windows block refusal")
 }
 
 /// Runs a command in a new terminal (a pty: [ -t 0 ] and [ -t 1 ] hold), types `answer` once

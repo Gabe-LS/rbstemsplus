@@ -20,9 +20,9 @@ else
   exes=("$target")
 fi
 # what only the probe has: its configuration folder, its entry points, its class, its records' words
-strings_re='rbstemsplus-probe|probe\.conf|workQueueFree|dialogEnd|windowDrawn|refresh\.begin|trigger\.activate|trigger\.actionEnd|tabShown|estimate\.lastline'
+strings_re='rbstemsplus-probe|probe\.conf|workQueueFree|dialogEnd|windowDrawn|refresh\.begin|trigger\.activate|trigger\.actionEnd|tabShown|estimate\.lastline|willTerminate\.flushed|shell\.willTerminate\.end'
 # (the class Probe of module main is "main5ProbeC"; LocationProbe, a release type, is "…13LocationProbe…")
-symbols_re='probeStart|probeMark|probeFakeHelper|main5ProbeC'
+symbols_re='probeStart|probeMark|probeFakeHelper|probeAfterExitStamps|main5ProbeC'
 found=0
 for exe in "${exes[@]}"; do
   [ -f "$exe" ] || fail2 "no executable $exe"

@@ -4,6 +4,32 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+/* sha_memo's stamp on Windows: the handle's size and 128-bit file id (plat_file_stat; its kind is
+ * ignored, since it calls any reparse point PLAT_OTHER and the path was opened through links
+ * already, so a WOF-compressed or cloud file still hashes) and its 100 ns last-write and change
+ * times (FileBasicInfo), finer than plat_stat's seconds. A folder: EINVAL. */
+int sha_memo_win_stamp(void *ctx, plat_file f, sha_memo_stamp *out) {
+    (void)ctx;
+    plat_stat st;
+    int e = plat_file_stat(f, &st);
+    if (e) return e;
+    FILE_BASIC_INFO b;
+    if (!GetFileInformationByHandleEx((HANDLE)f.h, FileBasicInfo, &b, sizeof b)) return EIO;
+    if (b.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) return EINVAL;
+    out->size = st.size;
+    out->mtime = b.LastWriteTime.QuadPart;
+    out->ctime = b.ChangeTime.QuadPart;
+    out->id[0] = st.id.vol;
+    out->id[1] = st.id.file[0];
+    out->id[2] = st.id.file[1];
+    return 0;
+}
+#endif
+
 void sha_memo_init(sha_memo *m) {
     memset(m, 0, sizeof *m);
     plat_mutex_init(&m->mu);

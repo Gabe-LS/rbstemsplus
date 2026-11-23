@@ -14,7 +14,8 @@ draft `scripts/release.sh` uploads, and the release once the developer publishes
 **In short:** commit and push in the development repository → `scripts/release.sh vX.Y.Z --plan`
 (which Mac files this release carries forward unchanged) → test build of that commit in the
 plan's shape on the VM (`build.sh --test URL --plan build/gates/<commit>/plan`) → the gates on
-that TEST build (the G3 tart run, the performance session) →
+that TEST build (the G3 tart run; for Windows files the VM suite records, the real-PC record and
+the by-hand record; the performance sessions only from 1.5.1, as step 4b waives them below it) →
 `scripts/release.sh vX.Y.Z --dry-run` (what would be published) →
 `scripts/release.sh vX.Y.Z` (publishes the commit's files as one commit in the public
 repository, builds the release there, signs it, tags, uploads a draft) → check the notes and
@@ -22,22 +23,24 @@ publish the draft by hand → the post-publish check (the real update and one-li
 
 ## Two repositories
 
-- **Gabe-LS/rbstemsplus-dev** (private): all work happens here, with its whole history, its tags
+- **The private development repository**: all work happens here, with its whole history, its tags
   and the private documents.
 - **Gabe-LS/rbstemsplus** (public): it only receives releases, one commit per release,
   "RB Stems Plus X.Y.Z", author and committer Gabe-LS with its GitHub noreply address. Its
   history holds nothing else. The releases (and so the one-liner) are there.
 
 `.publicignore`, in the development repository, lists the private paths, one per line (a folder
-takes everything in it). They are never published, and neither is `.publicignore` itself. A new
-private file goes into `.publicignore` in the same commit.
+takes everything in it). A new private file goes into `.publicignore` in the same commit.
+Before building from the export, `release.sh` scans its source and text for private details.
+It reports the file, line and type. Keep exceptions for intentional public values and test
+fixtures in `.publicallow`. Both lists stay in the development repository.
 
 ### Once: setting up the two repositories (developer actions)
 
-1. Rename the current GitHub repository to `rbstemsplus-dev`, make it private, and point the
-   checkout at it:
+1. Make the development repository private and set `DEVELOPMENT_REPO_URL` to its remote URL.
+   Point the checkout at it:
    ```sh
-   git remote set-url origin https://github.com/Gabe-LS/rbstemsplus-dev.git
+   git remote set-url origin "$DEVELOPMENT_REPO_URL"
    ```
 2. Create the empty public repository `Gabe-LS/rbstemsplus`, and turn on Settings › Security ›
    Private vulnerability reporting there. The first release makes its first commit.
@@ -275,15 +278,18 @@ live in `build/gates/<commit>/`, next to `plan`.
 
   App Management's Allow and the password are emulated. The old apps' buttons are pressed by the G3
   Driver (Accessibility, once the owner has allowed it in the template; `tests/mac/g3.sh smoke`
-  says whether a clone has it), else by the owner in the VM's window when asked (at most 10
-  minutes per click). A pass writes `build/gates/<commit>/g3-mac.ok`. `release.sh` runs
+  says whether a clone has it), else by the owner in the VM's screen when asked (at most 10
+  minutes per click). Every clone starts with tart's VNC server, which opens no window on the
+  owner's Mac. Where the owner clicks (the watcher's Allow, the old apps' buttons without
+  Accessibility) or looks (a clone kept after a licence stop), the notice (`G3_NOTIFY`) names its
+  `vnc://HOST:PORT` to open in Screen Sharing; the password is only in `build/harness/vnc-url`. A pass writes `build/gates/<commit>/g3-mac.ok`. `release.sh` runs
   `tests/mac/g3.sh check <commit>` before it builds, on main and with `--branch`. It refuses a
   record of another commit, TEST payload or plan, or one with a scenario missing. The
   maintenance branch's own `release.sh` (`maint/1.3`) gets the check once the first real G3
   round has passed (owner decision, 2026-11-12). After publishing, `tests/mac/g3.sh post-publish
   X.Y.Z` checks the real published 1.3.0 updating from `releases/latest` and the real one-liner
   (step 6).
-- **Performance, every release** (release.md §6.2): only what a user could notice is gated. A
+- **Performance, from 1.5.1** (release.md §6.2). Only what a user could notice is gated. A
   slowdown counts only when it is over both 10% and 20 ms (20 MB for memory), on each row's median;
   a row within 25% of its allowance is printed BORDERLINE for a human to judge. Every comparison is
   against a fixed baseline in `gates-archive/` (mac-A for the app, B0 for the bridge and the
@@ -299,10 +305,17 @@ live in `build/gates/<commit>/`, next to `plan`.
   | Mac app carried | `tests/perf/g0.sh run B.zip --scenarios "perf-activation perf-playlist-5000"` (P1, P2, P3, P6, P7.done.full) | about 15 min plus the idle wait |
 
   A session needs the host to itself, other agents paused, on AC power. The owner starts it.
-  `release.sh` doesn't read a performance record yet (release.md §6.2 plans
-  `build/gates/<commit>/perf-mac.tsv`). Until it does, a regression blocks the release just the
-  same: run `release.sh` only once the session passed, or once the owner has accepted that one
-  number in writing (the reason goes into the release notes).
+  The sessions' compare tables become the record `release.sh` reads, bound to the commit and the
+  TEST build's payload.json:
+  `tests/perf/record.py write mac <commit> dist-test/payload.json build/gates/<commit>/perf-mac.tsv TABLE...`
+  (and `perf-win.tsv` from the Windows sessions for releases with Windows files).
+  Below 1.5.1, step 4b requires no performance records and logs the waivers to
+  `build/gates/<commit>/perf-mac-waived.txt` and, with Windows files, `perf-win-waived.txt`
+  (owner decisions 2026-11-19, release.md §6.2). `release.sh` checks the gate archive's
+  `SHA256SUMS` on every release. From 1.5.1, it refuses a missing record, a record for another
+  commit or TEST build, and any FAIL (a regression or a failed measurement). BORDERLINE
+  rows stop it until a human has judged them: `--accept-perf "REASON"` lets them through, said in
+  its output, `build/gates/<commit>/perf-accepted.txt` and the draft's notes (release.md §6.2).
 
 ## Checking a release file against a rebuild
 
@@ -330,10 +343,10 @@ downloaded set), and the rebuild shows that those files come from that source.
 
 ## Windows (from 1.5.0)
 
-Mac and Windows ship in one release with one version (above). The Windows parts start with the
-first release that has a `windows` block in `payload.json` (1.5.0). Before that, a release has no
-Windows asset, and `release.sh` refuses to run when the latest release's `payload.json` has a
-`windows` block (it would drop it, and Windows with it). From 1.5.0 (release.md §6, §7):
+Mac and Windows ship in one release. `--windows` adds the Windows block to the first release,
+with `rbstemsplus-windows.zip`, `rbstemsplus-bridge-win-x64.dll`, `bootstrap.ps1` and
+`NOTICE-windows.txt`. Later releases include Windows automatically when the latest release has
+that block. The owner submits changed Windows files to Microsoft before release (release.md §7).
 
 - **Assets:** `rbstemsplus-windows.zip`, `rbstemsplus-bridge-win-x64.dll`, `bootstrap.ps1` and
   `NOTICE-windows.txt` join the Mac files. A release that changes only the Mac carries the
@@ -341,10 +354,101 @@ Windows asset, and `release.sh` refuses to run when the latest release's `payloa
 - **Unsigned:** Windows files have no Authenticode signature (owner decision). Changed Windows
   files go to Microsoft's free submission (microsoft.com/wdsi/filesubmission) before each
   release (the owner, about 5 minutes).
-- **One more gate record:** `vm-win.ok`, the Windows VM suite, for every release whose Windows app,
-  bridge or worker isn't carried, and whenever the `windows` block changes in more than versions
-  and commits. The Windows performance sessions follow release.md §6.2's matrix.
 - **After publishing:** the real Windows one-liner in a reverted Parallels snapshot.
+
+### Plan and build the release candidate
+
+Use `--windows` throughout the first Windows release. From the clean release commit, make the
+plan, then build the Mac and Windows TEST files in its shape. The URLs below are for the
+default tart and Parallels test hosts. Use the URLs the two guests will actually reach.
+
+```sh
+scripts/release.sh v1.5.0 --windows --plan
+```
+
+```sh
+scripts/build.sh --test http://192.168.64.1:8765/ --win-test https://10.211.55.2:8766/ --plan "build/gates/$(git rev-parse HEAD)/plan"
+```
+
+### Step 4b records
+
+Use the same release commit and `dist-test/` for every record. Run G3 for every release. It
+writes `build/gates/<commit>/g3-mac.ok` when every scenario for the plan passes.
+
+```sh
+tests/mac/g3.sh run
+```
+
+The Windows gate runs when the app zip, either stub, the worker or the bridge is new, or the
+TEST payload differs from the previous release in Windows compatibility, resampler proof,
+the model or the previous models. Stage the release candidate in the VM runner's served folder
+(`build/win/dist-test/` by default) and build the VM test tools from the same commit.
+
+```sh
+tests/win/vm-run.sh stage --build
+```
+
+Run each suite from `tests/win/suites/release.list` on the architecture and snapshot named in
+its row. Replace `SNAPSHOT` and `SUITE` with the row's values.
+
+```sh
+tests/win/vm-run.sh run "SNAPSHOT" SUITE --record
+```
+
+Check the suite records locally. Step 4b runs the same check and requires a fresh
+`build/gates/<commit>/vm-win.ok` bound to the commit and TEST payload.
+
+```sh
+tests/win/vm-run.sh check "$(git rev-parse HEAD)" dist-test
+```
+
+**The records step 4b requires for Windows files.** `vm-win.ok` comes from `vm-run.sh check`
+over the `--record` rows of `release.list`; its worker row is satisfied by RB-KIT's `pc-win.ok`
+from the real PC, not by the VM's worker suite (whose cache-hit step skips in a VM). Step 4b also
+requires the by-hand record, `win-by-hand.ok`. All three must be bound to this commit and its TEST
+payload.
+
+For the worker record, use RB-KIT on the real-PC lane. It writes `build/gates/<commit>/pc-win.ok`
+when the recorded checks pass on this commit's TEST build.
+
+```sh
+tests/rekordbox/win/pc-session.sh auto record --commit "$(git rev-parse HEAD)" --dist dist-test
+```
+
+Record the by-hand cases after the applicable ones pass on the TEST build. Keep the
+results with the round's notes. The writer creates `build/gates/<commit>/win-by-hand.ok`.
+See [the by-hand cases](../tests/win/suites/by-hand.md).
+
+```sh
+python3 -I tests/win/gate-record.py write-by-hand "$(git rev-parse HEAD)" dist-test --pass
+```
+
+Step 4b verifies the gate archive in every release. Below 1.5.1 it writes `perf-mac-waived.txt`
+and, with Windows files, `perf-win-waived.txt` in `build/gates/<commit>/` (owner, 2026-11-19).
+From 1.5.1, use the performance sessions in release.md §6.2 and supply the passing Mac and
+Windows records for this TEST payload.
+
+### Preview, draft and test the published installer
+
+```sh
+scripts/release.sh v1.5.0 --windows --dry-run
+```
+
+```sh
+scripts/release.sh v1.5.0 --windows
+```
+
+The real run prepares the public tree in a scratch repository. It updates the public clone
+only after the carry decisions and step 4b gates pass. The draft contains thirteen assets.
+The script archives the first Windows TEST build as WB, its worker as W0, and the first
+TEST zip with `rbsp-prepare.exe` as WP.
+
+After publishing, use the real Windows installer in a clean, reverted Parallels snapshot.
+Paste it into a normal PowerShell window.
+
+```powershell
+irm https://github.com/Gabe-LS/rbstemsplus/releases/latest/download/bootstrap.ps1 | iex
+```
 
 ## The model
 
@@ -444,6 +548,8 @@ failures (seed ...)") goes into the release commit's message.
 
 ### 3. Test the TEST build of that commit on the VM
 
+For releases with Windows files, also follow the [Windows steps](#windows-from-150).
+
 The VM is a Tart clone of a clean macOS 26 template with the **DJ** admin account, rekordbox
 signed in, STEMS on, the STEMS Engine downloaded, and updates off. Always start from a **fresh
 clone** of the template.
@@ -539,9 +645,10 @@ clone** of the template.
    root must exit 5), and a full disk (the app must say "Low disk space" first).
 7. **When the root scripts changed:** `tests/root/vm-root-tests.sh` in a throwaway clone (its
    header says how; about 30 minutes).
-8. **The gates** on this TEST build ([The gates](#the-gates-from-140)): the G3 tart run
-   (`tests/mac/g3.sh run`, its record `build/gates/<commit>/g3-mac.ok`) and the plan's
-   performance session. `release.sh` stops without a passing G3 record.
+8. Run the [gates](#the-gates-from-140) on this TEST build. The G3 tart run
+   (`tests/mac/g3.sh run`) must produce a passing `build/gates/<commit>/g3-mac.ok`.
+   From 1.5.1, run the plan's performance sessions and provide passing records
+   (`perf-mac.tsv` and, with Windows files, `perf-win.tsv`).
 
 ### 4. Preview what would be published
 
@@ -549,8 +656,10 @@ clone** of the template.
 scripts/release.sh vX.Y.Z --dry-run
 ```
 
-It needs no key or Terminal, and changes nothing (it fetches the public clone's origin, gh reads
-the latest release, and the Mac files are built in a scratch folder).
+It needs no key or Terminal. It fetches the public clone's origin, which can update the clone's
+remote-tracking refs and tags. It leaves the public branch and working tree untouched and
+publishes nothing. It reads the latest release with gh and builds the Mac files in a scratch
+folder. In a real run, the preflight fetch uses a scratch repository until the gates pass.
 It makes the checks on `VERSION`, the public clone and the public copy described below, then
 shows the commit it would make in the public clone and the public files it would change (every
 file, for the first release), and the carry decisions. Read the list: nothing private may be in it. With uncommitted
@@ -577,15 +686,27 @@ It stops at the first problem, before anything is pushed or uploaded:
   the copy, a file named like a private one, a published file that mentions a private file by
   name, or one that holds the developer's own name, account name, or git name or email. The copy
   must be HEAD's files exactly (paths, modes and contents), minus the private ones;
-- it commits the copy in the public clone as "RB Stems Plus X.Y.Z", author and committer Gabe-LS
-  with the noreply address, on top of the public `origin/main`, and moves the clone's main to it
-  (nothing is pushed yet);
 - the carry decisions are the plan's, and G3's tart run passed for this commit
   (`tests/mac/g3.sh check`: `build/gates/<commit>/g3-mac.ok`, made by `tests/mac/g3.sh run` on
   `dist-test/` in this plan's shape, every required scenario passed; release.md §6.1), with
   `--branch` too (this script, from main). The maintenance branch's own release.sh
   (`maint/1.3`) doesn't check it yet: it gets the check (branch `w6/g3-maint`) once the first
   real G3 round has passed (owner decision, 2026-11-12);
+- step 4b verifies the gate archive's `SHA256SUMS`. From 1.5.1, it checks the performance records
+  (release.md §6.2, T27). `build/gates/<commit>/perf-mac.tsv` and, with Windows files, `perf-win.tsv`
+  must pass `tests/perf/record.py check` for this commit and the TEST payload in `dist-test/`.
+  Below 1.5.1, step 4b writes the waiver files and the script refuses `--accept-perf`.
+  A record with BORDERLINE rows (within 25% of a row's allowance) stops it until a human
+  has judged them: run it again with `--accept-perf "REASON"` (right after the flag, in quotes;
+  the real run only); the rows and the reason go to the draft's notes and, once the draft is
+  made, to `build/gates/<commit>/perf-accepted.txt`. A FAIL is never accepted. The records are
+  checked again, unchanged, right before signing;
+- with Windows files, step 4b also checks the VM record when a Windows file is new or the
+  TEST payload's lists change (release.md §6);
+- after the carry decisions and gate records pass, it commits the copy as "RB Stems Plus X.Y.Z",
+  author and committer Gabe-LS with the noreply address, on top of the public `origin/main` and
+  moves the public clone's main to it. Until then, the public fetch and tree use a scratch
+  repository;
 - `scripts/build.sh` builds every asset in the public clone, into its `dist/`, with its own
   checks (the clean tree, the commit in `payload.json`, both public keys, the hardened runtime,
   libFLAC's checksum, the model's). The model and libFLAC's tarball come from the development
@@ -601,10 +722,18 @@ Then it shows both commits and the signing key (and whether `dist-test/` is from
 development commit) and asks you to type **yes**. Only then does it make the tag (annotated) here
 if it is missing and push it to the development repository, make the public tag (annotated, by
 Gabe-LS), push the public main and tag together, and create the **draft** release `vX.Y.Z` on
-Gabe-LS/rbstemsplus with the nine files and `docs/release-notes/X.Y.Z.md` as its notes. A release
-that exists is never replaced (no `--clobber`): to make it again, delete the draft by hand first.
+Gabe-LS/rbstemsplus with nine files (thirteen with Windows) and `docs/release-notes/X.Y.Z.md` as
+its notes. A release that exists is never replaced (no `--clobber`): to make it again, delete the
+draft by hand first.
 It checks the draft (its files' names and sizes, and that its `payload.json` and
 `payload.json.sig` are the ones made here). It never publishes.
+
+Step 10, after the draft: it archives the TEST build the gates read (`dist-test/`) in the gate
+archive as `tag-vX.Y.Z/`, with WB and the worker's W0 on the first release with Windows files
+and WP on the first whose Windows zip ships `rbsp-prepare.exe` (`tests/perf/archive-release.sh`;
+release.md §6.1-6.2), and seals its `SHA256SUMS` anew. If that step fails, the draft is already
+made, so running release.sh again stops at the existing release: fix the cause, then run the
+`tests/perf/archive-release.sh` command it printed (§6).
 
 If it stops after the public commit (a wrong passphrase, or no **yes**), run it again at the same
 commit: it uses that unpushed commit again.
@@ -625,29 +754,20 @@ commit: it uses that unpushed commit again.
       clean clone; the record is `build/gates/post-X.Y.Z.txt`. This is the first run of the
       release build's own downloads, and of its signature with the release keys (the VM tests
       used a test build and the test key).
-- [ ] Archive the release's TEST build in the gate archive, as `gates-archive/tag-vX.Y.Z/`: a
-      later release that carries a Mac or Windows file builds its TEST build from it (`build.sh --test URL
-      --plan`), signed with the key pair archived next to it. The key pair is the one that signed
-      `dist-test/payload.json`: `build/test-keys/`, or, when this TEST build itself carried a
-      file, the previous `tag-vA.B.C/test-keys/` it was signed with (`make clean` deletes
-      `build/test-keys/`, so archive it before). Then reseal the archive's `SHA256SUMS`:
+- [ ] `release.sh` archived the release's TEST build when it made the draft (its last step:
+      `tests/perf/archive-release.sh`, with WB, the worker's W0 and WP on the first release of their
+      kind). If that step failed, fix the cause and run the command it printed, never a copy by
+      hand: it checks the archive first, never replaces a tag or a baseline, checks the files
+      against `dist-test/SHA256SUMS`, `payload.json` and its signature, and reseals
+      `SHA256SUMS`:
       ```sh
-      A=gates-archive; . tests/perf/archive.sh && verify     # the archive as it was, first
-      a="$A/tag-vX.Y.Z"; mkdir -p "$a/test-keys"
-      cp dist-test/rbstemsplus-app.zip dist-test/libonnxruntime.1.18.0.dylib dist-test/payload.json \
-         dist-test/payload.json.sig dist-test/bootstrap.sh "$a/"
-      for f in rbstemsplus-windows.zip rbstemsplus-bridge-win-x64.dll bootstrap.ps1 NOTICE-windows.txt; do [ ! -f "dist-test/$f" ] || cp "dist-test/$f" "$a/"; done
-      cp build/test-build.log "$a/build.log"
-      cp build/test-keys/test-key.pem build/test-keys/test.pub.pem "$a/test-keys/"   # or the previous tag's, see above
-      /usr/bin/openssl dgst -sha256 -verify "$a/test-keys/test.pub.pem" -signature "$a/payload.json.sig" "$a/payload.json"   # Verified OK
-      { echo "tag=vX.Y.Z commit=$(plutil -extract commit raw -o - "$a/payload.json")"
-        echo "built=$(stat -f %Sm -t %Y-%m-%dT%H:%M:%S "$a/payload.json")"
-        echo "test_url=http://192.168.64.1:8765/"
-        echo "swiftc=$(xcrun swiftc --version 2>&1 | head -1)"
-        echo "xcode=$(xcodebuild -version | tr '\n' ' ')"
-        echo "macos=$(sw_vers -productVersion)"; } > "$a/toolchain.txt"
-      seal                                                    # gates-archive/SHA256SUMS anew
+      tests/perf/archive-release.sh vX.Y.Z --payload-sha SHA256   # plus --wb / --wp as printed
       ```
+      A later release that carries a Mac or Windows file builds its TEST build from
+      `gates-archive/tag-vX.Y.Z/` (`build.sh --test URL --plan`), signed with the key pair
+      archived next to it: the one that signed `dist-test/payload.json` (`build/test-keys/`, or,
+      when this TEST build itself carried a file, the previous `tag-vA.B.C/test-keys/`; `make
+      clean` deletes `build/test-keys/`, so archive it before).
       v1.3.0's is there already (`gates-archive/tag-v1.3.0/`). Copy the archive to the second
       disk afterwards (`tests/perf/b0.sh copy DEST`).
 

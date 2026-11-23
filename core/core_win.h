@@ -3,7 +3,7 @@
  * code where the shell needs it before or beside a core: the one-copy mutex and window
  * (win/c/lifecycle.h's life_one_*, app.md §4.3, I88), another process's start time (the busy
  * marker's clock) and CriticalWork (win/c/shell.h, app.md §5.9). cdecl, no struct by value, as
- * core.h. Implemented in win/c/core_native_life.c. */
+ * core.h. */
 #ifndef RBSP_CORE_WIN_H
 #define RBSP_CORE_WIN_H
 
@@ -48,6 +48,15 @@ CORE_API void CORE_CALL core_win_one_close(core_win_one *one);
  * couldn't be asked. Another account's process is found through the system's process list. */
 CORE_API int64_t CORE_CALL core_win_process_start(uint32_t pid);
 
+/* ---------------------------------------------------------------- the start's token
+ *
+ * core_win_token_check: this process's token, as the shell's start refuses it (app.md §5.9, I35):
+ * OK (a standard user, or an admin's limited token), ELEVATED (Run as administrator), UAC_OFF (an
+ * elevated default token), SERVICE (LocalSystem, LocalService, NetworkService), UNKNOWN (not
+ * readable). Only OK starts. win/c/lifecycle.h's LIFE_TOKEN_*, asserted. */
+enum { CORE_WIN_TOKEN_OK = 0, CORE_WIN_TOKEN_ELEVATED = 1, CORE_WIN_TOKEN_UAC_OFF = 2, CORE_WIN_TOKEN_SERVICE = 3, CORE_WIN_TOKEN_UNKNOWN = 4 };
+CORE_API int32_t CORE_CALL core_win_token_check(void);
+
 /* ---------------------------------------------------------------- CriticalWork
  *
  * The steps quitting waits for (win/c/shell.h's process-wide critical_work, the Mac's
@@ -61,16 +70,24 @@ CORE_API int64_t CORE_CALL core_win_process_start(uint32_t pid);
  * about ms. Never on the UI thread for long, never from a step's own thread.
  * core_win_critical_close: closed when the quit is decided (the shell's CloseGate, on the UI
  * thread: Proceed, WM_ENDSESSION(TRUE), WPF's session-end Closing, the veto's quit): from then on
- * no new step starts (a new elevation is "stopped" with no UAC prompt; a model copy or restore
- * is not begun: nothing changed), while one already running is still waited for. One-way. */
+ * no new step is admitted (a new elevation is "stopped" with no UAC prompt; a refused model
+ * copy or restore leaves rekordbox's folder untouched, and a copy may have saved the original
+ * in the support folder). An admitted step still counts. One-way. */
 CORE_API int32_t CORE_CALL core_win_critical_running(void);
 CORE_API int32_t CORE_CALL core_win_critical_wait(uint32_t ms);
 CORE_API void CORE_CALL core_win_critical_close(void);
 
-/* The WPF shell's host->facts (win/c/host_facts.c): CORE_FACTS_REFRESH's cheap rows read now and
- * written into out, from the start config's paths of c. Main, inside facts only. 1: the sheet
- * carries FACT_LIB_UNCHECKED (the shell then warms again on activation, app.md §2 rule 1); 0: it
- * doesn't; -1: nothing read (no REFRESH part asked, or c or out NULL). */
+/* Atomically replace name in the shell's support folder (a child of parent). 0 or an errno. */
+CORE_API int32_t CORE_CALL core_win_window_save(const char *parent, const char *support, const char *name, const void *text, size_t n);
+/* Append to Logs/app.log under the same verified support folder. 0 or an errno. */
+CORE_API int32_t CORE_CALL core_win_log_append(const char *parent, const char *support, const void *text, size_t n);
+
+/* The WPF shell's host->facts (win/c/host_facts.c), from the start config's paths of c. Main,
+ * inside facts only. Writes FACT_KEPT_SETS when CORE_FACTS_KEPT is asked, CORE_FACTS_REFRESH's
+ * cheap rows when REFRESH is asked, and CORE_FACTS_PREPARE's rows only together with REFRESH.
+ * Returns 1 if FACT_LIB_UNCHECKED is set (the shell then warms again on activation, app.md §2
+ * rule 1), 0 if it isn't, and -1 if no REFRESH part was read. On -1 the shell keeps its previous
+ * LibUnchecked and the sheet may still hold the kept rows. */
 CORE_API int32_t CORE_CALL core_win_cheap_facts(core *c, core_facts *out);
 /* The same reads on a worker, keeping nothing but compat.c's memo of rekordbox's files (their
  * sha256 and AlphaTheta pin), so the UI thread's first reads find them (app.md §2 rule 1). Any
@@ -80,6 +97,11 @@ CORE_API int32_t CORE_CALL core_win_cheap_facts(core *c, core_facts *out);
  * at a time with the start's (Host.WarmOnActivation), never waited for; a future core_free must
  * wait for any warm task first, not free after a bounded wait). */
 CORE_API void CORE_CALL core_win_warm_facts(core *c);
+/* The app's own rekordbox refresh (multi-version rekordbox, .orchestration/mv-spec.md §2.5): a
+ * count that moves whenever either Uninstall view changes (compat.h's
+ * compat_uninstall_generation), polled by the shell's 2 s timer while the window is open; 0 when
+ * it can't be watched. Any thread, cheap (no registry walk). win/c/core_win_refresh.c */
+CORE_API uint64_t CORE_CALL core_win_rekordbox_generation(void);
 
 #ifdef CORE_TEST_HOOKS
 /* ---------------------------------------------------------------- test-hooks DLLs only

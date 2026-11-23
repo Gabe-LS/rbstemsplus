@@ -7,7 +7,7 @@
 $user = Get-UserLocal
 if (-not $user) { Skip 'no logged-in user' }
 $log = Join-Path $user 'Microsoft\CLR_v4.0\UsageLogs\RB Stems Plus.exe.log'
-if (-not (Test-Path -LiteralPath $log)) { Skip "no UsageLogs entry ($log): the app didn't start (install-2 failed)" }
+Set-UsageLogEntry $log 1   # (unlib: planted when the CLR wrote none)
 $target = Join-Path $CaseDir 'usagelogs-target.log'
 New-Item -ItemType Directory -Force (Split-Path $target) | Out-Null
 Copy-Item -LiteralPath $log -Destination $target -Force

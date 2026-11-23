@@ -1,0 +1,41 @@
+# BS3 / A7 on "rekordbox 7.2.19 installed". Run worker-guards after stage --build.
+# worker/prep supplies the reverted VM's promptless UAC policy. The separate suite can observe
+# the first shipped worker before anything populates bin and never uses a consent responder.
+include lib/vmlib.ps1
+include worker/rblib.ps1
+include uninstall/cases/unlib.ps1
+include uac/uaclib.ps1
+include admin-paths/worker-trace.ps1
+include admin-paths/worker-action.ps1
+include admin-paths/worker-guards-lib.ps1
+need http
+need vm
+need file repo/core/texts.def
+need file vm/uia/rbui/rbui.exe
+need file repo/tests/win/suites/admin-paths/worker-hold.ps1
+need file dist-test/bootstrap.ps1
+need file dist-test/payload.json
+# MODE  SECS NAME              SCRIPT
+sys     120  prep              worker/prep.ps1
+user    600  install           bootstrap/install.ps1
+sys     120  plant-dlls        admin-paths/worker-guards-fixture.ps1
+user    420  first-worker      admin-paths/worker-guards.ps1
+sys     120  check-dlls        admin-paths/worker-guards-check.ps1
+sys     120  writable          admin-paths/worker-guards-fixture.ps1
+user    300  refuse-writable   admin-paths/worker-guards.ps1
+sys     120  check-writable    admin-paths/worker-guards-check.ps1
+sys     120  null-dacl         admin-paths/worker-guards-fixture.ps1
+user    300  refuse-null-dacl  admin-paths/worker-guards.ps1
+sys     120  check-null-dacl   admin-paths/worker-guards-check.ps1
+sys     120  empty-dacl        admin-paths/worker-guards-fixture.ps1
+user    300  refuse-empty-dacl admin-paths/worker-guards.ps1
+sys     120  check-empty-dacl  admin-paths/worker-guards-check.ps1
+sys     120  writer            admin-paths/worker-guards-fixture.ps1
+user    300  refuse-writer     admin-paths/worker-guards.ps1
+sys     120  check-writer      admin-paths/worker-guards-check.ps1
+sys     120  delete-handle     admin-paths/worker-guards-fixture.ps1
+user    300  refuse-delete-handle     admin-paths/worker-guards.ps1
+sys     120  check-delete      admin-paths/worker-guards-check.ps1
+sys     120  trace-retry       admin-paths/worker-guards-fixture.ps1
+user    300  retry             admin-paths/worker-guards.ps1
+sys     120  check-retry       admin-paths/worker-guards-check.ps1

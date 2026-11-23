@@ -4,11 +4,16 @@
 #include "check.h"
 
 #include "../native_location.h"
+#include "../native_steps.h"
+#include "../volumes.h"
+#include "cache_owner.h"
+#include "marker.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,11 +21,14 @@
 #include <unistd.h>
 
 static const char loc_id[] = "0E8A1D84-5C2B-4B7A-9F3E-6D1C2B3A4F50";
+/* Also supplied to the release-policy build to check that it ignores the fixture opt-in. */
+int vol_test_internal_ok;
 
 /* the fake host */
 static struct {
     char mount[1100];
     int vol_err, system, local, readonly, remote;
+    vol_facts device;
     int cache, says, running;
     int32_t pid;
     int64_t start;
@@ -28,14 +36,14 @@ static struct {
     uint64_t avail, total;   /* the space op's answer */
     char label[64], letter[8];   /* the volume name op's answer, or name_err */
     int name_err, name_calls;
-    int bridge_calls, hold;   /* hold: the live bridge's read blocks while set (the worker's tests) */
+    int bridge_calls, hold, hold_first_only;
 } fk;
 
 /* the live bridge: fk.cache its presence, fk.says its location=1 (asked with the bridge in), -1 none */
 static int fk_bridge(void *ctx, int *present, int *location) {
     (void)ctx;
-    fk.bridge_calls++;
-    while (__atomic_load_n(&fk.hold, __ATOMIC_SEQ_CST)) usleep(1000);   /* a slow read, until the test lets it go */
+    int call = __atomic_add_fetch(&fk.bridge_calls, 1, __ATOMIC_SEQ_CST);
+    while ((!fk.hold_first_only || call == 1) && __atomic_load_n(&fk.hold, __ATOMIC_SEQ_CST)) usleep(1000);
     *present = fk.cache > 0;
     *location = fk.cache > 0 && fk.says > 0;
     return fk.cache < 0 || (fk.cache > 0 && fk.says < 0) ? -1 : 0;
@@ -60,14 +68,15 @@ static int fk_remote(void *ctx, const char *dir) {
     (void)ctx, (void)dir;
     return fk.remote;
 }
-static int fk_volume(void *ctx, const char *dir, char *mount, size_t n, int *system, int *local, int *readonly) {
+static int fk_volume(void *ctx, const char *dir, char *mount, size_t n, vol_facts *facts) {
     (void)ctx, (void)dir;
     fk.volume_calls++;
     if (fk.vol_err) return fk.vol_err;
     snprintf(mount, n, "%s", fk.mount);
-    *system = fk.system;
-    *local = fk.local;
-    *readonly = fk.readonly;
+    *facts = fk.device;
+    facts->system = fk.system;
+    if (!fk.local) facts->drive_type = VOL_DRIVE_REMOTE;
+    facts->readonly = fk.readonly;
     return 0;
 }
 static void fk_space(void *ctx, const char *path, uint64_t *avail, uint64_t *total) {
@@ -75,14 +84,23 @@ static void fk_space(void *ctx, const char *path, uint64_t *avail, uint64_t *tot
     *avail = fk.avail;
     *total = fk.total;
 }
-static const native_location_ops ops = {NULL, fk_bridge, fk_running, fk_start, fk_volname, fk_remote, fk_volume, fk_space};
+static const native_location_ops ops = {NULL, fk_bridge, fk_running, fk_start, fk_volname, fk_remote, fk_volume, fk_space,
+                                        native_pc_cache_probe};
 
 static void fk_reset(const char *mount) {
     memset(&fk, 0, sizeof fk);
     snprintf(fk.mount, sizeof fk.mount, "%s", mount);
     fk.local = 1;
+    fk.device.drive_type = VOL_DRIVE_FIXED;
+    fk.device.disks = 1;
+    fk.device.bus = VOL_BUS_USB;
+    strcpy(fk.device.fstype, "ntfs");
     snprintf(fk.label, sizeof fk.label, "Stick");
     snprintf(fk.letter, sizeof fk.letter, "E:");
+}
+
+static int bridge_calls(void) {
+    return __atomic_load_n(&fk.bridge_calls, __ATOMIC_SEQ_CST);
 }
 
 static void spit(const char *path, const char *text, size_t n) {
@@ -135,6 +153,25 @@ static void probes(const char *scratch) {
     fk_reset(vol);
     fk.system = 1;
     CHECK(native_location_probe(&ops, loc, loc_id) == PROBE_NOT_CONNECTED, "probe: this PC's own volume: not connected (as the Mac's mountHolding)");
+
+    vol_test_internal_ok = 1;
+#ifdef VOL_TEST_INTERNAL_OK
+    const int internal = PROBE_AVAILABLE, internal_readonly = PROBE_READ_ONLY;
+#else
+    const int internal = PROBE_NOT_CONNECTED, internal_readonly = PROBE_NOT_CONNECTED;
+#endif
+    CHECK(native_location_probe(&ops, loc, loc_id) == internal, "internal-ok: a marked folder on the system volume obeys the build's policy");
+    fk_reset(vol);
+    fk.device.bus = VOL_BUS_FILE_BACKED_VIRTUAL;
+    strcpy(fk.device.fstype, "exfat");
+    CHECK(native_location_probe(&ops, loc, loc_id) == internal, "internal-ok: a marked folder on an internal exFAT VHD obeys the build's policy");
+    fk.readonly = 1;
+    CHECK(native_location_probe(&ops, loc, loc_id) == internal_readonly, "internal-ok: a read-only internal VHD is never available");
+    fk.readonly = 0;
+    strcpy(fk.device.fstype, "refs");
+    CHECK(native_location_probe(&ops, loc, loc_id) == PROBE_NOT_CONNECTED, "internal-ok: an unsupported filesystem stays ineligible");
+    vol_test_internal_ok = 0;
+
     fk_reset(vol);
     fk.local = 0;
     CHECK(native_location_probe(&ops, loc, loc_id) == PROBE_NETWORK, "probe: a volume that isn't local: network");
@@ -210,9 +247,9 @@ static void measures(const char *scratch) {
 
     /* no config.ini: this PC, its Cache in use */
     config(sup, NULL);
-    CHECK(!native_location_measure(&e, &l) && l.kind == LOC_THIS_MAC && l.probe == -1 && !l.has_status_drive && l.has_in_use
+    CHECK(!native_location_measure(&e, &l) && l.kind == LOC_THIS_MAC && l.probe == PROBE_AVAILABLE && !l.has_status_drive && l.has_in_use
               && !strcmp(l.in_use, cache) && !l.rekordbox_running && !l.has_bridge && fk.volume_calls == 0,
-          "measure: no config.ini: this PC, Cache in use, no probe (kind %d)", l.kind);
+          "measure: no config.ini: this PC, Cache in use, local probe passed (kind %d)", l.kind);
     /* a chosen location, a bridge that saves there */
     snprintf(text, sizeof text, "[cache]\ncache_dir=\"%s\"\ncache_id=%s\n", loc, loc_id);
     config(sup, text);
@@ -221,6 +258,16 @@ static void measures(const char *scratch) {
     CHECK(!native_location_measure(&e, &l) && l.kind == LOC_CHOSEN && l.probe == PROBE_AVAILABLE && l.has_status_drive && !strcmp(l.status_drive, "Stick")
               && l.has_in_use && !strcmp(l.in_use, loc),
           "measure: chosen, available: in use there, its drive named (kind %d, probe %d)", l.kind, l.probe);
+    fk.device.bus = VOL_BUS_SATA;   /* the same marked disk on an internal port */
+    CHECK(vol_refusal(&fk.device) == VOL_REFUSE_INTERNAL && !native_location_measure(&e, &l)
+              && l.probe != PROBE_AVAILABLE && !l.has_in_use,
+          "saved_internal_volume: the picker and the measure both refuse an internal disk");
+    fk.device.bus = VOL_BUS_USB;
+    strcpy(fk.device.fstype, "refs");   /* the marked directory was restored after reformat */
+    CHECK(vol_refusal(&fk.device) == VOL_REFUSE_FILE_SYSTEM && !native_location_measure(&e, &l)
+              && l.probe != PROBE_AVAILABLE && !l.has_in_use,
+          "saved_unsupported_filesystem: the picker and the measure both refuse an unsupported filesystem");
+    strcpy(fk.device.fstype, "ntfs");
     /* chosen, not available: nothing in use */
     snprintf(text, sizeof text, "[cache]\ncache_dir=\"%s\"\ncache_id=11111111-2222-3333-4444-555555555555\n", loc);
     config(sup, text);
@@ -432,7 +479,7 @@ static void lines(void) {
           "line: after pioneer=, location=10, a longer token, empty, NULL: doesn't");
 }
 
-/* the worker (the NL ruling's worker check): never on the UI thread, one at a time, a bounded wait */
+/* the worker: never on the UI thread, same-generation checks share a job, a bounded wait */
 typedef struct {
     native_location_runner *r;
     const native_location_env *e;
@@ -462,7 +509,8 @@ static void *nl_poke_run(void *v) {
 }
 static int runner_busy(native_location_runner *r) {
     plat_mutex_lock(&r->lock);
-    int b = r->busy;
+    int b = 0;
+    for (int i = 0; i < NL_MAX_JOBS; i++) b |= r->jobs[i] != NULL;
     plat_mutex_unlock(&r->lock);
     return b;
 }
@@ -489,8 +537,8 @@ static void worker(const char *scratch) {
           "worker: no UI thread given: answered");
 
     /* on the UI thread: refused, nothing measured */
-    int calls = fk.bridge_calls;
-    CHECK(native_location_measure_bounded(&r, &e, &me, 2000000000ull, &l) == NL_ON_UI && fk.bridge_calls == calls && l.probe == -1
+    int calls = bridge_calls();
+    CHECK(native_location_measure_bounded(&r, &e, &me, 2000000000ull, &l) == NL_ON_UI && bridge_calls() == calls && l.probe == -1
               && l.paused_floor == -1 && !l.has_in_use,
           "worker: on the UI thread: NL_ON_UI, no measure, nothing out");
 
@@ -500,21 +548,38 @@ static void worker(const char *scratch) {
           "worker: the live bridge has no answer: NL_NO_ANSWER");
     fk.cache = 0;
 
-    /* a slow measure: the wait runs out (NL_TIMEOUT), the next call finds it still running
-     * (NL_BUSY) and measures nothing; once it ends, a call answers again */
+    /* a slow measure: the wait runs out (NL_TIMEOUT). A call for other paths finds it
+     * still running (NL_BUSY); one for the same paths joins it with its own wait (review N3R18). */
     __atomic_store_n(&fk.hold, 1, __ATOMIC_SEQ_CST);
     char *hs = strdup(sup), *hc = strdup(cache);   /* freed while the measure runs: it holds its own copies (ASan) */
     native_location_env eh = {hs, hc, &ops};
     uint64_t t0 = plat_now_mono_ns();
-    CHECK(native_location_measure_bounded(&r, &eh, NULL, 50000000ull, &l) == NL_TIMEOUT && !l.has_in_use && l.probe == -1,
+    int rc = native_location_measure_bounded(&r, &eh, NULL, 50000000ull, &l);
+    CHECK(rc == NL_TIMEOUT && !l.has_in_use && l.probe == -1,
           "worker: a measure past its wait: NL_TIMEOUT, nothing out");
     uint64_t waited = plat_now_mono_ns() - t0;
     free(hs);
     free(hc);
     CHECK(waited >= 40000000ull && waited < 1500000000ull, "worker: waited about 50 ms (%llu ms)", (unsigned long long)(waited / 1000000));
-    calls = fk.bridge_calls;
-    CHECK(native_location_measure_bounded(&r, &e, NULL, 50000000ull, &l) == NL_BUSY && fk.bridge_calls == calls,
-          "worker: the one before still running: NL_BUSY, no second measure");
+    native_location_env other = {sup, "", &ops};
+    native_location_target target;
+    int64_t size_kind;
+    const char *dir = "E:\\Music\\" PATHS_CACHE_FOLDER;
+    CHECK(!native_location_now_facts(1, rc ? NULL : &l, dir, loc_id, "", dir, &target, &size_kind)
+              && !strcmp(target.dir, dir) && !target.gate_id[0] && size_kind == -1,
+          "LOCATION_NOW: a timed-out measure keeps the chosen folder without a gate or size (review N3R3)");
+    rc = native_location_measure_bounded(&r, &other, NULL, 50000000ull, &l);
+    CHECK(rc == NL_BUSY, "worker: a measure for other paths still running: NL_BUSY");
+    CHECK(!native_location_now_facts(1, rc ? NULL : &l, dir, loc_id, "Remembered", dir, &target, &size_kind)
+              && !strcmp(target.dir, dir) && !strcmp(target.drive, "Remembered") && !target.gate_id[0] && size_kind == -1,
+          "LOCATION_NOW: a busy measure keeps the chosen folder and remembered label (review NS11, N3R3)");
+    CHECK(native_location_now_facts(1, rc ? NULL : &l, NULL, "", "", cache, &target, &size_kind) == 1,
+          "LOCATION_NOW: busy with This PC returns 1 (review N3R3)");
+    t0 = plat_now_mono_ns();
+    rc = native_location_measure_bounded(&r, &e, NULL, 50000000ull, &l);
+    waited = plat_now_mono_ns() - t0;
+    CHECK(rc == NL_TIMEOUT && !l.has_in_use && waited >= 40000000ull && waited < 1500000000ull,
+          "worker: a joined call gets its own bounded wait (review N3R18)");
     __atomic_store_n(&fk.hold, 0, __ATOMIC_SEQ_CST);
     for (int i = 0; i < 2000 && runner_busy(&r); i++) usleep(1000);
     CHECK(!runner_busy(&r), "worker: the late measure ended (its answer dropped, its job freed)");
@@ -538,16 +603,17 @@ static void worker(const char *scratch) {
     CHECK(!runner_busy(&r), "worker: the poked measure ended");
 }
 
-/* CORE_SLOW_LOCATION's answer (native_location_slow_fact, the LIVE=1 ruling's item 3): off by the
- * gate, -1; forced on, a timeout, a busy, no answer and out of memory are CORE_SLOW_NOT_NOW (2),
- * the UI thread and missing paths -1, an answer written and 0 */
+/* CORE_SLOW_LOCATION's release behavior and its disabled fallback. A timeout, a busy worker,
+ * no answer and out of memory are CORE_SLOW_NOT_NOW. The UI thread and missing paths return -1. */
 typedef struct {
     int writes, logs;
     char last[128];
+    native_location result;
 } nl_sink;
 static int sink_write(void *ctx, const native_location *l) {
     nl_sink *k = ctx;
     k->writes++;
+    k->result = *l;
     return l->kind == LOC_THIS_MAC ? 0 : 1;
 }
 static void sink_log(void *ctx, const char *line) {
@@ -566,13 +632,51 @@ static void slow_answers(const char *scratch) {
     native_location_env e = {sup, cache, &ops}, none = {NULL, cache, &ops};
     nl_sink k = {0};
     plat_thread_id me = plat_thread_self();
-    int calls = fk.bridge_calls;
+    int calls = bridge_calls();
+    native_location_test_off = 1;
     CHECK(native_location_slow_fact(&r, &e, NULL, 2000000000ull, sink_write, sink_log, &k) == -1 && !k.writes && !k.logs
-              && fk.bridge_calls == calls,
+              && bridge_calls() == calls,
           "slow fact: the gate off: -1, nothing measured");
-    native_location_test_live = 1;
-    CHECK(native_location_slow_fact(&r, &e, NULL, 2000000000ull, sink_write, sink_log, &k) == 0 && k.writes == 1 && !k.logs,
-          "slow fact: forced on: answered and written (%d)", k.writes);
+    native_location_test_off = 0;
+    CHECK(native_location_live(), "Settings, LOCATION_NOW and reports use the live release gate");
+    put_bridge_state(sup, "pid=4242\nstart=1700000000\nlocation=\nstate=available\nreason=\n");
+    fk.pid = 4242;
+    fk.start = 1700000000;
+    fk.avail = 10000000000ULL;
+    CHECK(native_location_slow_fact(&r, &e, NULL, 2000000000ull, sink_write, sink_log, &k) == 0 &&
+              k.writes == 1 && !k.result.has_bridge && native_location_checked(&k.result) &&
+              k.result.has_in_use && k.result.paused_floor == 50000000000LL,
+          "slow fact: absent offline This PC cache is checked and uses the disk floor");
+    if (mkdir(cache, 0755)) abort();
+    k = (nl_sink){0};
+    fk.running = 1;
+    put_bridge_state(sup, "pid=4242\nstart=1700000000\nlocation=/other/RB Stems Plus\nstate=available\nreason=\n");
+    CHECK(native_location_slow_fact(&r, &e, NULL, 2000000000ull, sink_write, sink_log, &k) == 0 &&
+              k.writes == 1 && !k.result.has_bridge && !native_location_checked(&k.result) &&
+              k.result.probe == PROBE_MARKER_MISSING_OR_WRONG && !k.result.has_in_use,
+          "slow fact: an existing unmarked slot reports a folder problem even with a live result for another folder");
+    k = (nl_sink){0};
+    calls = bridge_calls();
+    put_bridge_state(sup, "pid=4242\nstart=1700000000\nlocation=\nstate=available\nreason=\n");
+    CHECK(native_location_slow_fact(&r, &e, NULL, 2000000000ull, sink_write, sink_log, &k) == 0 && k.writes == 1 && !k.logs
+              && bridge_calls() == calls + 1,
+          "slow fact: This PC with a matching live result writes the answer (%d)", k.writes);
+    plat_dir d;
+    plat_stat st;
+    if (plat_dir_open(cache, &d) || plat_dir_stat(d, &st)) abort();
+    plat_dir_close(d);
+    char marker[1300], identity[CACHE_OWNER_IDENTITY_MAX];
+    snprintf(marker, sizeof marker, "%s/%s", cache, CACHE_OWNER_MARKER);
+    cache_owner_identity(identity, 0, st.id);
+    spit(marker, identity, strlen(identity));
+    fk.running = 0;
+    nl_sink offline = {0};
+    CHECK(native_location_slow_fact(&r, &e, NULL, 2000000000ull, sink_write, sink_log, &offline) == 0 &&
+              offline.writes == 1 && !offline.result.has_bridge && native_location_checked(&offline.result) &&
+              offline.result.has_in_use && offline.result.paused_floor == 50000000000LL,
+          "slow fact: marked offline This PC cache is checked and uses the disk floor");
+    unlink(marker);
+    rmdir(cache);
     CHECK(native_location_slow_fact(&r, &none, NULL, 2000000000ull, sink_write, sink_log, &k) == -1 && k.writes == 1,
           "slow fact: no support path: -1");
     none.support = sup;
@@ -588,16 +692,17 @@ static void slow_answers(const char *scratch) {
           "slow fact: no answer: not now (%s)", k.last);
     fk.cache = 0;
     native_location_test_no_memory = 1;
-    calls = fk.bridge_calls;
+    calls = bridge_calls();
     CHECK(native_location_slow_fact(&r, &e, NULL, 2000000000ull, sink_write, sink_log, &k) == CORE_SLOW_NOT_NOW && k.writes == 1
-              && fk.bridge_calls == calls,
+              && bridge_calls() == calls,
           "slow fact: out of memory: not now, nothing measured");
     native_location_test_no_memory = 0;
     __atomic_store_n(&fk.hold, 1, __ATOMIC_SEQ_CST);
+    native_location_env other = {sup, "", &ops};
     CHECK(native_location_slow_fact(&r, &e, NULL, 50000000ull, sink_write, sink_log, &k) == CORE_SLOW_NOT_NOW && k.writes == 1
               && strstr(k.last, "over 15 s"),
           "slow fact: a timeout: not now (%s)", k.last);
-    CHECK(native_location_slow_fact(&r, &e, NULL, 50000000ull, sink_write, sink_log, &k) == CORE_SLOW_NOT_NOW && k.writes == 1
+    CHECK(native_location_slow_fact(&r, &other, NULL, 50000000ull, sink_write, sink_log, &k) == CORE_SLOW_NOT_NOW && k.writes == 1
               && strstr(k.last, "still running"),
           "slow fact: busy: not now (%s)", k.last);
     __atomic_store_n(&fk.hold, 0, __ATOMIC_SEQ_CST);
@@ -605,7 +710,281 @@ static void slow_answers(const char *scratch) {
     CHECK(!runner_busy(&r), "slow fact: the late measure ended");
     CHECK(native_location_slow_fact(&r, &e, NULL, 2000000000ull, sink_write, sink_log, &k) == 0 && k.writes == 2,
           "slow fact: after it: answered again");
-    native_location_test_live = 0;
+}
+
+typedef struct {
+    native_location_runner *r;
+    const native_location_env *e;
+    native_location l;
+    int rc, writes;
+} nl_memo;
+
+static int memo_write(void *ctx, const native_location *l) {
+    nl_memo *m = ctx;
+    m->l = *l;
+    m->writes++;
+    return 0;
+}
+static void memo_log(void *ctx, const char *line) {
+    (void)ctx;
+    (void)line;
+}
+static void *memo_run(void *ctx) {
+    nl_memo *m = ctx;
+    m->rc = native_location_slow_fact(m->r, m->e, NULL, 2000000000ull, memo_write, memo_log, m);
+    return NULL;
+}
+static int wait_for_waiters(native_location_runner *r, int n) {
+    for (int i = 0; i < 500; i++) {
+        if (native_location_test_waiters(r) == n && bridge_calls() == 1) return 1;
+        usleep(1000);
+    }
+    return 0;
+}
+
+/* review N3R18: the memo and the flow share a measure in either order. Once the old config has
+ * been read, change just one of the two keys to show that each invalidates its answer. */
+static void shared_measure(const char *scratch) {
+    static native_location_runner r = NATIVE_LOCATION_RUNNER_INIT;
+    char sup[1100], cache[1200], a[1200], b[1200], dir[1200], other[1200], ini[1500];
+    snprintf(sup, sizeof sup, "%s/share", scratch);
+    snprintf(cache, sizeof cache, "%s/Cache", sup);
+    snprintf(a, sizeof a, "%s/share-a", scratch);
+    snprintf(b, sizeof b, "%s/share-b", scratch);
+    mkdir(sup, 0755);
+    make_loc(a, loc_id, dir, sizeof dir);
+    make_loc(b, loc_id, other, sizeof other);
+    native_location_env e = {sup, cache, &ops};
+    for (int row = 0; row < 4; row++) {
+        int memo_first = row == 0 || row == 2;
+        fk_reset(scratch);
+        snprintf(ini, sizeof ini, "cache_dir=\"%s\"\ncache_id=%s\n", dir, loc_id);
+        config(sup, ini);
+        __atomic_store_n(&fk.hold, 1, __ATOMIC_SEQ_CST);
+        nl_call flow = {&r, &e, NULL, {0}, 99};
+        nl_memo memo = {.r = &r, .e = &e, .rc = 99};
+        pthread_t ft, mt;
+        if (memo_first ? pthread_create(&mt, NULL, memo_run, &memo) : pthread_create(&ft, NULL, nl_call_run, &flow)) abort();
+        int started = wait_for_waiters(&r, 1);
+        if (memo_first ? pthread_create(&ft, NULL, nl_call_run, &flow) : pthread_create(&mt, NULL, memo_run, &memo)) abort();
+        int shared = wait_for_waiters(&r, 2);
+        if (row == 2) snprintf(ini, sizeof ini, "cache_dir=\"%s\"\ncache_id=%s\n", other, loc_id);
+        if (row == 3) snprintf(ini, sizeof ini, "cache_dir=\"%s\"\ncache_id=01234567-89ab-cdef-0123-456789abcdef\n", dir);
+        if (row >= 2) config(sup, ini);
+        __atomic_store_n(&fk.hold, 0, __ATOMIC_SEQ_CST);
+        if (pthread_join(ft, NULL) || pthread_join(mt, NULL)) abort();
+        if (row < 2) {
+            CHECK(started && shared && bridge_calls() == 1 && flow.rc == 0 && memo.rc == 0 && memo.writes == 1
+                      && flow.l.probe == PROBE_AVAILABLE && native_location_matches_config(&flow.l, dir, loc_id)
+                      && !strcmp(flow.l.in_use, memo.l.in_use),
+                  "N3R18: the %s measure answers both callers", memo_first ? "memo's" : "flow's");
+        } else {
+            CHECK(started && shared && bridge_calls() == 1 && flow.rc == NL_NO_ANSWER && !flow.l.has_in_use
+                      && memo.rc == CORE_SLOW_NOT_NOW && !memo.writes,
+                  "N3R18: a change to %s discards the shared answer", row == 2 ? "cache_dir" : "cache_id");
+        }
+    }
+}
+
+static void t_location_config_generation(const char *scratch) {
+    static native_location_runner r = NATIVE_LOCATION_RUNNER_INIT;
+    char sup[1100], cache[1200], parent[1200], dir[1200], ini[1500];
+    snprintf(sup, sizeof sup, "%s/generation", scratch);
+    snprintf(cache, sizeof cache, "%s/Cache", sup);
+    snprintf(parent, sizeof parent, "%s/generation-drive", scratch);
+    mkdir(sup, 0755);
+    make_loc(parent, loc_id, dir, sizeof dir);
+    snprintf(ini, sizeof ini, "cache_dir=\"%s\"\ncache_id=%s\n", dir, loc_id);
+    config(sup, ini);
+    fk_reset(scratch);
+    fk.hold_first_only = 1;
+    __atomic_store_n(&fk.hold, 1, __ATOMIC_SEQ_CST);
+    native_location_env e = {sup, cache, &ops};
+    native_location l;
+    CHECK(native_location_measure_bounded(&r, &e, NULL, 50000000ull, &l) == NL_TIMEOUT,
+          "generation: the first chosen-folder check times out");
+    nl_call old = {&r, &e, NULL, {0}, 99};
+    pthread_t waiter;
+    if (pthread_create(&waiter, NULL, nl_call_run, &old)) abort();
+    CHECK(wait_for_waiters(&r, 1), "generation: a waiter joined the old check");
+
+    config(sup, NULL);
+    int rc = native_location_measure_bounded(&r, &e, NULL, 250000000ull, &l);
+    CHECK(rc == 0 && l.kind == LOC_THIS_MAC && l.has_in_use && !strcmp(l.in_use, cache),
+          "generation: This PC answers while the old target is still hung (%d)", rc);
+    config(sup, ini);
+    rc = native_location_measure_bounded(&r, &e, NULL, 50000000ull, &l);
+    CHECK(rc == NL_TIMEOUT && !l.has_in_use && bridge_calls() == 2,
+          "F8: switching back joins the hung check for the same folder and marker (%d)", rc);
+    config(sup, NULL);
+    rc = native_location_measure_bounded(&r, &e, NULL, 250000000ull, &l);
+    CHECK(rc == 0 && l.kind == LOC_THIS_MAC && l.has_in_use && bridge_calls() == 3,
+          "F8: This PC still has a worker while the chosen folder is hung (%d)", rc);
+    __atomic_store_n(&fk.hold, 0, __ATOMIC_SEQ_CST);
+    if (pthread_join(waiter, NULL)) abort();
+    CHECK(old.rc == NL_NO_ANSWER && !old.l.has_in_use, "generation: the first generation cannot publish after switching back (%d)", old.rc);
+
+    config(sup, ini);
+    fk_reset(scratch);
+    __atomic_store_n(&fk.hold, 1, __ATOMIC_SEQ_CST);
+    CHECK(native_location_measure_bounded(&r, &e, NULL, 250000000ull, &l) == NL_TIMEOUT,
+          "generation: one hung check occupies one worker");
+    config(sup, NULL);
+    CHECK(native_location_measure_bounded(&r, &e, NULL, 250000000ull, &l) == NL_TIMEOUT && bridge_calls() == 2,
+          "generation: a second hung check occupies the other worker");
+    config(sup, ini);
+    CHECK(native_location_measure_bounded(&r, &e, NULL, 50000000ull, &l) == NL_TIMEOUT && bridge_calls() == 2 && !l.has_in_use,
+          "F8: a matching job can be joined even when both workers are busy");
+    __atomic_store_n(&fk.hold, 0, __ATOMIC_SEQ_CST);
+    for (int i = 0; i < 2000 && runner_busy(&r); i++) usleep(1000);
+    CHECK(!runner_busy(&r), "generation: both workers become available again");
+    CHECK(native_location_measure_bounded(&r, &e, NULL, 2000000000ull, &l) == 0 && l.probe == PROBE_AVAILABLE,
+          "generation: checks resume when a worker is available");
+}
+
+typedef struct {
+    const char *dir;
+    int entered, released;
+} held_space;
+
+static void hold_chosen_space(void *ctx, const char *path, uint64_t *avail, uint64_t *total) {
+    held_space *h = ctx;
+    if (!strcmp(path, h->dir)) {
+        __atomic_store_n(&h->entered, 1, __ATOMIC_SEQ_CST);
+        while (!__atomic_load_n(&h->released, __ATOMIC_SEQ_CST)) usleep(1000);
+    }
+    fk_space(NULL, path, avail, total);
+}
+
+static void t_location_rejoin_stale_health(const char *scratch) {
+    static native_location_runner r = NATIVE_LOCATION_RUNNER_INIT;
+    char sup[1100], cache[1200], parent[1200], dir[1200], ini[1500], marker[1300];
+    snprintf(sup, sizeof sup, "%s/rejoin", scratch);
+    snprintf(cache, sizeof cache, "%s/Cache", sup);
+    snprintf(parent, sizeof parent, "%s/rejoin-drive", scratch);
+    mkdir(sup, 0755);
+    make_loc(parent, loc_id, dir, sizeof dir);
+    snprintf(ini, sizeof ini, "cache_dir=\"%s\"\ncache_id=%s\n", dir, loc_id);
+    snprintf(marker, sizeof marker, "%s/%s", dir, MARKER_NAME);
+    config(sup, ini);
+    fk_reset(scratch);
+    held_space hold = {.dir = dir};
+    native_location_ops held_ops = ops;
+    held_ops.ctx = &hold;
+    held_ops.space = hold_chosen_space;
+    native_location_env e = {sup, cache, &held_ops};
+    native_location l;
+    CHECK(native_location_measure_bounded(&r, &e, NULL, 50000000ull, &l) == NL_TIMEOUT &&
+              __atomic_load_n(&hold.entered, __ATOMIC_SEQ_CST),
+          "F8: the first A worker passed the marker probe and stalled in the space query");
+    config(sup, NULL);
+    CHECK(native_location_measure_bounded(&r, &e, NULL, 500000000ull, &l) == 0 && l.kind == LOC_THIS_MAC,
+          "F8: This PC answers while A still occupies its slot");
+    if (unlink(marker)) abort();
+    config(sup, ini);
+    nl_call newer = {&r, &e, NULL, {0}, 99};
+    pthread_t waiter;
+    if (pthread_create(&waiter, NULL, nl_call_run, &newer)) abort();
+    for (int i = 0; i < 500 && native_location_test_waiters(&r) != 1; i++) usleep(1000);
+    CHECK(native_location_test_waiters(&r) == 1 && bridge_calls() == 2, "F8: the newer A waiter waits for A's slot");
+    __atomic_store_n(&hold.released, 1, __ATOMIC_SEQ_CST);
+    if (pthread_join(waiter, NULL)) abort();
+    CHECK(newer.rc == 0 && newer.l.probe == PROBE_MARKER_MISSING_OR_WRONG && !newer.l.has_in_use && bridge_calls() == 3,
+          "F8: the newer A waiter rechecks the marker after the slot frees (rc %d, probe %d, calls %d)",
+          newer.rc, newer.l.probe, bridge_calls());
+}
+
+static int stalled_name(void *ctx, const char *dir, char *label, size_t ln, char *letter, size_t lt) {
+    int *calls = ctx;
+    ++*calls;
+    plat_sleep_ms(250);
+    return fk_volname(NULL, dir, label, ln, letter, lt);
+}
+
+static void stalled_space(void *ctx, const char *path, uint64_t *avail, uint64_t *total) {
+    int *calls = ctx;
+    if (++*calls > 1) plat_sleep_ms(250);
+    fk_space(NULL, path, avail, total);
+}
+
+static void t_display_uses_known_label(const char *support) {
+    const char *dir = "/previously-checked-drive";
+    int calls = 0;
+    native_location_ops drive_ops = {.ctx = &calls, .volume_name = stalled_name};
+    native_location_env e = {support, support, &drive_ops};
+    native_location l = {.has_status_drive = 1, .status_drive = "Measured"};
+    snprintf(l.config_dir, sizeof l.config_dir, "%s", dir);
+    snprintf(l.config_id, sizeof l.config_id, "%s", loc_id);
+    char hint[NL_PATH_MAX];
+    snprintf(hint, sizeof hint, "%s/location-drive", support);
+    const char saved[] = "dir=/previously-checked-drive\nlabel=Remembered\n";
+    spit(hint, saved, sizeof saved - 1);
+    native_location_details d;
+    native_location_describe(&e, &l, dir, loc_id, &d);
+    CHECK(!calls && !strcmp(d.drive, "Measured"),
+          "t_display_uses_known_label: display must use the measured label without another drive call");
+    native_location_describe(&e, &l, dir, "changed-id", &d);
+    CHECK(!calls && !strcmp(d.drive, "Remembered") && !d.has_disk,
+          "t_display_uses_known_label: a stale measure cannot name the current drive");
+    native_location_describe(&e, NULL, dir, loc_id, &d);
+    CHECK(!calls && !strcmp(d.drive, "Remembered"),
+          "t_display_uses_known_label: unchecked display must use only the remembered label");
+    unlink(hint);
+}
+
+static void t_report_reuses_disk_space(const char *support) {
+    int calls = 0;
+    fk_reset(support);
+    fk.avail = 1234567890;
+    fk.total = 98765432100;
+    native_location_ops space_ops = ops;
+    space_ops.ctx = &calls;
+    space_ops.space = stalled_space;
+    char cache[NL_PATH_MAX];
+    snprintf(cache, sizeof cache, "%s/Cache", support);
+    native_location_env e = {support, cache, &space_ops};
+    native_location l;
+    CHECK(!native_location_measure(&e, &l) && calls == 1, "the location measurement gets one disk answer");
+    native_location_details d;
+    native_location_describe(&e, &l, "", "", &d);
+    CHECK(calls == 1 && d.has_disk && d.available == fk.avail && d.total == fk.total,
+          "t_report_reuses_disk_space: report must use the measured values without a second disk call");
+    native_location_describe(&e, NULL, "", "", &d);
+    CHECK(calls == 1 && !d.has_disk, "t_report_reuses_disk_space: a missing measure leaves disk space unknown");
+}
+
+static atomic_int config_open_count, config_open_returned;
+static int block_config_open_at;
+
+static void block_config_open(const char *support) {
+    (void)support;
+    if (atomic_fetch_add(&config_open_count, 1) + 1 != block_config_open_at) return;
+    plat_sleep_ms(250);
+    atomic_store(&config_open_returned, 1);
+}
+
+static void t_config_reads_deadline(const char *scratch) {
+    static native_location_runner r = NATIVE_LOCATION_RUNNER_INIT;
+    char support[1100], cache[1200];
+    for (int read = 1; read <= 2; read++) {
+        snprintf(support, sizeof support, "%s/blocked-config-%d", scratch, read);
+        snprintf(cache, sizeof cache, "%s/Cache", support);
+        if (mkdir(support, 0755)) abort();
+        fk_reset(scratch);
+        native_location_env e = {support, cache, &ops};
+        native_location l;
+        block_config_open_at = read;
+        atomic_store(&config_open_count, 0);
+        atomic_store(&config_open_returned, 0);
+        native_location_test_config_read = block_config_open;
+        int rc = native_location_measure_bounded(&r, &e, NULL, 100000000, &l);
+        CHECK(rc == NL_TIMEOUT && atomic_load(&config_open_count) == read && !atomic_load(&config_open_returned) &&
+              !l.has_in_use && !native_location_checked(&l),
+              "R2: measure config read %d observes the deadline and publishes no checked state (%d)", read, rc);
+        for (int i = 0; i < 500 && !atomic_load(&config_open_returned); i++) plat_sleep_ms(1);
+        if (!atomic_load(&config_open_returned)) abort();
+        native_location_test_config_read = NULL;
+    }
 }
 
 void test_native_location(const char *scratch) {
@@ -620,4 +999,10 @@ void test_native_location(const char *scratch) {
     drive_names(real);
     worker(real);
     slow_answers(real);
+    shared_measure(real);
+    t_location_config_generation(real);
+    t_location_rejoin_stale_health(real);
+    t_display_uses_known_label(real);
+    t_report_reuses_disk_space(real);
+    t_config_reads_deadline(real);
 }

@@ -3,12 +3,20 @@
 # in it, their records back here. Run outside the sandbox (tart, ssh).
 #
 #   tests/harness/vm.sh build                  the VM-side tools (vmtool, fake-prepare) into build/harness/vm/
-#   tests/harness/vm.sh up [CLONE] [--usb]     clone rb26-template (once) and start it with its window
-#                                              (the owner's preference), with the template's MAC
-#                                              address (one rekordbox seat; never beside the template
-#                                              or another VM with that MAC), the harness's SSH key installed,
-#                                              DJ's screen saver off; --usb: booted by tests/vm-usb.swift
-#                                              with a virtual USB stick ("# usb: yes" scenarios)
+#   tests/harness/vm.sh up [CLONE] [--usb] [--vnc|--window]
+#                                              clone rb26-template (once) and start it headless (tart
+#                                              run --no-graphics: no window on the owner's Mac), with
+#                                              the template's MAC address (one rekordbox seat; never
+#                                              beside the template or another VM with that MAC), the
+#                                              harness's SSH key installed, DJ's screen saver off;
+#                                              --vnc: when the owner must click in the VM, no window
+#                                              either but tart's VNC server (--vnc-experimental: DJ's
+#                                              screen as it is), its address printed ("vnc:
+#                                              vnc://HOST:PORT", for Screen Sharing), the full URL
+#                                              with its password only in build/harness/vnc-url (0600);
+#                                              --window: tart's window (an owner's session of clicks,
+#                                              g1-round.sh); --usb: booted by tests/vm-usb.swift with
+#                                              a virtual USB stick ("# usb: yes" scenarios; its window)
 #   tests/harness/vm.sh push [APPZIP]          the harness, the TEST build (default dist-test/) and its
 #                                              bridge into the VM; the app to /Applications
 #   tests/harness/vm.sh run LABEL SCEN… [-n RUNS] [--verbs both|reopen|activate|appleevent|click]
@@ -17,8 +25,8 @@
 #   tests/harness/vm.sh sh 'COMMAND'           a command in the VM, as admin
 #   tests/harness/vm.sh down                   stop the VM (at the end of every session)
 #   tests/harness/vm.sh delete                 stop and delete the clone (the task's end)
-# The GUI user (dj) must be logged in: the template logs in automatically. If it doesn't, stop and
-# ask the owner to log in (never work around the login).
+# The GUI user (dj) must be logged in: the template logs in automatically. If it doesn't, stop:
+# vm.sh down, then vm.sh up CLONE --vnc (or --window) for the owner's login (never worked around).
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 TART="${TART:-$HOME/Applications/tart.app/Contents/MacOS/tart}"
@@ -71,10 +79,15 @@ build)
   echo "built: $state/vm/{vmtool,fake-prepare}"
   ;;
 up)
-  usb=""
-  [ "${2:-}" = --usb ] && { usb=1; shift; }
-  [ "${3:-}" = --usb ] && usb=1
-  [ -n "${2:-}" ] && { CLONE="$2"; echo "$CLONE" > "$state/clone"; }
+  usb=""; screen=headless; shift
+  for a in "$@"; do
+    case "$a" in
+      --usb) usb=1 ;; --vnc) screen=vnc ;; --window) screen=window ;;
+      -*) die "up: unknown option $a" ;;
+      *) CLONE="$a"; echo "$CLONE" > "$state/clone" ;;
+    esac
+  done
+  [ -z "$usb" ] || [ $screen = headless ] || die "up: --usb boots through tests/vm-usb.swift (its own window): no --vnc or --window with it"
   [ "$CLONE" != "$TEMPLATE" ] || die "$CLONE is the template: vm.sh runs clones only"
   tmac="$(mac_of "$TEMPLATE")"
   [[ "$tmac" =~ ^([0-9a-f]{2}:){5}[0-9a-f]{2}$ ]] || die_mac "no MAC address in $VMS_DIR/$TEMPLATE/config.json"
@@ -105,7 +118,27 @@ up)
       echo $! > "$state/usb-pid"
     fi
   elif ! "$TART" list | awk -v c="$CLONE" '$2 == c {print $NF}' | grep -qx running; then
-    nohup "$TART" run "$CLONE" --dir="xfer:$XFER" > "$state/tart-run.log" 2>&1 &
+    # headless by default: no window on the owner's Mac unless the owner has to click (--vnc, --window)
+    # (--vnc: tart's own VNC server, the framebuffer as DJ sees it; --no-graphics with it, or tart
+    # opens Screen Sharing on the owner's Mac by itself)
+    case $screen in headless) disp=(--no-graphics) ;; vnc) disp=(--vnc-experimental --no-graphics) ;; window) disp=() ;; esac
+    rm -f "$state/vnc-url"
+    # NSUnbufferedIO: tart's output unbuffered, so its VNC line reaches the log at once (into a file,
+    # tart otherwise holds it in its buffer until it exits)
+    NSUnbufferedIO=YES nohup "$TART" run "$CLONE" ${disp[@]+"${disp[@]}"} --dir="xfer:$XFER" > "$state/tart-run.log" 2>&1 &
+  elif [ $screen = vnc ] && [ ! -s "$state/vnc-url" ]; then
+    die "$CLONE runs already without VNC: vm.sh down, then up $CLONE --vnc"
+  fi
+  if [ $screen = vnc ] && [ ! -s "$state/vnc-url" ]; then
+    # tart prints it as the VM starts
+    u=""
+    for _ in $(seq 1 "${VM_VNC_WAIT:-60}"); do      # VM_VNC_WAIT: the selftest's
+      u="$(tr -d '\r' < "$state/tart-run.log" 2>/dev/null | sed -n 's|.*VNC server is running at \(vnc://[^ ]*\).*|\1|p' | tail -1)"
+      [ -n "$u" ] && break; sleep 1
+    done
+    [ -n "$u" ] || { "$TART" stop "$CLONE" >/dev/null 2>&1; die "$CLONE stopped: tart printed no VNC URL within ${VM_VNC_WAIT:-60} s ($state/tart-run.log)"; }
+    # the password only here (the owner's Mac, 0600): never printed or logged by vm.sh
+    (umask 077; echo "$u" > "$state/vnc-url")
   fi
   ip >/dev/null
   # booted: still the template's MAC (tart run gives a new one when it finds the MAC in use), and
@@ -132,7 +165,7 @@ up)
   [ "$gmac" = "$tmac" ] || { "$TART" stop "$CLONE" >/dev/null 2>&1; die_mac "$CLONE stopped: its en0 is ${gmac:-unknown}, not $TEMPLATE's MAC address $tmac"; }
   # the template logs dj in by itself, a little after boot
   for _ in $(seq 1 40); do user="$(vssh 'stat -f %Su /dev/console')"; [ "$user" = dj ] && break; sleep 3; done
-  [ "$user" = dj ] || die "nobody is logged in as dj in the VM ($user): ask the owner to log in"
+  [ "$user" = dj ] || die "nobody is logged in as dj in the VM ($user): vm.sh down, then vm.sh up $CLONE --vnc (or --window) for the owner's login (never worked around)"
   # DJ's screen would lock after an hour idle (only the owner can unlock it): no screen saver
   vssh 'sudo launchctl asuser $(id -u dj) sudo -u dj defaults -currentHost write com.apple.screensaver idleTime -int 0'
   if [ -n "$usb" ] && [ ! -f "$state/usb.formatted" ]; then
@@ -147,6 +180,8 @@ up)
       && sleep 1 && echo detach > "$state/usb-ctl" && touch "$state/usb.formatted"
   fi
   echo "up: $CLONE at $(ip) (MAC $tmac, $TEMPLATE's), dj logged in${usb:+, with the USB stick (unplugged)}"
+  [ $screen = vnc ] && echo "vnc: $(sed 's|^vnc://[^@/]*@|vnc://|' "$state/vnc-url")"
+  true
   ;;
 push)
   zip="${2:-$root/dist-test/rbstemsplus-app.zip}"
@@ -182,7 +217,7 @@ run)
   rc=0
   # a locked screen keeps the app from becoming active: every activation would fail
   if vssh 'ioreg -n Root -d1 | grep -q "\"IOConsoleLocked\" = Yes"'; then
-    die "DJ's screen is locked in the VM: ask the owner to unlock it (vm.sh wait-login waits for it)"
+    die "DJ's screen is locked in the VM: vm.sh down, then vm.sh up $CLONE --vnc for the owner to unlock (vm.sh wait-login waits for it)"
   fi
   # the scripts as they are now (the app stays as pushed)
   sx="sync-$(date +%s)$RANDOM"; rm -rf "$XFER"/sync-*; mkdir -p "$XFER/$sx"
@@ -283,8 +318,8 @@ down|delete)
     echo stop > "$state/usb-ctl"
     for _ in $(seq 1 60); do kill -0 "$(cat "$state/usb-pid")" 2>/dev/null || break; sleep 1; done
   fi
-  rm -f "$state/usb-pid"
+  rm -f "$state/usb-pid" "$state/vnc-url"
   "$TART" stop "$CLONE" 2>/dev/null || true
   if [ "$1" = delete ]; then "$TART" delete "$CLONE"; rm -f "$state/clone" "$XFER/usb.img" "$state/usb.formatted"; fi ;;
-*) sed -n '2,21p' "$0"; exit 2 ;;
+*) sed -n '2,29p' "$0"; exit 2 ;;
 esac

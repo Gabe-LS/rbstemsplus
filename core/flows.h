@@ -37,6 +37,8 @@ typedef struct flows_state {
 #ifdef CORE_WIN_POLICY
     int win_update_after;    /* Windows: "Update RB Stems Plus first" was chosen: the update once this flow ends */
     int win_uninstall_asked; /* Windows: Settings > Apps asked to uninstall while a flow ran: once it ends */
+    char win_r1_shown[256];  /* Windows: the versions R1's Don't Ask Again showed at its click ({"ev":"r1_dismiss"}),
+                              * comma-separated, for the next Don't Ask Again flow (it takes and clears them) */
 #endif
 } flows_state;
 
@@ -46,6 +48,12 @@ void flows_free(struct core *c);
 /* {"ev":"click"} and {"ev":"menu"}: 1 when id names a flow (started, or refused because another
  * flow runs), 0 when it isn't a flow's */
 int flows_event(struct core *c, const char *id, size_t n);
+#ifdef CORE_WIN_POLICY
+/* {"ev":"r1_dismiss","versions":"7.2.20,7.2.19"} (Windows): R1's Don't Ask Again with the versions
+ * its button showed when clicked (F_WIN_R1_DISMISS_VERSIONS then), as the click "r1_dismiss" */
+void flows_win_r1_dismiss(struct core *c, const char *versions, size_t n);
+void flows_win_inventory_changed(struct core *c);
+#endif
 /* {"ev":"shown"}: welcome, the update result, resume, the watcher's request, the cache offer,
  * the update check */
 void flows_shown(struct core *c);

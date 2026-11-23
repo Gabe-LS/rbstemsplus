@@ -3,7 +3,8 @@
 // one with --swap and quits; the new one:
 //   1. waits for the old app to exit (core_win_swap_wait, ≤60 s);
 //   2. checks what C alone can't: the core loaded and its self-test passed (Program.LoadCore), the
-//      minimum Windows and .NET, then the WPF Application and main window started off-screen;
+//      process's token (core_win_token_check, app.md §5.9), the minimum Windows and .NET, then the
+//      WPF Application and main window started off-screen;
 //   3. on a failed check records "failed swap" and starts the old app again through the stub
 //      (core_win_swap_failed), with no UI of its own;
 //   4. then starts as every start does: update_at_start (its wait included) before the one-copy
@@ -11,10 +12,13 @@
 //      UI; a failed update's key is kept for the flow's UPDATE_RESULT.
 // `started` and the pointers come only after the first full snapshot is on screen
 // (core_win_update_after_render, Shell). A --swap that no `pending` names (an update already
-// undone) is a normal start. While a --swap is in its checks and its real start, a SwapGuard
+// undone) is a normal start. Every other start asks the token first, before update_at_start or
+// the one-copy mutex: an over-elevated start, UAC off, a service account or an unknown token is
+// refused with one line and nothing written (I35). While a --swap is in its checks and its real start, a SwapGuard
 // (30 s per stage, a background thread) recovers and kills a start that hangs.
 using System;
 using System.Threading;
+using CoreText = RbStemsPlus.Core.Text;
 
 namespace RbStemsPlus.Shell
 {
@@ -30,6 +34,8 @@ namespace RbStemsPlus.Shell
         int OsCheck();
         /// core_win_update_at_start: UPDATE_BUSY (-2), UPDATE_FAIL_NONE (-1) or a failure's key.
         int AtStart();
+        /// core_win_token_check: StartSequence.TokenOk ... TokenUnknown (lifecycle.h's LIFE_TOKEN_*), or -1.
+        int TokenCheck();
         /// Without the core: the stub started (the current app, with no arguments). False: it couldn't be.
         bool StartStub();
         /// Without the core (WU9): waits, at most ms, for the old app `update\pending` names (its pid
@@ -43,7 +49,7 @@ namespace RbStemsPlus.Shell
     internal enum StartOutcome
     {
         Go,       // start: the window, the core
-        Refuse,   // the core can't be used: Program's one-line refusal, then exit 1
+        Refuse,   // Program's one-line refusal, then exit 1
         Exit,     // exit with no UI (ExitCode)
     }
 
@@ -52,6 +58,12 @@ namespace RbStemsPlus.Shell
         public const int SwapReady = 0, SwapNone = 1, SwapOldRuns = 2;
         public const int UpdateBusy = -2, UpdateFailNone = -1;
         public const uint SwapWaitMs = 60000;   // update.h's UPDATE_SWAP_WAIT_MS
+        /// lifecycle.h's LIFE_TOKEN_* (core_win_token_check)
+        public const int TokenOk = 0, TokenElevated = 1, TokenUacOff = 2, TokenService = 3, TokenUnknown = 4;
+
+        public static StartOutcome Run(bool swap, string coreWhy, IStartNative n, Func<string> offScreen, SwapGuard guard,
+                                       out int exitCode, out bool swapping) =>
+            Run(swap, coreWhy, n, offScreen, guard, out exitCode, out swapping, out _);
 
         /// swap: --swap was given. coreWhy: Program.LoadCore's refusal (null: the core is this
         /// build's and its self-test passed). offScreen: the WPF Application and main window started
@@ -59,21 +71,24 @@ namespace RbStemsPlus.Shell
         /// --swap whose other checks passed, under guard (armed for one stage before it). swapping:
         /// true only for a READY --swap whose every check passed: the real start that follows is the
         /// update's, its failures go to Recover, and the guard stays armed (Program re-arms it).
+        /// refusal: the dialog's text for a token or minimum-version refusal; null for coreWhy.
         public static StartOutcome Run(bool swap, string coreWhy, IStartNative n, Func<string> offScreen, SwapGuard guard,
-                                       out int exitCode, out bool swapping)
+                                       out int exitCode, out bool swapping, out CoreText? refusal)
         {
             exitCode = 0;
             swapping = false;
+            refusal = null;
+            string swapNoneLine = null;
             if (swap)
             {
                 int w = n.SwapWait(SwapWaitMs);
                 if (w == SwapNone)
                 {
-                    n.Log("--swap: no pending update names this app: a normal start");
+                    swapNoneLine = "--swap: no pending update names this app: a normal start";
                 }
                 else if (w == SwapReady || w == SwapOldRuns)
                 {
-                    string fail = w == SwapOldRuns ? "the app being replaced still runs" : coreWhy ?? MinimumWhy(n.OsCheck());
+                    string fail = w == SwapOldRuns ? "the app being replaced still runs" : coreWhy ?? TokenWhy(n.TokenCheck()) ?? MinimumWhy(n.OsCheck());
                     if (fail == null)
                     {
                         // the off-screen start's own timeout (30 s) wins; the grace covers a hung thread (WV3)
@@ -102,6 +117,12 @@ namespace RbStemsPlus.Shell
                 }
             }
             if (coreWhy != null) return StartOutcome.Refuse;
+            if (!swapping)   // a READY swap checked these already
+            {
+                refusal = TokenRefusal(n.TokenCheck()) ?? MinimumRefusal(n.OsCheck());
+                if (refusal.HasValue) return StartOutcome.Refuse;
+            }
+            if (swapNoneLine != null) n.Log(swapNoneLine);
             if (n.AtStart() == UpdateBusy)   // update_at_start logged why
             {
                 swapping = false;
@@ -124,9 +145,26 @@ namespace RbStemsPlus.Shell
             else if (r > 0) n.Log("--swap: the result or the restart failed (" + r + ")");
         }
 
+        /// core_win_token_check's answer as a --swap check's reason, null when it passes
+        public static string TokenWhy(int token) =>
+            token == TokenOk ? null
+            : "the process's token is refused (" + (token == TokenElevated ? "Run as administrator" : token == TokenUacOff ? "UAC off"
+                                                    : token == TokenService ? "a service account" : token < 0 ? "not askable" : "unknown") + ")";
+
+        /// The start's refusal for a token (app.md §5.9, I35), under "RB Stems Plus can't open":
+        /// Windows' T_START_ROOT, T_WIN_START_UAC_OFF, else T_CANT_OPEN alone; null when it may start.
+        public static RbStemsPlus.Core.Text? TokenRefusal(int token) =>
+            token == TokenOk ? (RbStemsPlus.Core.Text?)null
+            : token == TokenElevated ? RbStemsPlus.Core.Text.T_START_ROOT
+            : token == TokenUacOff ? RbStemsPlus.Core.Text.T_WIN_START_UAC_OFF
+            : RbStemsPlus.Core.Text.T_CANT_OPEN;
+
         /// core_win_os_check's answer as a reason, null when it passes (or couldn't be asked)
         public static string MinimumWhy(int os) =>
             os == 1 ? "Windows is older than the minimum (11 22H2)" : os == 2 ? ".NET Framework is older than 4.8.1" : null;
+
+        private static CoreText? MinimumRefusal(int os) =>
+            os == 1 ? CoreText.T_WIN_START_OLD_WINDOWS : os == 2 ? CoreText.T_WIN_START_OLD_NET : (CoreText?)null;
     }
 
     /// `update\pending` as update.c writes it (update_pending_format): the old app's version, the
@@ -241,10 +279,12 @@ namespace RbStemsPlus.Shell
         {
             this.n = n;
             this.kill = kill;
-            this.nowMs = nowMs ?? (() => System.Diagnostics.Stopwatch.GetTimestamp() * 1000 / System.Diagnostics.Stopwatch.Frequency);
+            this.nowMs = nowMs ?? (() => TimestampMs(System.Diagnostics.Stopwatch.GetTimestamp()));
             this.pollMs = pollMs;
             this.recoverMs = recoverMs;
         }
+
+        internal static long TimestampMs(long timestamp) => (long)((decimal)timestamp * 1000 / System.Diagnostics.Stopwatch.Frequency);
 
         public bool HasFired => Volatile.Read(ref state) == Fired;
 

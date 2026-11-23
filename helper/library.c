@@ -6,10 +6,21 @@
  * The tables (measured): djmdPlaylist (ID, ParentID "root" at the top, Seq = rekordbox's
  * order, Attribute 0 playlist, 1 folder, 4 intelligent), djmdSongPlaylist (PlaylistID,
  * ContentID, TrackNo), djmdContent (ID, FolderPath); rows rekordbox deleted keep
- * rb_local_deleted = 1. */
+ * rb_local_deleted = 1.
+ *
+ * A local file (its FolderPath names a file on this computer: a streaming track's doesn't) is
+ * common/path_rules.h's paths_local_file. On the Mac the SQL tests its first byte, as it always
+ * has (the text unchanged); on Windows (and in the Mac's tests of Windows' rule, PATHS_WIN_TRACKS)
+ * the SQL calls that predicate, registered as rbsp_local_file(), and a playlist's paths are kept
+ * once by paths_same (helper.md §1, §4; T13). */
 #include "library.h"
+#if defined(_WIN32) || defined(PATHS_WIN_TRACKS)
+#define LIBRARY_WIN_RULES 1
+#include "path_rules.h"
+#endif
 #ifdef _WIN32
 #include "plat_helper.h"
+#include "sqlc_kdf.h"
 #else
 #include <pwd.h>
 #include <unistd.h>
@@ -24,6 +35,16 @@
 int sqlite3_key(sqlite3 *db, const void *key, int n);
 
 struct library { sqlite3 *db; };
+
+#if defined(LIBRARY_WIN_RULES)
+#define LOCAL_ROW "rbsp_local_file(c.FolderPath)"
+static void local_file_fn(sqlite3_context *c, int n, sqlite3_value **v) {
+    const unsigned char *p = n == 1 ? sqlite3_value_text(v[0]) : NULL;
+    sqlite3_result_int(c, p && paths_local_file((const char *)p));
+}
+#else
+#define LOCAL_ROW "substr(c.FolderPath, 1, 1) = '/'"
+#endif
 
 #ifdef _WIN32
 void library_default_path(char *buf, size_t n) {
@@ -47,6 +68,9 @@ static void fail(sqlite3 *db, const char *what, char *why, size_t n) {
 
 library *library_open(const char *path, char *why, size_t n) {
     sqlite3 *db = NULL;
+#ifdef _WIN32
+    kdf_cng_install();                                 /* CNG's PBKDF2 (P-H5); LibTomCrypt's if it can't */
+#endif
     if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, NULL) != SQLITE_OK) {
         fail(db, "can't open it", why, n);
         sqlite3_close(db);
@@ -64,6 +88,11 @@ library *library_open(const char *path, char *why, size_t n) {
     /* the first read proves the key (SQLCipher only checks it then) */
     if (rc == SQLITE_OK) rc = sqlite3_busy_timeout(db, 5000);
     if (rc == SQLITE_OK) rc = sqlite3_exec(db, "SELECT count(*) FROM sqlite_master", NULL, NULL, NULL);
+#if defined(LIBRARY_WIN_RULES)
+    if (rc == SQLITE_OK)
+        rc = sqlite3_create_function_v2(db, "rbsp_local_file", 1, SQLITE_UTF8 | SQLITE_DETERMINISTIC | SQLITE_INNOCUOUS, NULL,
+                                        local_file_fn, NULL, NULL, NULL);
+#endif
     if (rc != SQLITE_OK) {
         fail(db, rc == SQLITE_NOTADB ? "not a rekordbox library this helper can read" : "can't read it", why, n);
         sqlite3_close(db);
@@ -120,7 +149,7 @@ int library_list(library *l, FILE *out, char *why, size_t n) {
         "   WHERE p.rb_local_deleted = 0 AND t.depth < 64)"
         " SELECT t.ID, t.ParentID, t.Name, t.Attribute,"
         "  (SELECT count(*) FROM djmdSongPlaylist s JOIN djmdContent c ON c.ID = s.ContentID"
-        "    WHERE s.PlaylistID = t.ID AND s.rb_local_deleted = 0 AND substr(c.FolderPath, 1, 1) = '/')"
+        "    WHERE s.PlaylistID = t.ID AND s.rb_local_deleted = 0 AND " LOCAL_ROW ")"
         " FROM tree t ORDER BY t.path";
     if (begin(l, why, n)) return -1;
     sqlite3_stmt *st = NULL;
@@ -176,9 +205,15 @@ int library_tracks(library *l, const char *id, char ***paths, size_t *count, cha
     if (!p) { snprintf(why, n, "out of memory"); goto out; }
     while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
         const char *path = (const char *)sqlite3_column_text(st, 0);
+#if defined(LIBRARY_WIN_RULES)
+        if (!path || !paths_local_file(path)) continue;  /* a streaming track: left alone */
+        size_t k = 0;
+        while (k < *count && !paths_same(p[k], path)) k++;   /* each path once, first place kept */
+#else
         if (!path || path[0] != '/') continue;           /* a streaming track: left alone */
         size_t k = 0;
         while (k < *count && strcmp(p[k], path)) k++;     /* each path once, first place kept */
+#endif
         if (k < *count) continue;
         if (*count == cap) {
             char **q = realloc(p, sizeof(char *) * (cap *= 2));

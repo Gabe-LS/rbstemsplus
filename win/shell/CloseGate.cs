@@ -1,8 +1,8 @@
 // The flow-based close and the logoff (app.md §5.9, W6b; core.h "Close and quit"), without WPF:
 // the Mac tests run it against a fake.
 //  - Window.Closing is cancelled and the core decides (core_close_asked): NOW, or a later
-//    close_reply(proceed 1), lets the window go once CriticalWork is idle, waited for off the UI
-//    thread for at most 60 s (Shell.swift's whenIdle). REFUSE, or a reply of 0, stays.
+//    close_reply(proceed 1), lets the window go once CriticalWork and the update handoff are idle,
+//    waited for off the UI thread for at most 60 s. REFUSE, or a reply of 0, stays.
 //  - The flow's UPDATE_SWAP (and SELF_DELETE) quits at once, asking nothing, after the same wait.
 //  - Logoff, in WPF's order: Application.SessionEnding (WM_QUERYENDSESSION on WPF's own window)
 //    vetoes only while a step that must finish runs, naming it (ShutdownBlockReasonCreate):
@@ -60,13 +60,40 @@ namespace RbStemsPlus.Shell
         private enum State { Open, Waiting, Approved }
 
         private readonly ICloseSide side;
+        private readonly ManualResetEventSlim handoffDone = new ManualResetEventSlim(true);
         private State state;
+        private bool sessionClosing;   // main: Windows has committed to ending the session
         private bool endWaited;
         private int session;   // one per query and per cancel (main): a veto's quit is for its own session only
         private bool vetoed;   // this session's query was vetoed (main)
         private long deadline; // then: its 30 s end, NowMs's (written on main, read off it too)
 
         public CloseGate(ICloseSide side) { this.side = side; }
+
+        /// Main thread, once after the first good frame. Register before queuing the pointer write.
+        public void RunHandoff(Action handoff)
+        {
+            if (Closing || sessionClosing) return;
+            handoffDone.Reset();
+            try
+            {
+                side.RunOff(() =>
+                {
+                    try { handoff(); }
+                    finally { handoffDone.Set(); }
+                });
+            }
+            catch { handoffDone.Set(); throw; }
+        }
+
+        private bool CriticalRunning() => !handoffDone.IsSet || side.CriticalRunning();
+
+        private bool CriticalWait(int ms)
+        {
+            if (handoffDone.IsSet) return side.CriticalWait(ms);
+            long until = side.NowMs() + ms;
+            return handoffDone.Wait(ms) && side.CriticalWait((int)Math.Max(0, until - side.NowMs()));
+        }
 
         /// The session is ending (WM_QUERYENDSESSION seen, not cancelled since).
         public bool SessionEnding { get; private set; }
@@ -79,6 +106,7 @@ namespace RbStemsPlus.Shell
             if (state == State.Approved) return true;
             if (SessionEnding)
             {
+                sessionClosing = true;
                 side.CriticalClose();   // no new step from here (WC1)
                 side.Quitting();   // WPF's shutdown at the session's end
                 return true;
@@ -105,7 +133,7 @@ namespace RbStemsPlus.Shell
             side.Quitting();
             side.RunOff(() =>
             {
-                if (!side.CriticalWait(QuitWaitMs)) side.Log("quit: a step that must finish still runs after 60 s: quitting anyway");
+                if (!CriticalWait(QuitWaitMs)) side.Log("quit: a step that must finish still runs after 60 s: quitting anyway");
                 side.Post(() =>
                 {
                     state = State.Approved;
@@ -122,7 +150,7 @@ namespace RbStemsPlus.Shell
             endWaited = false;
             vetoed = false;
             session++;
-            bool veto = side.CriticalRunning();
+            bool veto = CriticalRunning();
             if (!veto) return false;
             side.BlockReason(true);
             // the logoff waits for us: quit once no step runs, by the veto's deadline at the latest,
@@ -140,11 +168,11 @@ namespace RbStemsPlus.Shell
         {
             side.RunOff(() =>
             {
-                bool idle = side.CriticalWait((int)Math.Max(0, Interlocked.Read(ref deadline) - side.NowMs()));
+                bool idle = CriticalWait((int)Math.Max(0, Interlocked.Read(ref deadline) - side.NowMs()));
                 side.Post(() =>
                 {
                     if (g != session || !SessionEnding) return;   // cancelled, or another query since
-                    if (side.CriticalRunning() && side.NowMs() < Interlocked.Read(ref deadline))
+                    if (CriticalRunning() && side.NowMs() < Interlocked.Read(ref deadline))
                     {
                         WaitThenQuit(g);
                         return;
@@ -177,10 +205,11 @@ namespace RbStemsPlus.Shell
         {
             if (!SessionEnding || endWaited) return;
             endWaited = true;
+            sessionClosing = true;
             side.CriticalClose();   // WM_ENDSESSION(TRUE) is final: no new step from here (MC1)
             // after a veto, only what is left of its 30 s; else the whole bound
             long ms = vetoed ? Math.Max(0, Interlocked.Read(ref deadline) - side.NowMs()) : LogoffWaitMs;
-            if (side.CriticalRunning() && ms > 0 && !side.CriticalWait((int)ms))
+            if (CriticalRunning() && ms > 0 && !CriticalWait((int)ms))
                 side.Log("logoff: a step that must finish still runs after " + LogoffWaitMs / 1000 + " s: the session ends anyway");
             side.BlockReason(false);
         }

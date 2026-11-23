@@ -59,12 +59,18 @@ export LC_ALL=C
 st="${G3_STATE:-$(cd "$(dirname "$0")/../.." && pwd)/build/harness}"; mkdir -p "$st"
 log="${STUB_LOG:-$st/vm.log}"; cl="${STUB_CLONES:-$st/stub-clones}"
 case "$1" in
-up) echo "up $2 ${TEMPLATE:-}" >> "$log"; echo "${TEMPLATE:-}" > "$st/stub-template"
-    echo "$2" > "$st/clone"; echo "$2 running" >> "$cl"
+up) echo "up $2 ${TEMPLATE:-}${3:+ $3}" >> "$log"; echo "${TEMPLATE:-}" > "$st/stub-template"
+    echo "$2" > "$st/clone"; grep -q "^$2 " "$cl" 2>/dev/null || echo "$2 running" >> "$cl"
+    # --vnc: tart's VNC server, its full URL (with the password) in vnc-url, the address alone in
+    # vm.sh up's output (STUB_NO_VNC_URL: none)
+    rm -f "$st/vnc-url"
+    if [ "${3:-}" = --vnc ] && [ -z "${STUB_NO_VNC_URL:-}" ]; then echo "vnc://:stub-pass@127.0.0.1:5999" > "$st/vnc-url"; fi
     # vm.sh up's exit 3: the template's MAC address not held (the clone made, stopped)
     [ -n "${STUB_UP_MAC:-}" ] && { echo "vm.sh: $2 stopped: its en0 is 0e:00:00:00:00:01, not rb26-template's MAC address f2:29:15:0c:4b:bc" >&2; exit 3; }
     # a slow up (GR2): its pid and its child's, kept for the selftest
-    if [ -n "${STUB_SLOW_UP:-}" ]; then echo $$ > "$st/up.pid"; sleep "$STUB_SLOW_UP" & echo $! > "$st/upchild.pid"; wait; fi ;;
+    if [ -n "${STUB_SLOW_UP:-}" ]; then echo $$ > "$st/up.pid"; sleep "$STUB_SLOW_UP" & echo $! > "$st/upchild.pid"; wait; fi
+    [ -s "$st/vnc-url" ] && echo "vnc: vnc://127.0.0.1:5999"
+    exit 0 ;;
 delete)
   c="$(cat "$st/clone" 2>/dev/null)"; echo "delete $c" >> "$log"
   [ -n "${STUB_DELETE_FAIL:-}" ] && exit 1
@@ -75,6 +81,7 @@ delete)
   [ -n "${STUB_OTHER_VM:-}" ] && echo "other-lane running" >> "$cl"
   exit 0 ;;
 build) echo build >> "$log" ;;
+down) echo "down $(cat "$st/clone" 2>/dev/null)" >> "$log" ;;
 sh)
   step="$(sed -n 's|.*g3-guest\.sh \([a-z0-9-]*\) .*|\1|p' <<< "$2")"
   run="$(sed -n 's|.*g3-guest\.sh [a-z0-9-]* /Users/admin/xfer/\([^ ]*\).*|\1|p' <<< "$2")"
@@ -93,6 +100,7 @@ sh)
     facts) [ "$(cat "$st/stub-template")" = rb12-template ] && m=12.7.6 || m=26.6.2
            printf 'macos %s\nsip enabled\nconsole dj\naccessibility %s\n' "$m" "${STUB_AX:-yes}" ;;
     ax-grant) echo "refused (stub)"; exit 1 ;;
+    dialog) [ "${STUB_AX:-yes}" = yes ] || exit 1 ;;
     faillogs) mkdir -p "$st/xfer/$run/fail-logs"; echo "the app's log" > "$st/xfer/$run/fail-logs/app.log" ;;
     ax) [ "${STUB_AX:-yes}" = yes ] || { echo "FAIL no Accessibility permission"; exit 3; }
         # g3ax's answers: STUB_AX_NOPRESS=TITLE (or "menu"): that press "didn't take" (a modal
@@ -170,7 +178,8 @@ ok 'grep -q "^guest_versions rb26-template=26.6.2$" "$rec"' "the record: the gue
 ok '[ "$(grep -c "^up " "$S/vm.log")" = 5 ] && [ "$(grep -c "^delete g3-" "$S/vm.log")" = 5 ] && [ "$(LC_ALL=C sed -n "s/^up \([^ ]*\) .*/\1/p" "$S/vm.log" | sort -u | wc -l | tr -d " ")" = 5 ]' "run: one fresh clone per scenario, each with its own name, each deleted"
 ok '[ ! -s "$S/stub-clones" ] && [ ! -e "$S/g3-leftover" ]' "run: no clone left"
 ok '! grep -q "^sh faillogs" "$S/vm.log" && ! ls -d "$G/$commit"/g3-fail-* > /dev/null 2>&1' "run: every scenario passing, no guest logs kept"
-ok '[ "$(grep -c "OWNER: G3: watch the tart window now; click Allow on RB Stems Plus Watcher when macOS asks (update-v1.4.0 clone)" "$t/out")" = 1 ]' "the owner is told once, as the core paths' update scenario starts"
+ok '[ "$(grep -cF "OWNER: G3: open vnc://127.0.0.1:5999 in Screen Sharing now (password: $S/vnc-url); click Allow on RB Stems Plus Watcher when macOS asks (update-v1.4.0 clone)" "$t/out")" = 1 ]' "the owner is told once, with the clone's VNC address (the password left in vnc-url), as the core paths' update scenario starts"
+ok '[ "$(grep -c "^up .* --vnc$" "$S/vm.log")" = 5 ] && [ "$(grep -c "^up " "$S/vm.log")" = 5 ] && ! grep -q "^down" "$S/vm.log" && ! grep -q "stub-pass" "$t/out"' "screens: every clone with VNC (no window), none restarted; the password never in the output"
 ok 'LC_ALL=C sed -n "s/^up \([^ ]*\) .*/\1/p" "$S/vm.log" | grep -qE "^g3-[0-9]{14}-[0-9]+-[0-9]+$"' "clone names: the date to the second, the run's pid, a counter"
 ok '! grep -q "rb12-template" "$S/vm.log"' "run: the macOS 26 template only"
 args=(run --build "$t/build" --guests "rb12-template"); r3
@@ -257,6 +266,9 @@ ok '! grep -q "holds release" "$t/out" && grep -q "^sh bootstrap http://192.168.
 # G40: post-publish of a release carrying its app: the notice, the update and the one-liner expect app 1.4.0
 args=(post-publish 1.4.1); r3 G3_POST_PAYLOAD="$t/cbuild/payload.json"
 ok '[ "$rc" = 0 ] && grep -q "^sh cond notice 1.4.0$" "$S/vm.log" && grep -q "^sh cond version 1.4.0$" "$S/vm.log" && grep -q "^sh bootstrap real 1.4.0$" "$S/vm.log" && grep -qx "result pass" "$G/post-1.4.1.txt"' "post-publish 1.4.1 (app 1.4.0): the published payload's app version expected"
+ok '[ "$(grep -c "^up .* --vnc$" "$S/vm.log")" = 2 ] && [ "$(grep -c "^up " "$S/vm.log")" = 2 ]' "post-publish: both clones with VNC (no window)"
+args=(post-publish 1.4.1); r3 G3_POST_PAYLOAD="$t/cbuild/payload.json" STUB_AX=no
+ok '[ "$(LC_ALL=C grep "^up \|^down" "$S/vm.log" | sed "s/ g3-[^ ]*//" | tr "\n" "|")" = "up rb26-template --vnc|up rb26-template --vnc|" ] && [ "$(grep -c "the old app.s clicks are yours" "$t/out")" = 1 ]' "post-publish without Accessibility: no restart; the update's clicks sent to the owner, the one-liner's clone not"
 args=(post-publish 1.4.2); r3 G3_POST_PAYLOAD="$t/cbuild/payload.json"
 ok '[ "$rc" = 2 ] && ! grep -q "^up" "$S/vm.log"' "post-publish: a payload of another release stops before any VM"
 
@@ -328,10 +340,15 @@ ok '[ "$rc" = 130 ] && [ ! -e "$rec" ] && grep -qx "result FAIL (interrupted)" "
 
 # Accessibility refused: the owner clicks, recorded
 args=(run --build "$t/build" --only "update-v1.3.0"); r3 STUB_AX=no
-ok 'grep -q "OWNER, in the VM.s window (g3-.*): on the Manage tab, click Install Stems Cache" "$t/out" && grep -q "OWNER, in the VM.s window (g3-.*): in the RB Stems Plus menu choose Update RB Stems Plus…, then click Update" "$t/out"' "no Accessibility: the owner is asked for each click, with what to do"
+ok 'grep -qF "in the VM'"'"'s screen (g3-" "$t/out" && grep -qF ", vnc://127.0.0.1:5999 in Screen Sharing, password: $S/vnc-url): on the Manage tab, click Install Stems Cache" "$t/out" && grep -qF ", vnc://127.0.0.1:5999 in Screen Sharing, password: $S/vnc-url): in the RB Stems Plus menu choose Update RB Stems Plus…, then click Update" "$t/out"' "no Accessibility: the owner is asked for each click, with what to do and the VNC address"
+ac="$(LC_ALL=C sed -n 's/^up \([^ ]*\) .*/\1/p' "$S/vm.log" | head -1)"
+ok '[ "$(LC_ALL=C grep "^up \|^down" "$S/vm.log" | tr "\n" "|")" = "up $ac rb26-template --vnc|" ] && grep -qF "OWNER: G3: the old app'"'"'s clicks are yours in clone $ac (the G3 Driver has no Accessibility): open vnc://127.0.0.1:5999 in Screen Sharing (password: $S/vnc-url)" "$t/out"' "no Accessibility: no restart (the clone has VNC from its start), the owner sent its address"
 ok 'grep -q "^sh ax-grant" "$S/vm.log" && ! grep -q "^sh ax " "$S/vm.log"' "no Accessibility: the grant is tried, then no press is attempted"
 ok 'grep -q "^owner_clicks 2 " "$G/$commit/g3-mac.failed" && grep -q "clicks=owner:v1.3.0: Stems Cache installed by the old app,v1.3.0: Update" "$G/$commit/g3-mac.failed"' "the owner's clicks are counted and named per scenario"
 ok '[ "$rc" = 1 ] && grep -qx "coverage partial (--only)" "$G/$commit/g3-mac.failed" && [ ! -e "$G/$commit/g3-mac.ok" ]' "--only: never a passing record"
+# another lane's vm.sh up moves the pointer during the facts: no down, no second up, the run stops
+args=(run --build "$t/build" --only "update-v1.3.0"); r3 STUB_STEAL=facts STUB_AX=no
+ok '[ "$rc" = 1 ] && ! grep -q "^down" "$S/vm.log" && [ "$(grep -c "^up " "$S/vm.log")" = 1 ] && grep -q "FAIL the VM pointer .* names other-lane" "$G/$commit/g3/1-"*/result' "the pointer moved during the facts (no Accessibility): no down, no second up, the pointer FAIL"
 
 # a press whose action opens a modal dialog "didn't take" (the driver's AX timeout): taken when its
 # effect shows (the next button found; the last press: the step's condition), else a FAIL as before
@@ -364,7 +381,11 @@ fc="$(LC_ALL=C sed -n 's/^up \([^ ]*\) .*/\1/p' "$S/vm.log" | head -1)"
 ok '[ -n "$fc" ] && grep -q "^sh faillogs" "$S/vm.log" && [ "$(cat "$G/$commit/g3-fail-$fc/app.log" 2>/dev/null)" = "the app'"'"'s log" ] && [ "$(grep -n "^sh faillogs\|^delete" "$S/vm.log" | head -1 | cut -d: -f2 | cut -c1-11)" = "sh faillogs" ]' "a failed scenario: the guest's logs kept in g3-fail-<clone>/, before the clone is deleted"
 printf '#!/bin/bash\necho "$1" >> "%s"\n' "$t/notified" > "$t/notify"; chmod +x "$t/notify"; rm -f "$t/notified"
 args=(run --build "$t/build" --only "update-v1.4.0"); r3 G3_NOTIFY="$t/notify"
-ok '[ "$(cat "$t/notified" 2>/dev/null)" = "G3: watch the tart window now; click Allow on RB Stems Plus Watcher when macOS asks (update-v1.4.0 clone)" ]' "G3_NOTIFY: the owner's notice sent with it"
+ok '[ "$(cat "$t/notified" 2>/dev/null)" = "G3: open vnc://127.0.0.1:5999 in Screen Sharing now (password: $S/vnc-url); click Allow on RB Stems Plus Watcher when macOS asks (update-v1.4.0 clone)" ]' "G3_NOTIFY: the owner's notice sent with it, the VNC address in it (no password)"
+rm -f "$t/notified"; args=(run --build "$t/build" --only "update-v1.4.0"); r3 G3_NOTIFY="$t/notify" STUB_AX=no
+ok '[ "$(cat "$t/notified" 2>/dev/null)" = "G3: open vnc://127.0.0.1:5999 in Screen Sharing now (password: $S/vnc-url); first the old app'"'"'s clicks (no Accessibility): Install Stems Cache, then Update; then click Allow on RB Stems Plus Watcher when macOS asks (update-v1.4.0 clone)" ]' "the core paths without Accessibility: one notice, the old app's clicks first, then Allow"
+rm -f "$t/notified"; args=(run --build "$t/build" --only "update-v1.4.0"); r3 G3_NOTIFY="$t/notify" STUB_NO_VNC_URL=1
+ok '[ "$rc" = 1 ] && grep -q "^FAIL the clone g3-.* of rb26-template came up without its VNC URL (.*/vnc-url)$" "$G/$commit/g3/1-"*/result && ! grep -q "^sh prepare" "$S/vm.log" && [ "$(grep -c "^delete g3-" "$S/vm.log")" = 1 ] && [ ! -e "$t/notified" ]' "the core paths' clone without its VNC URL: FAIL before any step, the clone deleted, no notice"
 rm -f "$t/notified"; args=(run --build "$t/build" --only "update-v1.0.0"); r3 G3_NOTIFY="$t/notify"
 ok '[ ! -e "$t/notified" ]' "no notice for a scenario without the core paths"
 # a failing core-path step (the last starting point's scenario): it fails, no pass, its clone
@@ -380,7 +401,7 @@ for sp in kept queued; do
   rm -f "$t/notified"; args=(run --build "$t/build" --only "update-v1.4.0"); r3 STUB_STOP=$sp G3_NOTIFY="$t/notify"
   kc="$(LC_ALL=C sed -n 's/^up \([^ ]*\) .*/\1/p' "$S/vm.log" | head -1)"
   ok '[ "$rc" = 4 ] && [ -n "$kc" ] && ! grep -q "^delete\|^sh faillogs\|^sh uninstall" "$S/vm.log" && [ "$(grep -c "^sh $sp" "$S/vm.log")" = 1 ] && grep -qx "$kc running" "$S/stub-clones" && [ ! -e "$S/g3-leftover" ]' "a STOP in $sp: exit 4 at once, the clone kept running (no logs taken, no delete, nothing after)"
-  ok '[ "$(tail -1 "$t/notified")" = "G3 STOPPED in clone $kc (kept running, nothing clicked): rekordbox'"'"'s automatic activation notice (stub)" ] && grep -q "^stopped: $kc kept running: rekordbox.s automatic activation notice (stub)$" "$G/$commit/g3-mac.failed" && [ ! -e "$G/$commit/g3-mac.ok" ]' "a STOP in $sp: the owner told (G3_NOTIFY), the record says it (g3-mac.failed)"
+  ok '[ "$(tail -1 "$t/notified")" = "G3 STOPPED in clone $kc (kept running, nothing clicked; open vnc://127.0.0.1:5999 in Screen Sharing, password: $S/vnc-url): rekordbox'"'"'s automatic activation notice (stub)" ] && grep -q "^stopped: $kc kept running: rekordbox.s automatic activation notice (stub)$" "$G/$commit/g3-mac.failed" && [ ! -e "$G/$commit/g3-mac.ok" ]' "a STOP in $sp: the owner told (G3_NOTIFY), the record says it (g3-mac.failed)"
 done
 # vm.sh up's exit 3 (the template's MAC address not held): the run stops, the clone deleted
 args=(run --build "$t/build"); r3 STUB_UP_MAC=1
@@ -400,6 +421,12 @@ args=(run --build "$t/build"); r3 STUB_TART_FAIL=1
 ok '[ "$rc" = 2 ] && grep -q "tart list failed" "$t/out" && [ ! -s "$S/vm.log" ]' "tart can't list: the run doesn't start (the VM state unknown)"
 args=(smoke); r3 STUB_TART_FAIL=1
 ok '[ "$rc" = 2 ] && ! grep -q "^up" "$S/vm.log"' "smoke: tart can't list, no VM started"
+args=(smoke); r3
+ok '[ "$rc" = 0 ] && [ "$(LC_ALL=C sed -e "s/ g3-[^ ]*//" -e "s/^\(sh [a-z-]*\).*/\1/" "$S/vm.log" | tr "\n" "|")" = "up rb26-template --vnc|push|sh facts|sh dialog|delete|" ] && [ -s "$S/g3-smoke.txt" ]' "smoke: a clone with VNC (no window), its facts, the driver's press on a dialog of macOS's own, deleted"
+args=(smoke); r3 STUB_AX=no
+ok '[ "$rc" = 0 ] && grep -q "^note dialog skipped: no Accessibility for the G3 Driver" "$S/g3-smoke.txt" && ! grep -q "^sh dialog" "$S/vm.log"' "smoke without the driver's Accessibility: passes, the dialog skipped and said"
+args=(smoke); r3 STUB_FAIL=dialog
+ok '[ "$rc" != 0 ] && grep -q "^FAIL stub: dialog" "$S/g3-smoke.txt" && grep -q "^delete g3-" "$S/vm.log"' "smoke: the dialog's press failing fails the smoke, the clone deleted"
 sleep 30 & sp=$!; echo "$sp" > "$S/g3-server.pid"
 args=(run --build "$t/build" --only "update-v1.3.0"); r3
 ok 'kill -0 "$sp" 2>/dev/null && [ ! -e "$S/g3-server.pid" ]' "a stale server pid naming another process isn't killed (G46)"

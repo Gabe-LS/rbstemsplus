@@ -1,9 +1,10 @@
 # RB Stems Plus
 
-**A different stems model and much faster reloads for rekordbox's STEMS, on the Mac.** Free and
-open source.
+**A different stems model and much faster reloads for rekordbox's STEMS, on Mac and Windows.**
+Free and open source.
 
-[What it does](#what-it-does) · [What you get](#what-you-get) · [Install](#install) ·
+[What it does](#what-it-does) · [What you get](#what-you-get) · [Install on Mac](#install) ·
+[Windows](#windows) ·
 [FAQ](#faq) · [Troubleshooting](docs/troubleshooting.md) · [Get help](#get-help)
 
 <img src="docs/images/main-window.png" width="800" alt="The RB Stems Plus window's Status tab: Demucs v4 and Stems Cache both on, with green lights, and two prepared playlists, Warm-up and Friday Night, both Ready and kept until 15 Nov 2026.">
@@ -13,7 +14,7 @@ open source.
 **Stems** are the parts of a track pulled apart: vocals, drums, bass and the rest of the music
 (rekordbox calls it Inst). With STEMS in rekordbox you can mute or solo each part live, for
 example drop the vocals for an instrumental or keep only the vocals for an acapella. rekordbox
-works the stems out on your Mac with a "model": a program trained to tell the parts apart.
+works the stems out on your computer with a "model": a program trained to tell the parts apart.
 
 RB Stems Plus is a small app with two features:
 
@@ -26,9 +27,9 @@ RB Stems Plus is a small app with two features:
   rekordbox's own or Demucs v4, and it changes one file inside rekordbox (see
   [Honest risks](#honest-risks)).
 
-Install either one, or both. With Stems Cache you can also **prepare a playlist** before a set:
-its stems are made in advance, so every track loads with its stems at once (see
-[Prepare playlists](#prepare-playlists-before-a-set)).
+Install either one, or both. With Stems Cache on Windows or an Apple silicon Mac, you can also
+[prepare a playlist](#prepare-playlists-before-a-set) before a set so its tracks load with
+their stems.
 
 ## What you get
 
@@ -77,6 +78,43 @@ about 15 times.
 **Memory:** rekordbox's own model uses about 1.42 GB at its peak. The Demucs v4 model, run
 with rekordbox's usual settings, peaks at about 2.30 GB. With Stems Cache installed it runs with
 a leaner setting and peaks at about 1.52 GB, with the same speed and the same stems.
+
+## Windows
+
+You need Windows 11 version 22H2 or later on an x64 or ARM64 PC and .NET Framework 4.8.1 or
+later. Stems Cache supports rekordbox 7.2.19 and 7.2.20. Turn on STEMS in rekordbox once so it
+downloads its STEMS Engine. In **Preferences › Extensions › STEMS**, choose
+**Prioritize sound quality**.
+
+1. **Quit rekordbox.** Open PowerShell from the Start menu as a normal user, paste the line
+   below and press Enter.
+
+   ```powershell
+   irm https://github.com/Gabe-LS/rbstemsplus/releases/latest/download/bootstrap.ps1 | iex
+   ```
+
+2. RB Stems Plus opens and is available from the Start menu. Click **Install Stems Cache**,
+   **Install Demucs v4**, or both, one at a time. One Stems Cache install and one Windows
+   administrator prompt cover all versions that are ready to install.
+
+The Windows app has a light appearance only in 1.5.0. Stems Cache defaults to **This PC**. You
+can choose an external drive in [Settings](#settings).
+
+Open **View › Prepare** to make stems for supported playlist tracks in advance. The **Status**
+tab shows prepared playlists. See [Which files can Windows prepare?](#which-files-can-windows-prepare).
+
+See [Windows troubleshooting](docs/troubleshooting.md#windows) for install messages and help
+putting rekordbox's original files back.
+
+### Several versions of rekordbox on Windows
+
+rekordbox installs new versions alongside older ones. Stems Cache works in every supported
+version you have installed. When you have several versions, **Manage** shows one row for each
+version. Check the row for its state and what to do next.
+
+If you already use Stems Cache, RB Stems Plus checks new versions automatically. Once a version
+is ready, it asks if you want to add Stems Cache to it. Choose **Install Now**, or open **Manage**
+later and click **Install Stems Cache**.
 
 ## Before you install
 
@@ -162,6 +200,10 @@ in the line under the buttons on the Manage tab.
 
 ## After a rekordbox update
 
+On Windows, see [Several versions of rekordbox on Windows](#several-versions-of-rekordbox-on-windows).
+
+### On Mac
+
 - **A rekordbox update** puts Pioneer's original rekordbox back, so Stems Cache is off until you
   reinstall it. Demucs v4 keeps working, and your saved stems are kept.
 - **A new STEMS Engine** puts rekordbox's own model back, so Demucs v4 is off. Stems Cache goes
@@ -185,20 +227,27 @@ one, the line under the buttons says *"RB Stems Plus X is available"*, and **Upd
 Plus** appears in the RB Stems Plus menu. The new version replaces the old one in one step. If
 the update can't finish, RB Stems Plus stays as it was and tells you why the next time it opens.
 
-When an update includes a new Stems Cache, RB Stems Plus asks when it opens: **Update** (it asks
-for your password, and rekordbox needs to be closed) or **Not Now** (Stems Cache keeps working as
-it is, and RB Stems Plus asks again the next time it opens).
+When an update includes a new Stems Cache, RB Stems Plus asks when it opens. Quit rekordbox
+before clicking **Update**. Windows asks for an administrator's permission, and macOS asks for
+your password. **Not Now** keeps using the installed Stems Cache, and the app asks again the
+next time it opens.
 
 ## Settings
 
-**RB Stems Plus › Settings…** (Cmd+,) sets how much space saved stems may use (20 GB by default)
-and after how many days unused stems are removed (60 by default). They apply the next time
-rekordbox opens. **Clear Saved Stems** frees the space now.
+**RB Stems Plus › Settings…** (Cmd+, on Mac) sets how much space saved stems may use (20 GB by
+default) and after how many days unused stems are removed (60 by default). They apply the next
+time rekordbox opens. **Clear Saved Stems** frees the space now.
 
 Saved stems take about 13 MB per minute of music with Demucs v4 and about 16 with rekordbox's own
 model: 1 GB holds about 85 or 65 minutes on this Mac.
 
-**Where stems are saved:** on this Mac by default, or on an external drive: click **Change…**
+**On Windows,** close rekordbox and click **Change…** next to *Stems Cache location*. Choose a
+folder on an external drive formatted as NTFS, exFAT or FAT32. Stems Cache can reuse stems already
+saved on the drive and normally removes the stems saved on this PC when you switch.
+**Use This PC** switches back and leaves the drive's stems on it. See
+[Stems Cache location on Windows](docs/troubleshooting.md#stems-cache-location-on-windows).
+
+**On Mac,** stems are saved on this Mac by default. To use an external drive, click **Change…**
 next to *Stems Cache location*, choose the drive (or a folder on it), and RB Stems Plus makes a
 folder named *RB Stems Plus Cache* there. Switching starts empty: the stems saved on this Mac are
 deleted, and rekordbox separates those tracks again the next time you load them. If the drive
@@ -211,9 +260,33 @@ rekordbox and eject the drive before unplugging it. More in [Troubleshooting](do
 
 ## Prepare playlists before a set
 
-With Stems Cache installed, the **Prepare** tab makes a playlist's stems in advance, on an Apple
-silicon Mac, so every track of it loads with its stems at once in rekordbox, as if you had
-loaded it before.
+With Stems Cache installed, the **Prepare** tab makes stems for supported playlist tracks on
+Windows and Apple silicon Macs. The tracks load with their stems as if you had loaded them before.
+
+### Which files can Windows prepare?
+
+- **File types.** MP3, WAV, AIFF (`.aif` or `.aiff`), FLAC (`.flac` or `.fla`), and M4A or MP4
+  with AAC or Apple Lossless audio. Prepare skips raw `.aac` files and 64-bit float WAV. It also
+  skips 20-bit and 32-bit Apple Lossless (ALAC). If a skipped track supports STEMS in rekordbox,
+  you can still separate it there.
+- **Sample rates.** Supported audio that decodes at 44.1 kHz, including mono and stereo AAC. When
+  the app can verify sample rate conversion for your rekordbox build, it also accepts:
+  - MP3 at 16, 22.05, 24, 32 and 48 kHz, constant or variable bitrate, mono or stereo.
+  - WAV, FLAC, AIFF and Apple Lossless at 22.05, 48 and 96 kHz, and mono or stereo at 88.2 and
+    192 kHz (Apple Lossless in M4A).
+  - AAC-LC in M4A or MP4: stereo at 16, 22.05, 24 and 32 kHz, mono at 32 kHz, and mono or
+    stereo at 48 kHz.
+
+  Prepare skips other rates and files at rates rekordbox can't load. That includes mono AAC-LC
+  at 16, 22.05 and 24 kHz, and WAV, FLAC, AIFF and Apple Lossless at 16, 24 and 32 kHz.
+- **MP4 with several audio tracks.** Prepare uses the audio track rekordbox uses when it can
+  identify it. If it can't, it skips the file.
+
+In 1.5.0, Windows Prepare runs Demucs v4 on the CPU only. If Prepare skips a track, check the
+reason on the **Prepare** tab. See
+[Prepare skips a track on Windows](docs/troubleshooting.md#prepare-skips-a-track-on-windows).
+
+### Preparing on Mac
 
 1. Choose a playlist on the left (rekordbox's own list, read only). RB Stems Plus says how many
    tracks are ready, how many it will prepare, how much space and about how long it takes.
@@ -248,6 +321,7 @@ Good to know:
 
 Open RB Stems Plus's **Manage** tab (or the Manage menu) and click:
 - **Uninstall Stems Cache:** rekordbox gets Pioneer's original files back, byte for byte.
+  On Windows, this applies to each affected version of rekordbox.
 - **Uninstall Demucs v4:** rekordbox gets its own stems model back. Stems Cache, if you have it,
   goes on saving stems with that model.
 - **RB Stems Plus › Uninstall RB Stems Plus…** (in the menu bar): rekordbox goes back to exactly
@@ -272,8 +346,7 @@ Your music and your rekordbox library are never touched. The complete uninstall 
 - **rekordbox's licence (EULA) doesn't allow modifying the program.** Stems Cache clearly does,
   and swapping the model arguably does too. In our tests rekordbox sent nothing about it, but we
   can't promise that stays true. If you contact AlphaTheta support, uninstall first.
-- **No warranty.** It's free software under the MIT licence, provided as is. Tested with rekordbox
-  7.2.17 to 7.2.19 on macOS 26 Tahoe on an Apple Silicon Mac.
+- **No warranty.** It's free software under the MIT licence, provided as is.
 - **Never try new software for the first time at a gig.**
 
 ## Privacy and security
@@ -328,13 +401,13 @@ the Demucs v4 stems. It doesn't touch USB exports, CDJs or any other hardware.
 **Does it work with streaming tracks?** No. rekordbox doesn't separate streaming tracks, so STEMS,
 and RB Stems Plus with it, works only on tracks you have as files.
 
-**Which rekordbox versions work?** rekordbox 7. Demucs v4 works with the STEMS Engine versions
-RB Stems Plus knows; Stems Cache only with the rekordbox versions it was tested on (7.2.17 to
-7.2.19 at release). The list is updated online, and the app tells you if your version isn't on it
-yet.
+**Which rekordbox versions work?** Stems Cache in 1.5.0 supports rekordbox 7.2.17, 7.2.18,
+7.2.19 and 7.2.20 on Mac, and 7.2.19 and 7.2.20 on Windows. Demucs v4 works with the STEMS
+Engine versions RB Stems Plus knows. The app checks for updates to the list and tells you if
+your version isn't on it.
 
-**Which Macs? Windows?** Mac only. Tested on macOS 26 Tahoe on an Apple Silicon Mac. Older
-versions, from macOS 12, should work but are untested. Intel Macs should work too, untested.
+**Which Macs? Windows?** See [Before you install](#before-you-install) for Mac and
+[Windows](#windows) for PC requirements.
 
 **Do I need both features?** No. Each works on its own: Demucs v4 changes the model, Stems Cache
 saves the stems of whichever model rekordbox uses. Install one, both, or add the other later.
@@ -356,28 +429,29 @@ removed, which you can change in [Settings](#settings).
 **Do saved stems survive restarts, updates, renaming or moving tracks?** Yes. They stay until
 the size limit, the day limit or **Clear Saved Stems** removes them. They're found by the audio
 itself, so renaming, re-tagging or moving a track (or the whole drive) doesn't matter. After a
-rekordbox update, reinstall Stems Cache to use them again. Stems saved with one model are used
-only with that model: switch back and they load again.
+rekordbox update on Mac, reinstall Stems Cache to use them again. On Windows, add Stems Cache
+to the new rekordbox version to use them there. Stems saved with one model are used only with
+that model: switch back and they load again.
 
 **Does it change BPM, key, waveforms or analysis?** No. Only the stems model changes.
 Everything else rekordbox does runs on its own files, unchanged.
 
-**Does the app need to stay open?** No, except while a playlist is being prepared. Its small helper, **RB Stems Plus Watcher**, runs in
-the background and asks you to reinstall after a rekordbox update. If you turn it off (System
-Settings › General › Login Items & Extensions), the app says *"Reinstall reminders are off"*:
-then open it after rekordbox updates. Your prepared playlists aren't checked when rekordbox opens
-either: look at the **Status** tab before a set.
+**Does the app need to stay open?** No, except while a playlist is being prepared. **RB Stems
+Plus Watcher** runs in the background and checks for new versions of rekordbox. On Mac, if you
+turn it off (System Settings › General › Login Items & Extensions), the app says *"Reinstall
+reminders are off"*. Open the app after rekordbox updates and check the **Status** tab before a set.
 
-**Do I have to reinstall after every rekordbox update?** For Stems Cache, yes: RB Stems Plus
-asks when the update is done (one click). Demucs v4 survives rekordbox
-updates, but not a new STEMS Engine download.
+**Do I have to reinstall after every rekordbox update?** On Mac, RB Stems Plus asks you to
+reinstall Stems Cache after a rekordbox update. On Windows, it offers to add Stems Cache to
+the new version when it's ready. Demucs v4 survives rekordbox updates, but not a new STEMS
+Engine download.
 
 **Can I change how much space saved stems use?** Yes, in [Settings](#settings). The limit counts
 the space the stems take on the disk. On this Mac they're in `~/Library/Caches/rbstemsplus`.
 Don't move that folder or replace it with a link: to save them elsewhere, use Settings.
 
-**Can I keep saved stems on an external drive?** Yes: in [Settings](#settings), **Change…**
-next to *Stems Cache location*. Only drives connected to this Mac that macOS lists as external
+**Can I keep saved stems on an external drive?** Yes. Use **Change…** next to *Stems Cache
+location* in [Settings](#settings). On Mac, use drives that macOS lists as external
 (USB drives, most Thunderbolt drives), not network drives or a second internal disk. While the
 drive isn't connected, rekordbox separates tracks as usual and nothing is saved. On an exFAT or FAT32 drive macOS adds a small hidden file next to each
 saved file, so 1 GB holds about 72 minutes with Demucs v4 on a drive like an exFAT one with 128 KB clusters.

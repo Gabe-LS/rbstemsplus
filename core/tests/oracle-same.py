@@ -30,6 +30,11 @@ CHANGED = {
     "checkWatcher": "a Controller step now (the launch's LaunchAgent check), without the Swift UI's state; no vector calls it",
     "buildReport": "takes the lights the core decided and REPORT_FACTS' measurement (REPORT_ZIP's arguments); no vector calls it",
     "reportFacts": "the same: its lights are the core's (plusLight and cacheLight, the vectors' own, are the oracle's only now)",
+    "lastProblem": "takes a mask applied before each cut (review NS5, owner: mask before cut, both platforms); its default (no mask) is the oracle's behaviour, which the vectors test",
+    "stemsQuality": "reads both attributes from one settings element (NW81); host-side, no vector calls it",
+    "keptSets": "validates the full kept file before using its date (NW82); host-side, no vector calls it",
+    "writeReinstallRequest": "records the watcher's offered features (audit item 15); host-side, no vector calls it",
+    "entriesSize": "reports unknown when the Mac cache can't be read (1.5.0); app/Tests covers the host-side walk, no vector calls it",
 }
 # main's Mac safety fixes (the model-safety and safe-remove reviews, MS/MP/MQ/SR): host-side file
 # operations the core reaches only through its steps; no vector calls them
@@ -37,6 +42,7 @@ CHANGED.update({f: "a Mac safety fix from main (model-safety, safe-remove review
     "current", "installOurs", "listing", "mayRemove", "migrateLegacy", "modelHelpURL", "modelLeftBehind", "removeEntry",
     "removeInLocation", "removeOwnFolders", "removeThisMacStems", "restore", "safeRemove", "savedOriginals", "stopKeeping",
     "verifiedOriginals")})
+CHANGED["saveOriginal"] = "a saved model's engine file that can't be written fails the save; an untagged copy gets its tag (audit b-a2a-F1): host-side, no vector calls it"
 
 # main.swift isn't in the vectors (gen-vectors.sh leaves it out): the app's entry, rewritten at the switch-over
 SKIP_FILES = {"main.swift"}

@@ -3,7 +3,7 @@
 # nothing. It never publishes: publishing stays a manual step (docs/RELEASING.md). Run it
 # yourself, in Terminal, once the TEST build of the same commit has passed the VM tests.
 #
-# Two repositories: this one, the private Gabe-LS/rbstemsplus-dev, where all work happens, and
+# Two repositories: this one, the private development repository, where all work happens, and
 # the public Gabe-LS/rbstemsplus, which only receives releases. A release copies this commit's
 # files, minus the paths in .publicignore, into a local clone of the public repository as one
 # commit "RB Stems Plus X.Y.Z" by Gabe-LS, then builds, signs and uploads the draft from that
@@ -18,10 +18,10 @@
 #                                               "RB Stems Plus (public)" next to this one)
 #   scripts/release.sh vX.Y.Z --dry-run         only steps 1, 3 and 4, with nothing committed,
 #                                               and step 5's carry decisions: shows what would
-#                                               be published and changes nothing (no key or
-#                                               Terminal; gh only reads the latest release; it
-#                                               fetches the public clone's origin and builds the
-#                                               Mac files in a scratch folder)
+#                                               be published (no key or Terminal; gh only reads the
+#                                               latest release; Mac files build in a scratch folder).
+#                                               Fetching origin can update the public clone's remote-tracking refs and tags.
+#                                               Real-run preflight fetch uses a scratch repository until the gates pass.
 #   scripts/release.sh vX.Y.Z --plan            the plan, before any gate (release.md §1.3): the
 #                                               checks of steps 1-4 with nothing committed (no
 #                                               key or Terminal), then the carry decisions, written
@@ -49,6 +49,12 @@
 #                                               then on every release has them (a latest release
 #                                               with the block turns this on by itself). The
 #                                               same flag goes to --plan and to the real run
+#   scripts/release.sh vX.Y.Z --accept-perf "REASON"  a performance record with BORDERLINE rows
+#                                               (within 25% of a row's allowance: a human judges,
+#                                               release.md §6.2) goes through: said here, written
+#                                               to build/gates/<commit>/perf-accepted.txt and
+#                                               added to the draft's notes with REASON. A FAIL is
+#                                               never accepted. The real run only
 #
 # Once: set the public identity's email, your GitHub noreply address (GitHub › Settings › Emails),
 #   git config rbstemsplus.publicEmail 12345678+Gabe-LS@users.noreply.github.com
@@ -70,14 +76,13 @@
 #      clone's origin is Gabe-LS/rbstemsplus (and this repository's isn't); it is on main, clean,
 #      and at its origin/main, or one commit ahead with this very release (an earlier run);
 #      X.Y.Z is newer than every other vA.B.C tag there (the apps refuse an older payload.json);
-#   4. the public copy: HEAD's files (git archive) minus .publicignore's paths and .publicignore;
+#   4. the public copy: HEAD's files (git archive) minus .publicignore's paths and export metadata;
 #      refused if a listed path is missing from HEAD or would still be published, if any
-#      published file mentions a listed file by name, or holds this account's full or short name
-#      or this repository's git name or email; the copy must be HEAD's files exactly (modes and
-#      contents), minus the private ones. It is committed in the public clone as "RB Stems Plus
-#      X.Y.Z", author and committer Gabe-LS <publicEmail>, unsigned, on top of origin/main, and
-#      main is moved to it there (nothing is pushed yet); a tag vX.Y.Z there must point at it;
-#   5. the carry decisions (release.md §1.3), the same code as --plan's: the latest release's
+#      published file mentions a listed file by name or fails the privacy scan with .publicallow;
+#      the copy must be HEAD's files exactly (modes and
+#      contents), minus the private ones. In a real run the fetch and the tree stay in a
+#      scratch Git repository until the gates pass;
+#  4b. the carry decisions (release.md §1.3), the same code as --plan's: the latest release's
 #      payload.json, verified with this commit's public keys, names the previous Mac app and
 #      bridge (their SHA-256s checked once downloaded, their commits in app.commit and
 #      bridge.commit, else its top-level commit). With --mac=auto, the Mac app is built again in a
@@ -89,9 +94,17 @@
 #      bridge the same way, by its SHA-256. They must be the plan's, or it stops (the gates ran
 #      on another shape). G3's tart run must have passed for this commit, the TEST payload in
 #      dist-test/ and this plan (tests/mac/g3.sh check: build/gates/<commit>/g3-mac.ok, every
-#      required scenario; release.md §6.1), with --branch too. With Windows files (step 4b,
-#      release.md §6, I76, R4.I94): the VM record build/gates/<commit>/vm-win.ok
-#      (tests/win/vm-run.sh check, for the TEST payload in dist-test/) whenever the Windows app,
+#      required scenario; release.md §6.1), with --branch too. The performance records (step 4b,
+#      release.md §6.2, T27): the gate archive's SHA256SUMS checked first (tests/perf/archive.sh,
+#      ${GATES_ARCHIVE:-gates-archive}). From 1.5.1, build/gates/<commit>/perf-mac.tsv, plus
+#      perf-win.tsv with Windows files (tests/perf/record.py check), must pass for this commit
+#      and the TEST payload in dist-test/. BORDERLINE rows require --accept-perf; a FAIL never passes.
+#      Below 1.5.1, step 4b logs the owner's 2026-11-19 decision in its output and in
+#      build/gates/<commit>/perf-mac-waived.txt (also perf-win-waived.txt with Windows files).
+#      With Windows files (step 4b,
+#      release.md §6, I76, R4.I94): the VM summary vm-win.ok (tests/win/vm-run.sh check,
+#      including the worker's pc-win.ok) and the VR2 record win-by-hand.ok in build/gates/<commit>/,
+#      for the TEST payload in dist-test/, whenever the Windows app,
 #      a stub, the worker or the Windows bridge is new, or the TEST payload's lists (windows
 #      compatible and resampler_proved, the model, previous_models) differ from the previous
 #      release's. The Windows decisions (release.md §1.3): the Windows app built again from the
@@ -100,6 +113,9 @@
 #      carry the zip; else a new zip, in which each start stub (x64, arm64) and the worker are
 #      still carried one by one when their own SHA-256 is the previous stub_sha256 and
 #      admin_sha256 (R4.I83); the Windows bridge carried when its SHA-256 is the previous one.
+#   5. After the checks above pass, the copy is committed as "RB Stems Plus X.Y.Z", author and
+#      committer Gabe-LS <publicEmail>, unsigned, on top of origin/main. The public clone's main
+#      moves to it (nothing is pushed yet); a tag vX.Y.Z there must point at it.
 #      Then scripts/build.sh, from the
 #      public clone, builds every asset into its dist/ in that shape (a new app stamped with
 #      X.Y.Z; a carried file copied byte for byte), with its own checks (a clean tree, the commit
@@ -124,7 +140,12 @@
 #      with Windows files (it fails
 #      if the release exists; nothing is ever replaced), with docs/release-notes/X.Y.Z.md as its
 #      notes when there is one (unwrapped by scripts/unwrap-notes.py: GitHub keeps line breaks), and the draft is checked: its files' names and sizes, and its
-#      payload.json and payload.json.sig are the ones made here.
+#      payload.json and payload.json.sig are the ones made here;
+#  10. the gate archive (tests/perf/archive-release.sh, release.md §6.1-6.2): the TEST build in
+#      dist-test/ (the one the gates read) as tag-vX.Y.Z/ with the test key pair that signed it;
+#      with --wb on the first release with Windows files (WB, and the worker as W0/worker).
+#      The archiver checks the staged zip for rbsp-prepare.exe when deciding on WP;
+#      SHA256SUMS is sealed anew.
 #
 # Needs: Xcode 26+ (scripts/build.sh), gh signed in with access to both repositories (it never
 # signs in itself), git, network, and the model (scripts/build.sh says where it looks; the copy in
@@ -150,7 +171,7 @@ WIN_ADMIN="admin/RB Stems Plus.exe"
 WIN_CACHES="dl nuget pocketfft blocksrt flac"
 
 die() { echo "release.sh: $*" >&2; exit 1; }
-usage() { echo "usage: $0 vX.Y.Z [--key PATH | --backup-key] [--public PATH] [--branch NAME] [--mac=auto|keep|new] [--windows] [--dry-run | --plan]" >&2; exit 2; }
+usage() { echo "usage: $0 vX.Y.Z [--key PATH | --backup-key] [--public PATH] [--branch NAME] [--mac=auto|keep|new] [--windows] [--accept-perf REASON] [--dry-run | --plan]" >&2; exit 2; }
 
 [ $# -ge 1 ] || usage
 tag="$1"; shift
@@ -162,6 +183,7 @@ pub=""
 branch=main
 mac=auto
 windows_flag=0
+accept_perf=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --key) [ $# -ge 2 ] || usage; key="$2"; shift 2 ;;
@@ -171,17 +193,25 @@ while [ $# -gt 0 ]; do
     --mac=auto|--mac=keep|--mac=new) mac="${1#--mac=}"; shift ;;
     --mac=*) die "--mac takes auto, keep or new, not '${1#--mac=}'" ;;
     --windows) windows_flag=1; shift ;;
+    --accept-perf) [ $# -ge 2 ] || usage
+      [[ "$2" != -* ]] || die "--accept-perf takes the reason (in quotes) right after it, not '$2'"
+      accept_perf="$2"; shift 2
+      [ -n "${accept_perf//[[:space:]]/}" ] && [[ "$accept_perf" != *$'\n'* ]] || die "--accept-perf takes the reason, on one line" ;;
     --dry-run) dry=1; shift ;;
     --plan) plan=1; shift ;;
     *) usage ;;
   esac
 done
 [ "$dry$plan" != 11 ] || die "--dry-run and --plan are two different runs: give one"
+[ "$dry$plan" = 00 ] || [ -z "$accept_perf" ] || die "--accept-perf is for the real run, not --dry-run or --plan"
 # the real run's step 1 needs the plan, written by --plan before any gate (release.md §6)
 plan_dir="$root/build/gates"
 [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "the tag must be vX.Y.Z, not '$tag'"
 version="${tag#v}"
 git check-ref-format --branch "$branch" > /dev/null 2>&1 && [[ "$branch" != -* ]] || die "--branch: '$branch' isn't a branch name"
+# the flags --plan and the real run share; the TEST build a plan's shape takes (--win-test with Windows files)
+flags="$( [ "$mac" = auto ] || echo " --mac=$mac")$( [ "$branch" = main ] || printf ' --branch %q' "$branch")$( [ -z "$pub" ] || printf ' --public %q' "$pub")$( [ "$windows_flag" = 0 ] || echo " --windows")"
+test_build() { echo "scripts/build.sh --test URL$( [ "${win:-0}" = 0 ] || echo " --win-test WURL") --plan $(printf %q "$plan_file")"; }
 
 # ver_gt A B: true when the version A (x.y.z) is newer than B
 ver_gt() {
@@ -192,6 +222,13 @@ ver_gt() {
   done
   return 1
 }
+
+# Owner decisions 2026-11-19 (T27/N6): the Mac and Windows performance gates both start here.
+perf_min=1.5.1
+perf_required() { ! ver_gt "$perf_min" "$version"; }
+[ -z "$accept_perf" ] || perf_required \
+  || die "--accept-perf cannot be used below $perf_min because the performance records are waived"
+
 # newest_tag: of the "<sha> refs/tags/vA.B.C[^{}]" lines on stdin (git ls-remote's or
 # show-ref's), every vA.B.C but $tag, prints the newest as "vA.B.C <commit>" (the commit an
 # annotated tag points at), or nothing
@@ -210,7 +247,7 @@ newest_tag() {
 
 # ------------------------------------------------------------------ 1. here
 
-[ "$(tr -d '[:space:]' < "$root/VERSION")" = "$version" ] || die "VERSION says $(tr -d '[:space:]' < "$root/VERSION"), not $version"
+[ "$(tr -d '[:space:]' < "$root/VERSION")" = "$version" ] || die "VERSION says $(tr -d '[:space:]' < "$root/VERSION"), not $version: commit VERSION $version first (the plan and the release are of that commit)"
 changes="$(git -C "$root" status --porcelain)" || die "not a git checkout"
 if [ "$dry" = 1 ]; then
   [ -z "$changes" ] || echo "NOTE: uncommitted or untracked files: the dry run copies HEAD, without them"
@@ -226,7 +263,7 @@ if [ "$dry$plan" = 00 ]; then
     case "$(stat -f %Lp "$key")" in 600|400) ;; *) die "$key can be read by other accounts: chmod 600 it" ;; esac
   fi
   [ -t 0 ] && [ -t 1 ] || die "run it yourself in Terminal: it asks for the key's passphrase and for a confirmation"
-  [ -f "$plan_file" ] || die "no plan for $commit ($plan_file): run scripts/release.sh $tag --plan first (with the same --mac and --branch), before the gates"
+  [ -f "$plan_file" ] || die "no plan for $commit ($plan_file): run scripts/release.sh $tag --plan$flags first, before the gates"
 fi
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/rbsp-release.XXXXXX")"
@@ -322,17 +359,26 @@ pub_git="$(git -C "$pub" rev-parse --absolute-git-dir)"
 pub_url="$(git -C "$pub" remote get-url origin 2>/dev/null)" || die "$pub has no origin"
 is_public_url "$pub_url" || die "$pub's origin is $pub_url, not $REPO"
 [ "$(git -C "$pub" symbolic-ref -q --short HEAD || true)" = main ] || die "$pub isn't on its branch main: git -C \"$pub\" switch main"
-[ -z "$(git -C "$pub" status --porcelain)" ] || die "$pub has uncommitted or untracked files"
-git -C "$pub" fetch -q --tags origin || die "couldn't fetch $pub's origin"
+pub_changes="$(git --no-optional-locks -c core.fsmonitor=false -C "$pub" status --porcelain)" || die "couldn't check $pub's status"
+[ -z "$pub_changes" ] || die "$pub has uncommitted or untracked files"
+head="$(git -C "$pub" rev-parse -q --verify HEAD || true)"
+if [ "$dry$plan" = 00 ]; then
+  # Borrow the clone's history for the preflight. Refs, fetched objects and the new tree
+  # are written only in the scratch repository.
+  pub_git="$tmp/public.git"
+  git clone -q --shared --mirror "$pub" "$pub_git" || die "couldn't stage $pub's history"
+  git --git-dir="$pub_git" remote set-url origin "$pub_url"
+  git --git-dir="$pub_git" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+fi
+git -C "$pub" --git-dir="$pub_git" fetch -q --tags origin || die "couldn't fetch $pub's origin"
 # the order of versions: every app that has seen a newer payload.json refuses an older one
-pub_last="$( { git -C "$pub" show-ref --tags || true; } | newest_tag)"
+pub_last="$( { git --git-dir="$pub_git" show-ref --tags || true; } | newest_tag)"
 pub_last="${pub_last%% *}"
 [ -z "$pub_last" ] || ver_gt "$version" "${pub_last#v}" || die "$version isn't newer than $pub_last, the newest release in $REPO"
-base="$(git -C "$pub" rev-parse -q --verify refs/remotes/origin/main || true)"
-if [ -z "$base" ] && [ -n "$(git -C "$pub" ls-remote --heads origin)" ]; then
+base="$(git --git-dir="$pub_git" rev-parse -q --verify refs/remotes/origin/main || true)"
+if [ -z "$base" ] && [ -n "$(git -C "$pub" --git-dir="$pub_git" ls-remote --heads origin)" ]; then
   die "$pub's origin has branches, but no main"
 fi
-head="$(git -C "$pub" rev-parse -q --verify HEAD || true)"
 
 # ------------------------------------------------------------------ 4. the public copy
 
@@ -351,11 +397,18 @@ done < <(git -C "$root" show "$commit:.publicignore")
 stage="$tmp/public"
 mkdir "$stage"
 git -C "$root" archive --format=tar "$commit" | tar -x -f - -C "$stage" || die "couldn't export $commit"
-rm -f "$stage/.publicignore"
+metadata=(.publicignore .publicallow)
+for p in "${metadata[@]}"; do rm -f "$stage/$p"; done
 for p in "${private[@]}"; do
   rm -rf "${stage:?}/$p"
   [ ! -e "$stage/$p" ] && [ ! -L "$stage/$p" ] || die "$p is still in the public copy"
 done
+# Read the scanner and its exceptions from the same commit as the export.
+git -C "$root" show "$commit:.publicallow" > "$tmp/publicallow" \
+  || die "the commit needs a .publicallow"
+python3 -I "$stage/scripts/public-scan.py" "$stage" "$tmp/publicallow" "$root" \
+  || die "public export privacy scan failed"
+echo "public export privacy scan passed"
 # no mention of a private file by name (and by its capitals name without the extension), or of
 # a private folder by its path
 names=()
@@ -378,41 +431,41 @@ search() {
 if search -w "${names[@]}"; then
   die "these files mention a private file (.publicignore) and would be published: $hits"
 fi
-# no name or email of the developer's own identity
-idents=()
-for v in "$(id -F 2>/dev/null || true)" "$(id -un)" "$(git -C "$root" config --get user.name || true)"; do
-  [ "${#v}" -ge 5 ] && [ "$(tr '[:upper:]' '[:lower:]' <<< "$v")" != "$(tr '[:upper:]' '[:lower:]' <<< "$PUBLIC_NAME")" ] && idents+=(-e "$v")
-done
-v="$(git -C "$root" config --get user.email || true)"
-[[ "$v" != *@* || "$v" == "$email" ]] || idents+=(-e "$v")
-if [ "${#idents[@]}" -gt 0 ] && search -i "${idents[@]}"; then
-  die "these files hold the developer's own name or email and would be published: $hits"
-fi
-# the copy, as a tree in the public clone (its own index, nothing checked out)
+# the copy as a Git tree, using a scratch index
 export GIT_INDEX_FILE="$tmp/index"
 git --git-dir="$pub_git" --work-tree="$stage" -C "$stage" add -A -f . || die "couldn't add the public copy"
 tree="$(git --git-dir="$pub_git" --work-tree="$stage" write-tree)" || die "couldn't write the public tree"
 unset GIT_INDEX_FILE
 # exactly HEAD's files (mode, contents, path), minus the private ones
-is_private() { local p; for p in "${private[@]}" .publicignore; do [ "$1" = "$p" ] || [[ "$1" == "$p/"* ]] && return 0; done; return 1; }
+is_private() { local p; for p in "${private[@]}" "${metadata[@]}"; do [ "$1" = "$p" ] || [[ "$1" == "$p/"* ]] && return 0; done; return 1; }
 # (-z: NUL-separated and never quoted, so is_private sees a non-ASCII name as it is; compared
 # through their SHA-256s, as a shell variable can't hold a NUL)
 want="$(git -C "$root" ls-tree -r -z "$commit" | while IFS= read -r -d '' l; do is_private "${l#*$'\t'}" || printf '%s\0' "$l"; done | shasum -a 256)"
 [ "$want" = "$(git --git-dir="$pub_git" ls-tree -r -z "$tree" | shasum -a 256)" ] || die "the public copy isn't HEAD's files minus the private ones (a .gitattributes export rule?)"
 count="$(git --git-dir="$pub_git" ls-tree -r --name-only "$tree" | wc -l | tr -d ' ')"
-echo "$count files; left out: .publicignore ${private[*]}"
+echo "$count files; left out: ${metadata[*]} ${private[*]}"
 msg="RB Stems Plus $version"
 ident="$PUBLIC_NAME <$email>"
 # an earlier run's commit of this very release, not pushed or pushed but not released
 reuse=""
-parent="$([ -z "$head" ] || git -C "$pub" rev-parse -q --verify "$head^" || true)"
+parent="$([ -z "$head" ] || git --git-dir="$pub_git" rev-parse -q --verify "$head^" || true)"
 if [ -n "$head" ] && { [ "$head" = "$base" ] || [ "$parent" = "$base" ]; } \
-   && [ "$(git -C "$pub" rev-parse "$head^{tree}")" = "$tree" ] \
-   && [ "$(git -C "$pub" log -1 --format=%B "$head" | sed '/^$/d')" = "$msg" ] \
-   && [ "$(git -C "$pub" log -1 --format='%an <%ae>|%cn <%ce>' "$head")" = "$ident|$ident" ]; then
+   && [ "$(git --git-dir="$pub_git" rev-parse "$head^{tree}")" = "$tree" ] \
+   && [ "$(git --git-dir="$pub_git" log -1 --format=%B "$head" | sed '/^$/d')" = "$msg" ] \
+   && [ "$(git --git-dir="$pub_git" log -1 --format='%an <%ae>|%cn <%ce>' "$head")" = "$ident|$ident" ]; then
   reuse="$head"
 elif [ "$head" != "$base" ]; then
-  die "$pub's main has commits that aren't on its origin/main and aren't this release's: fix the clone by hand"
+  if [ -z "$head" ]; then
+    recovery="$(printf 'git -C %q fetch origin && git -C %q switch --no-overwrite-ignore -C main %q' "$pub" "$pub" "$base")"
+  else
+    recovery="$(printf 'git -C %q branch %q %q' "$pub" "backup/main-$head" "$head")"
+    if [ -n "$base" ]; then
+      recovery+="$(printf ' && git -C %q fetch origin && git -C %q reset --keep %q' "$pub" "$pub" "$base")"
+    else
+      recovery+="$(printf ' && git -C %q rm -r -- . && git -C %q update-ref -d refs/heads/main %q' "$pub" "$pub" "$head")"
+    fi
+  fi
+  die "$pub's main differs from its origin/main and isn't this release's commit. To restore main (saving any local commits), run: $recovery"
 fi
 
 # ------------------------------------------------------------------ the carry decisions
@@ -677,7 +730,7 @@ vm_needed() {
 # plan_lines: the decisions as build/gates/<commit>/plan holds them (scripts/build.sh --plan
 # reads them); "#" lines say why and aren't compared
 plan_lines() {
-  echo "# scripts/release.sh $tag --plan (--mac=$mac): the carry decisions of $commit (release.md §1.3)"
+  echo "# scripts/release.sh $tag --plan$flags: the carry decisions of $commit (release.md §1.3)"
   echo "plan 1"
   echo "commit $commit"
   echo "version $version"
@@ -744,9 +797,23 @@ if [ "$dry$plan" != 00 ]; then
     [ ! -f "$plan_file" ] || echo "NOTE: replacing the earlier plan of this commit: gate records made for it no longer count"
     plan_lines > "$plan_file.part" && mv -f "$plan_file.part" "$plan_file" || die "couldn't write $plan_file"
     echo "Plan written: $plan_file"
-    echo "Next: the TEST build in its shape, scripts/build.sh --test URL --plan $plan_file, and the gates on it;"
-    echo "then the release with the same flags: scripts/release.sh $tag$( [ "$mac" = auto ] || echo " --mac=$mac")$( [ "$branch" = main ] || echo " --branch $branch")$( [ "$windows_flag" = 0 ] || echo " --windows")"
-    if [ "$win" = 1 ] && vm_needed; then echo "The VM record is needed (step 4b): $vm_why: run each suite in tests/win/suites/release.list with --record (tests/win/vm-run.sh run SNAPSHOT SUITE --record) on that TEST build"; fi
+    if perf_required; then
+      echo "Next: the TEST build in its shape, $(test_build), and the gates on it (G3, and the performance"
+      echo "records build/gates/$commit/perf-mac.tsv$( if [ "$win" = 1 ]; then echo " and perf-win.tsv"; fi ): release.md §6.2);"
+    else
+      echo "Next: the TEST build in its shape, $(test_build), and the gates on it (G3);"
+    fi
+    echo "then the release with the same flags: scripts/release.sh $tag$flags"
+    if [ "$win" = 1 ]; then
+      if vm_needed; then
+        echo "The VM record is needed (step 4b): $vm_why"
+      else
+        echo "Step 4b needs the Windows records below if the TEST payload's gated lists change."
+      fi
+      echo "  Run each suite in tests/win/suites/release.list with --record (tests/win/vm-run.sh run SNAPSHOT SUITE --record), except worker."
+      echo "  build/gates/$commit/pc-win.ok for worker: tests/rekordbox/win/pc-session.sh auto record --commit $commit --dist dist-test"
+      echo "  build/gates/$commit/win-by-hand.ok for VR2: after tests/win/suites/by-hand.md passes, run python3 -I tests/win/gate-record.py write-by-hand $commit dist-test --pass"
+    fi
     echo "Plan run: nothing was committed, tagged, pushed or uploaded."
   else
     echo "Dry run: nothing was committed, tagged, pushed or uploaded (the Mac files were built only in a scratch folder)."
@@ -754,29 +821,7 @@ if [ "$dry$plan" != 00 ]; then
   exit 0
 fi
 
-if [ -n "$reuse" ]; then
-  pub_commit="$reuse"
-  echo "the public clone has this release's commit from an earlier run: $pub_commit"
-else
-  pub_commit="$(GIT_AUTHOR_NAME="$PUBLIC_NAME" GIT_AUTHOR_EMAIL="$email" GIT_COMMITTER_NAME="$PUBLIC_NAME" GIT_COMMITTER_EMAIL="$email" \
-                git --git-dir="$pub_git" commit-tree --no-gpg-sign "$tree" ${base:+-p "$base"} -m "$msg")" || die "couldn't commit in $pub"
-  git -C "$pub" checkout -q -B main "$pub_commit" || die "couldn't move $pub's main to $pub_commit"
-  echo "committed $pub_commit in $pub (not pushed)"
-fi
-[ "$(git -C "$pub" log -1 --format='%an <%ae>|%cn <%ce>' "$pub_commit")" = "$ident|$ident" ] || die "the public commit isn't by $ident"
-pub_tag_here=0
-if git -C "$pub" rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
-  [ "$(git -C "$pub" rev-parse "$tag^{commit}")" = "$pub_commit" ] || die "the tag $tag in $pub points at $(git -C "$pub" rev-parse "$tag^{commit}"), not $pub_commit"
-  [ "$(git -C "$pub" for-each-ref --format='%(taggername) %(taggeremail)' "refs/tags/$tag")" = "$ident" ] \
-    || die "the tag $tag in $pub isn't an annotated tag by $ident: delete it (git -C \"$pub\" tag -d $tag), then run this again"
-  pub_tag_here=1
-fi
-pub_remote="$(git -C "$pub" ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}" \
-              | awk -v a="refs/tags/$tag^{}" -v b="refs/tags/$tag" '$2 == a { p = $1 } $2 == b { q = $1 } END { print (p != "" ? p : q) }')" \
-  || die "couldn't read the public origin's tags"
-[ -z "$pub_remote" ] || [ "$pub_remote" = "$pub_commit" ] || die "the tag $tag on $REPO points at $pub_remote, not $pub_commit"
-
-# ------------------------------------------------------------------ 5. build
+# ------------------------------------------------------------------ 4b. the carry decisions and gate records
 
 echo "== the carry decisions"
 decide
@@ -786,37 +831,41 @@ grep -v '^#' "$plan_file" > "$tmp/plan.want" || true
 grep -v '^#' "$tmp/plan" > "$tmp/plan.got" || true
 if ! cmp -s "$tmp/plan.want" "$tmp/plan.got"; then
   diff "$tmp/plan.want" "$tmp/plan.got" | sed 's/^/  /' || true
-  die "the carry decisions differ from the plan's ($plan_file; < the plan, > now): the gates ran on another shape. Make the plan again (--plan, with the same --mac), then the TEST build and the gates in its shape"
+  die "the carry decisions differ from the plan's ($plan_file; < the plan, > now): the gates ran on another shape. If this run's flags (${flags:- none}) aren't the plan's (its first line), run again with the plan's; else make the plan again (--plan$flags), then the TEST build and the gates in its shape"
 fi
 echo "the same decisions as the plan ($plan_file)"
 
 # G3 (release.md §6.1, T26): the tart run's record of this commit, for the TEST payload in
 # dist-test/ and this plan, every required scenario passed (from main and with --branch alike)
-echo "== the G3 tart run (tests/mac/g3.sh check)"
-"$root/tests/mac/g3.sh" check "$commit" "$root/dist-test" \
-  || die "no passing G3 tart run for $commit: tests/mac/g3.sh run on its TEST build (scripts/build.sh --test URL --plan $plan_file), then run this again"
-
-# step 4b (release.md §6, I76, R4.I94): the VM record, when a Windows file is new or the TEST
-# payload's lists aren't the previous release's
-assets="$ASSETS"
+mkdir "$tmp/test-build"
+test_payload="$tmp/test-build/payload.json"
 test_ps=""
+if [ -f "$root/dist-test/payload.json" ] && [ ! -L "$root/dist-test/payload.json" ]; then
+  cp "$root/dist-test/payload.json" "$test_payload"
+  test_ps="$(shasum -a 256 "$test_payload" | cut -d' ' -f1)"
+fi
+echo "== the G3 tart run (tests/mac/g3.sh check)"
+"$root/tests/mac/g3.sh" check "$commit" "$tmp/test-build" \
+  || die "no passing G3 tart run for $commit: tests/mac/g3.sh run on its TEST build ($(test_build)), then run this again"
+[ -n "$test_ps" ] || die "no dist-test/payload.json (the TEST build the gates ran on): $(test_build)"
+
+# step 4b (release.md §6, I76, R4.I94): the Windows records, when a Windows file is new or the
+# TEST payload's lists aren't the previous release's
+assets="$ASSETS"
 if [ "$win" = 1 ]; then
   assets="$ASSETS $WIN_ASSETS"
-  [ -f "$root/dist-test/payload.json" ] && python3 -I -c 'import json, sys; sys.exit(0 if isinstance(json.load(open(sys.argv[1])).get("windows"), dict) else 1)' "$root/dist-test/payload.json" 2>/dev/null \
-    || die "dist-test/payload.json (the TEST build) has no windows block: make the TEST build in this plan's shape (scripts/build.sh --test URL --plan $plan_file)"
-  # the TEST payload the VM record is checked against; step 6 binds the release's Windows
-  # binaries to it (review TT1)
-  test_ps="$(shasum -a 256 "$root/dist-test/payload.json" | cut -d' ' -f1)"
+  python3 -I -c 'import json, sys; sys.exit(0 if isinstance(json.load(open(sys.argv[1])).get("windows"), dict) else 1)' "$test_payload" 2>/dev/null \
+    || die "dist-test/payload.json (the TEST build) has no windows block: make the TEST build in this plan's shape ($(test_build))"
   # a new worker: the release worker the TEST build made (review TT1, BM1), bound in step 6
   test_rel=""; test_rel_admin=""
   if [ "$dec_admin" = new ]; then
     rel="$root/dist-test/windows-release.sha256"
     [ -f "$rel" ] && [ ! -L "$rel" ] && grep -qxE 'admin [0-9a-f]{64}' "$rel" && [ "$(grep -c '' "$rel")" = 1 ] \
-      || die "dist-test/windows-release.sha256 (admin SHA256: the release worker the TEST build made) is missing or not one such line: make the TEST build in this plan's shape (scripts/build.sh --test URL --plan $plan_file)"
+      || die "dist-test/windows-release.sha256 (admin SHA256: the release worker the TEST build made) is missing or not one such line: make the TEST build in this plan's shape ($(test_build))"
     test_rel="$(shasum -a 256 "$rel" | cut -d' ' -f1)"; test_rel_admin="$(sed -n 's/^admin //p' "$rel")"
   fi
   vm_needed || true
-  if [ "$prev_win" = 1 ] && [ "$(gated "$root/dist-test/payload.json")" != "$(gated "$tmp/prev/payload.json")" ]; then
+  if [ "$prev_win" = 1 ] && [ "$(gated "$test_payload")" != "$(gated "$tmp/prev/payload.json")" ]; then
     vm_why="${vm_why:+$vm_why, }the TEST payload's lists (windows compatible or resampler_proved, the model, previous_models) differ from $prev_tag's"
   fi
   if [ -n "$vm_why" ]; then
@@ -835,15 +884,120 @@ if [ "$win" = 1 ]; then
     [ "$vm_rc" != 2 ] \
       || die "tests/win/vm-run.sh check couldn't check the VM record (exit 2): a VM run holds the share's lock (or the lock couldn't be taken, said above); let that run end, then run this again"
     [ "$vm_rc" = 0 ] \
-      || die "no passing VM run for $commit (build/gates/$commit/vm-win/): run each suite in tests/win/suites/release.list with --record (tests/win/vm-run.sh run SNAPSHOT SUITE --record) on its TEST build, then run this again"
+      || die "no passing VM run for $commit: see the failing rows above and the Windows records named by --plan"
     # what the check wrote is for this commit and the TEST payload step 6 binds to, not only its exit 0
     grep -qx "commit $commit" "$vm_ok" 2>/dev/null && grep -qx "payload_sha256 $test_ps" "$vm_ok" && grep -qx "result pass" "$vm_ok" \
       || die "tests/win/vm-run.sh check passed, but $vm_ok isn't a pass for $commit and dist-test/payload.json ($test_ps): run the check again"
+    hand_ok="$plan_dir/$commit/win-by-hand.ok"
+    hand_sha="$(python3 -I "$root/tests/win/gate-record.py" check "$hand_ok" "$commit" "$test_ps")" \
+      || die "no passing VR2 by-hand record for $commit: see tests/win/suites/by-hand.md"
+    echo "VR2 by-hand record passed: $hand_ok"
     # what step 6 checks again before signing (review RV1)
     cp "$vm_ok" "$tmp/vm-win.ok.4b"
   else
     echo "== the VM record: not needed (every Windows file carried, the lists unchanged)"
   fi
+fi
+
+# step 4b (release.md §6.2, T27; owner decided OD11): the performance records, for this commit
+# and the TEST payload in dist-test/, after the gate archive's checksums (R4.I4). From 1.5.1:
+# a pass on the Mac and, with Windows files, on Windows.
+echo "== the gate archive (tests/perf/archive.sh verify)"
+perf_archive="${GATES_ARCHIVE:-$root/gates-archive}"
+(A="$perf_archive"; . "$root/tests/perf/archive.sh" && verify) \
+  || die "the gate archive ($perf_archive) doesn't match its SHA256SUMS, or has none. Point GATES_ARCHIVE at the gate archive (git-ignored: the main checkout's gates-archive/, or its copy on the second disk); a mismatched artifact is never rebuilt"
+release_plats="mac"
+if [ "$win" = 1 ]; then release_plats="mac win"; fi
+perf_plats=""
+if perf_required; then
+  echo "== the performance records (tests/perf/record.py check)"
+  perf_plats="$release_plats"
+  mkdir -p "$tmp/perf4b"
+else
+  for pp in $release_plats; do
+    case "$pp" in
+      mac) platform=Mac; waiver_reason="Owner decision 2026-11-19: Move the Mac performance test to $perf_min." ;;
+      win) platform=Windows; waiver_reason="Owner decision 2026-11-19: defer Windows speed tests until $perf_min." ;;
+    esac
+    waiver_record="build/gates/$commit/perf-$pp-waived.txt"
+    waiver_file="$root/$waiver_record"
+    echo "== $platform performance records waived for $tag. $waiver_reason"
+    [ ! -L "$waiver_file" ] && printf 'tag %s\ncommit %s\npayload_sha256 %s\nreason %s\n' \
+      "$tag" "$commit" "$test_ps" "$waiver_reason" > "$waiver_file" \
+      || die "couldn't write $waiver_record"
+  done
+fi
+perf_border=""
+# each record is copied first and the copy checked (its basename kept: the BORDERLINE rows' sed
+# below), so the record step 7 compares the live one against is the one checked here
+for pp in $perf_plats; do
+  perf_rc=0
+  [ ! -L "$plan_dir/$commit/perf-$pp.tsv" ] || die "build/gates/$commit/perf-$pp.tsv is a symbolic link: the record must be the file tests/perf/record.py write made"
+  [ ! -f "$plan_dir/$commit/perf-$pp.tsv" ] || cp "$plan_dir/$commit/perf-$pp.tsv" "$tmp/perf4b/perf-$pp.tsv" \
+    || die "couldn't copy build/gates/$commit/perf-$pp.tsv"
+  python3 -I "$root/tests/perf/record.py" check "$tmp/perf4b/perf-$pp.tsv" "$pp" "$commit" "$test_ps" | tee "$tmp/perf-$pp.check" || perf_rc=$?
+  case "$perf_rc" in
+    0) ;;
+    10) perf_border="$perf_border $pp" ;;
+    *) die "no passing performance record ($pp) for $commit and dist-test/payload.json (above): run the plan's sessions on its TEST build ($(test_build); release.md §6.2), tests/perf/record.py write the record (build/gates/$commit/perf-$pp.tsv), then run this again" ;;
+  esac
+done
+perf_note=""
+if [ -n "$perf_border" ]; then
+  [ -n "$accept_perf" ] \
+    || die "BORDERLINE performance rows (above:$perf_border): a human judges them. To release anyway: scripts/release.sh $tag$flags --accept-perf \"REASON\" (a FAIL is never accepted)"
+  perf_rows="$(sed -n 's/^record\.py check: perf-\([a-z]*\)\.tsv: BORDERLINE \([^:]*\):.*/\2 (\1)/p' "$tmp"/perf-*.check | paste -sd, - | sed 's/,/, /g')"
+  perf_note="Performance: BORDERLINE rows accepted (within 25% of their allowance, release.md §6.2): $perf_rows. Reason: $accept_perf"
+  echo "== BORDERLINE accepted (--accept-perf): $perf_rows. Reason: $accept_perf"
+  { echo "tag $tag"; echo "commit $commit"; echo "payload_sha256 $test_ps"; echo "date $(date -u +%FT%TZ)"
+    echo "rows $perf_rows"; echo "reason $accept_perf"; cat "$tmp"/perf-*.check; } > "$tmp/perf-accepted.txt" \
+    || die "couldn't write $tmp/perf-accepted.txt"
+  echo "   written to build/gates/$commit/perf-accepted.txt once the draft is made; its notes say it too"
+elif [ -n "$accept_perf" ]; then
+  echo "NOTE: --accept-perf given, but no row is BORDERLINE: nothing accepted"
+fi
+
+# ------------------------------------------------------------------ 5. the public commit and build
+
+# The gate records passed. Refresh the real clone and ensure the checked release base still
+# applies before moving main.
+[ "$(git -C "$pub" symbolic-ref -q --short HEAD || true)" = main ] \
+  && [ "$(git -C "$pub" rev-parse -q --verify HEAD || true)" = "$head" ] \
+  && pub_changes="$(git --no-optional-locks -c core.fsmonitor=false -C "$pub" status --porcelain)" \
+  && [ -z "$pub_changes" ] \
+  || die "$pub changed during the gate checks: check the clone and run this again"
+git -C "$pub" fetch -q --tags origin || die "couldn't fetch $pub's origin"
+[ "$(git -C "$pub" rev-parse -q --verify refs/remotes/origin/main || true)" = "$base" ] \
+  || die "$pub's origin/main changed during the gate checks: run this again"
+pub_last="$( { git -C "$pub" show-ref --tags || true; } | newest_tag)"
+pub_last="${pub_last%% *}"
+[ -z "$pub_last" ] || ver_gt "$version" "${pub_last#v}" || die "$version isn't newer than $pub_last, the newest release in $REPO"
+
+pub_commit="$reuse"
+if [ -z "$pub_commit" ]; then
+  pub_commit="$(GIT_AUTHOR_NAME="$PUBLIC_NAME" GIT_AUTHOR_EMAIL="$email" GIT_COMMITTER_NAME="$PUBLIC_NAME" GIT_COMMITTER_EMAIL="$email" \
+                git --git-dir="$pub_git" commit-tree --no-gpg-sign "$tree" ${base:+-p "$base"} -m "$msg")" || die "couldn't prepare the public commit"
+fi
+[ "$(git --git-dir="$pub_git" log -1 --format='%an <%ae>|%cn <%ce>' "$pub_commit")" = "$ident|$ident" ] || die "the public commit isn't by $ident"
+pub_tag_here=0
+if git -C "$pub" rev-parse -q --verify "refs/tags/$tag" > /dev/null; then
+  [ "$(git -C "$pub" rev-parse "$tag^{commit}")" = "$pub_commit" ] || die "the tag $tag in $pub points at $(git -C "$pub" rev-parse "$tag^{commit}"), not $pub_commit"
+  [ "$(git -C "$pub" for-each-ref --format='%(taggername) %(taggeremail)' "refs/tags/$tag")" = "$ident" ] \
+    || die "the tag $tag in $pub isn't an annotated tag by $ident: delete it (git -C \"$pub\" tag -d $tag), then run this again"
+  pub_tag_here=1
+fi
+pub_remote="$(git -C "$pub" ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}" \
+              | awk -v a="refs/tags/$tag^{}" -v b="refs/tags/$tag" '$2 == a { p = $1 } $2 == b { q = $1 } END { print (p != "" ? p : q) }')" \
+  || die "couldn't read the public origin's tags"
+[ -z "$pub_remote" ] || [ "$pub_remote" = "$pub_commit" ] || die "the tag $tag on $REPO points at $pub_remote, not $pub_commit"
+
+if [ -n "$reuse" ]; then
+  echo "the public clone has this release's commit from an earlier run: $pub_commit"
+else
+  git --git-dir="$pub_git" update-ref refs/rbsp/release "$pub_commit"
+  git -C "$pub" fetch -q --no-tags --no-write-fetch-head "$pub_git" refs/rbsp/release || die "couldn't transfer the public commit to $pub"
+  git -C "$pub" checkout -q -B main "$pub_commit" || die "couldn't move $pub's main to $pub_commit"
+  echo "committed $pub_commit in $pub (not pushed)"
 fi
 
 echo "== build (scripts/build.sh, in $pub)"
@@ -914,7 +1068,10 @@ for k in "$root/build/test-keys/test.pub.pem" "${GATES_ARCHIVE:-$root/gates-arch
   [ -f "$k" ] || continue
   kb="$(tk_b64 "$k")" || die "$k isn't a P-256 public key: the test-key check can't run"
   for n in release backup; do
-    [ "${kb%%$'\n'*}" != "$(tk_b64 "$tmp/tk-$n.pub.pem" | head -1)" ] || die "keys/$n.pub.pem is the test key $k: not releasing it"
+    # the uncompressed forms compared, cut from the whole output (piped into head, tk_b64's
+    # later lines had nowhere to go: "echo: write error: Broken pipe")
+    rb="$(tk_b64 "$tmp/tk-$n.pub.pem")" || die "keys/$n.pub.pem at the public commit isn't a P-256 public key"
+    [ "${kb%%$'\n'*}" != "${rb%%$'\n'*}" ] || die "keys/$n.pub.pem is the test key $k: not releasing it"
   done
   for f in "$dist/bootstrap.sh" "$dist/bootstrap.ps1" "$tmp/app-exe"; do
     [ -f "$f" ] || continue
@@ -1008,8 +1165,8 @@ listed="$(awk '{print $2}' "$dist/SHA256SUMS" | LC_ALL=C sort | tr '\n' ' ')"
 [ "$listed" = "$(printf '%s\n' $assets | grep -vx SHA256SUMS | LC_ALL=C sort | tr '\n' ' ')" ] || die "dist/SHA256SUMS lists: $listed"
 [ "$(git -C "$pub" rev-parse HEAD)" = "$pub_commit" ] && [ -z "$(git -C "$pub" status --porcelain)" ] || die "the public clone changed during the build"
 [ "$(git -C "$root" rev-parse HEAD)" = "$commit" ] && [ -z "$(git -C "$root" status --porcelain)" ] || die "the checkout changed during the build"
-# the VM verdict again, right before signing (review RV1): a --record run that failed during the
-# build leaves no pass, and the summary must be the very one step 4b read
+# the Windows verdict again, right before signing (review RV1): the VM/PC summary and the VR2
+# attestation must be the ones step 4b read
 if [ "$win" = 1 ] && [ -n "${vm_why:-}" ]; then
   echo "== the VM record again (tests/win/vm-run.sh check)"
   vm_rc=0
@@ -1017,8 +1174,18 @@ if [ "$win" = 1 ] && [ -n "${vm_why:-}" ]; then
   [ "$vm_rc" != 2 ] \
     || die "tests/win/vm-run.sh check couldn't check the VM record (exit 2): a VM run holds the share's lock (or the lock couldn't be taken, said above); let that run end, then run this again"
   [ "$vm_rc" = 0 ] && cmp -s "$vm_ok" "$tmp/vm-win.ok.4b" \
-    || die "the VM record changed during the build (tests/win/vm-run.sh check exit $vm_rc, or $vm_ok isn't the one step 4b read): run each suite in tests/win/suites/release.list with --record on the TEST build again, then run this again"
+    || die "the VM record changed during the build (tests/win/vm-run.sh check exit $vm_rc, or $vm_ok isn't the one step 4b read): see the Windows records named by --plan"
+  hand_now="$(python3 -I "$root/tests/win/gate-record.py" check "$hand_ok" "$commit" "$test_ps")" && [ "$hand_now" = "$hand_sha" ] \
+    || die "$hand_ok changed during the build (it isn't the VR2 record step 4b checked): run this again"
 fi
+# compare only the performance records checked in step 4b (none when waived)
+for pp in $perf_plats; do
+  [ ! -L "$plan_dir/$commit/perf-$pp.tsv" ] && cmp -s "$plan_dir/$commit/perf-$pp.tsv" "$tmp/perf4b/perf-$pp.tsv" \
+    || die "build/gates/$commit/perf-$pp.tsv changed during the build (it isn't the record step 4b checked): run this again"
+done
+# bind the TEST build to the gate checks and the archive even when performance records are waived
+[ "$(shasum -a 256 "$root/dist-test/payload.json" | cut -d' ' -f1)" = "$test_ps" ] \
+  || die "dist-test/payload.json changed after step 4b read it (the gate checks are bound to that file)"
 
 # ------------------------------------------------------------------ 7. the signature
 
@@ -1098,6 +1265,11 @@ if [ -f "$pub/docs/release-notes/$version.md" ]; then
     && [ -s "$tmp/notes.md" ] || die "couldn't unwrap docs/release-notes/$version.md"
   notes=(--notes-file "$tmp/notes.md")
 fi
+# a BORDERLINE accepted (--accept-perf, step 4b): said in the draft's notes, for the owner to read
+if [ -n "$perf_note" ]; then
+  if [ "${notes[0]}" = --notes-file ]; then printf '\n%s\n' "$perf_note" >> "$tmp/notes.md"
+  else notes=(--notes "${notes[1]}"$'\n\n'"$perf_note"); fi
+fi
 gh release create "$tag" "${files[@]}" --repo "$REPO" --draft --verify-tag --title "RB Stems Plus $version" "${notes[@]}" \
   || die "couldn't create the draft (if it was created half-way, delete it by hand, then run this again)"
 [ "$(gh release view "$tag" --repo "$REPO" --json isDraft -q .isDraft)" = true ] || die "$tag isn't a draft"
@@ -1108,6 +1280,28 @@ gh release download "$tag" --repo "$REPO" --dir "$tmp/check" --pattern payload.j
   || die "couldn't download payload.json and its signature back"
 cmp -s "$tmp/check/payload.json" "$dist/payload.json" && cmp -s "$tmp/check/payload.json.sig" "$sig" \
   || die "the draft's payload.json or payload.json.sig isn't the one made here"
+# the BORDERLINE accepted (step 4b), now that the draft says it; none: no earlier run's copy left
+if [ -n "$perf_note" ]; then
+  cp "$tmp/perf-accepted.txt" "$plan_dir/$commit/perf-accepted.txt" || die "the draft $tag is made, but build/gates/$commit/perf-accepted.txt couldn't be written"
+else
+  rm -f "$plan_dir/$commit/perf-accepted.txt"
+fi
+
+# ------------------------------------------------------------------ 10. the gate archive
+
+# the TEST build the gates read, archived as tag-vX.Y.Z (and WB, W0's worker, WP when this is the
+# first release with Windows files, or the first whose Windows zip ships Prepare: J14)
+echo "== the gate archive (tests/perf/archive-release.sh)"
+arch_flags=""
+if [ "$win" = 1 ]; then
+  [ "$prev_win" = 1 ] || arch_flags=" --wb"
+  if ! { [ "$prev_win" = 1 ] && grep -qE '(^[0-9a-f]+ |/)rbsp-prepare\.exe$' "$tmp/prev/win-entries"; }; then
+    arch_flags="$arch_flags --wp-if-present"
+  fi
+fi
+# shellcheck disable=SC2086
+"$root/tests/perf/archive-release.sh" "$tag"$arch_flags --payload-sha "$test_ps" \
+  || die "the draft $tag is made, but the TEST build wasn't archived (above): fix that, then run tests/perf/archive-release.sh $tag$arch_flags --payload-sha $test_ps (docs/RELEASING.md §6)"
 
 echo
 echo "Draft $tag is on $REPO, signed ($signer key), built from $pub_commit. It is NOT published."

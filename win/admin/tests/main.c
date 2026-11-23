@@ -10,6 +10,7 @@ int checks, failures;
 void test_proto(void);
 void test_worker(const char *scratch, const char *pedir);
 void test_client(const char *scratch);
+void test_receipt(const char *scratch);
 
 int main(int argc, char **argv) {
     if (argc != 3) {
@@ -18,6 +19,9 @@ int main(int argc, char **argv) {
     }
     char sub[1024];
     test_proto();
+    snprintf(sub, sizeof sub, "%s/receipt", argv[1]);
+    mkdir(sub, 0755);
+    test_receipt(sub);
     snprintf(sub, sizeof sub, "%s/worker", argv[1]);
     mkdir(sub, 0755);
     test_worker(sub, argv[2]);

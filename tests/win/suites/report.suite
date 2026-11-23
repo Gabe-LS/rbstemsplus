@@ -1,0 +1,28 @@
+# N4 (w6/native-step-audit; review NS2, NS5, NS20, NS21, NS23): Create Report end to end, its
+# fallback, and the Settings dialog's fields, from "clean Windows" (nothing here needs rekordbox):
+#   tests/win/vm-run.sh stage
+#   tests/win/vm-run.sh run "clean Windows" report
+# plant-sys (SYSTEM) stops Windows' time service and sets the clock from the run's server, sets the
+# account's full name (net user /fullname:"Dana Jones", the M4 row) and plants an Application log error about rekordbox.exe and
+# a WER Report.wer of a rekordbox crash (crash dumps beside it); report appends a problem line to
+# app.log once the app has started; each names the account, its full name, its profile
+# folder and that folder's 8.3 alias, with a marker. report: the zip on the Desktop with every part
+# and no name, Open GitHub Issue's link (caught from msedge.exe's command line) with no name.
+# fallback: the Desktop refusing new files, the zip next to the logs. settings: config.ini's
+# numbers in the fields, a Save written, Cancel nothing. The date text (CORE_STEP_DATE_TEXT) and
+# the notification (CORE_STEP_NOTIFY) are the Prepare tab's only, and stay by hand
+# (by-hand.md's N4 rows). Needs a TEST build with w6/native-step-audit in dist-test/. Not a
+# release.list row.
+include lib/vmlib.ps1
+include uninstall/cases/unlib.ps1
+include uac/uaclib.ps1
+include report/rplib.ps1
+need http
+need file repo/core/texts.def
+need file dist-test/bootstrap.ps1
+# MODE       SECS NAME          SCRIPT
+user         600  install       bootstrap/install.ps1
+sys          120  plant-sys     report/plant-sys.ps1
+user         420  report        report/report.ps1
+user         420  fallback      report/fallback.ps1
+user         300  settings      report/settings.ps1

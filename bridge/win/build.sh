@@ -143,16 +143,17 @@ build() {   # SRC_BRIDGE_DIR OUT_DLL MAP
   "$cc" x64 -w -c -I"$pf" "$pf/pocketfft.c" -o "$o.pocketfft.o" || fail "pocketfft.c"
   # shellcheck disable=SC2086
   (cd "$src/win" && "$cc" x64 -shared -fblocks -Wall -Wextra -Werror -Wno-unused-command-line-argument -DFLAC__NO_DLL -D__USE_MINGW_ANSI_STDIO=0 "$@" \
-    -I.. -I"$pf" -I"$rt" -I"$out/flac/include" bridge_win.c "$o.runtime.o" "$o.data.o" "$o.pocketfft.o" onnxruntime.def \
+    -I.. -I../../common -I"$pf" -I"$rt" -I"$out/flac/include" bridge_win.c "$o.runtime.o" "$o.data.o" "$o.pocketfft.o" onnxruntime.def \
     "$out/flac/lib/libFLAC.a" $LIBS -Wl,-Map="$map" -o "$o") 2> "$o.link.log" || { cat "$o.link.log" >&2; fail "the build failed"; }
 }
 dll="$out/$LIB"
 build "$bridge" "$dll" "$out/$LIB.map"
 # the same sources from another folder (with a space in its path): the same bytes
-mkdir -p "$scratch/copy of src/bridge/win" "$scratch/copy of src/common" "$scratch/second"
+mkdir -p "$scratch/copy of src/bridge/win" "$scratch/copy of src/common" "$scratch/copy of src/win/c" "$scratch/second"
 cp "$bridge"/*.h "$bridge"/rbstems_bridge.c "$scratch/copy of src/bridge/"
 cp "$here"/*.c "$here"/*.h "$here"/*.inc "$here"/*.def "$scratch/copy of src/bridge/win/"
 cp "$root"/common/*.c "$root"/common/*.h "$scratch/copy of src/common/"
+cp "$root"/win/c/volumes.c "$root"/win/c/volumes_win.c "$root"/win/c/volumes.h "$scratch/copy of src/win/c/"
 build "$scratch/copy of src/bridge" "$scratch/second/$LIB" "$scratch/second/$LIB.map"
 
 # ---------------------------------------------------------------- gates

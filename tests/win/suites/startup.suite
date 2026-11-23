@@ -1,0 +1,10 @@
+# I82: start the installed release layout through its ARM64 or x64 stub and confirm the shell
+# has bound to that architecture's core. The Prism lap uses stage --build's forced-x64 shell.
+# From "clean Windows", run with --arch arm64 and --arch x64-prism.
+include lib/vmlib.ps1
+need http
+need vm
+need file repo/core/texts.def
+need file dist-test/bootstrap.ps1
+user 600 install bootstrap/install.ps1
+user 180 startup bootstrap/startup.ps1

@@ -83,6 +83,7 @@ static int win_uninstall_entries(void *ctx, compat_uninstall *out, int max, int 
             if (prefix_ci(name, L"Pioneer rekordbox") || prefix_ci(name, L"rekordbox") || prefix_ci(dn, L"rekordbox")) {
                 compat_uninstall *e = &out[n];
                 memset(e, 0, sizeof *e);
+                e->view = v == 0 ? COMPAT_VIEW_64 : COMPAT_VIEW_32;
                 to_utf8(name, e->key, sizeof e->key);
                 to_utf8(dn, e->display_name, sizeof e->display_name);
                 reg_string(k, L"DisplayVersion", e->display_version, sizeof e->display_version);

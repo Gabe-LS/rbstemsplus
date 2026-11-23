@@ -1,7 +1,7 @@
-// The start stub's resources: its manifest (RT_MANIFEST 1) and a constant version resource that
-// carries only the names (release.md §3.2). Nothing here changes per release (I83): the stub's
-// bytes change only when its code does, so a new stub comes only with a code change.
+// The start stub's manifest, icon and constant version resource (release.md §3.2).
+// These resources are independent of the release version (I83).
 1 24 "stub.manifest"
+1 ICON "RbStemsPlus.ico"
 
 1 VERSIONINFO
 FILEVERSION 0,0,0,0

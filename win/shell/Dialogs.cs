@@ -21,8 +21,9 @@ namespace RbStemsPlus.Shell
         private Button defaultButton;
         private DialogAnswer answer;
 
-        public DialogWindow(DialogForm form, Window owner)
+        public DialogWindow(DialogForm form, Window owner, Action<string> log)
         {
+            new RenderRecovery(this, log);
             this.form = form;
             Owner = owner;
             Title = Texts.Get(CoreText.T_APP_NAME);
@@ -168,10 +169,11 @@ namespace RbStemsPlus.Shell
 
     internal sealed class AboutWindow : Window
     {
-        public AboutWindow(Window owner, string version)
+        public AboutWindow(Window owner, string version, Action<string> log)
         {
+            new RenderRecovery(this, log);
             Owner = owner;
-            Title = Texts.Get(CoreText.T_MENU_ABOUT);
+            Title = Texts.Plain(CoreText.T_MENU_ABOUT);   // the menu title without its access key
             ShowInTaskbar = false;
             ResizeMode = ResizeMode.NoResize;
             SizeToContent = SizeToContent.WidthAndHeight;

@@ -1,0 +1,55 @@
+# The by-hand plan's W1, G4 of the Windows by-hand card: the complete uninstall with Stems Cache
+# installed (UN1), the worker's reboot branch with a reinstall of the same release and a restart
+# (UN9, J7), and the root after the last uninstall's restart (R4.I77) with the trace audit around
+# it all (release.md section 8; app.md 5.5, 5.9). UAC prompts as Windows ships it; rbui answers it
+# on the secure desktop through sysdesk (tests/win/uia), autologon signs back in after each
+# restart. From "rekordbox 7.2.19 installed + stems model", x64 and arm64:
+#   tests/win/vm-run.sh stage --build
+#   tests/win/vm-run.sh run "rekordbox 7.2.19 installed + stems model" uninstall-uac
+# Needs the TEST build in dist-test/ as worker.suite does, and a local account signed in (setup's
+# Set-AutoLogon; a Microsoft account SKIPs). Not a release.list row.
+include lib/vmlib.ps1
+include worker/rblib.ps1
+include uninstall/cases/unlib.ps1
+include uac/uaclib.ps1
+need http
+need file repo/core/texts.def
+need file dist-test/bootstrap.ps1
+need file dist-test/payload.json
+need file vm/uia/rbui/rbui.exe
+need file vm/x64/sysdesk.exe
+need file vm/arm64/sysdesk.exe
+# MODE       SECS NAME              SCRIPT
+sys          120  prep              worker/prep.ps1
+sys          120  setup             uac/setup.ps1
+user         300  audit-before      audit/snapshot.ps1
+user         600  install           bootstrap/install.ps1
+sys          240  arm-yes-1         uac/arm.ps1
+user         600  cache-install     worker/cache-install.ps1
+# UN1: Uninstall All with Stems Cache: UAC first, Pioneer's DLL back, nothing left
+sys          240  arm-yes-2         uac/arm.ps1
+user         600  un1-uninstall     uac/uninstall-all.ps1
+user         180  audit-after-un1   audit/after-uninstall.ps1
+# UN9 / J7: install, Stems Cache, the bin\ worker held, Uninstall All (the reboot branch), a
+# reinstall of the same release, Stems Cache again, a restart: the bin\ worker there
+user         600  install-2         bootstrap/install.ps1
+sys          240  arm-yes-3         uac/arm.ps1
+user         600  cache-install-2   worker/cache-install.ps1
+sys          120  hold              uac/hold.ps1
+user         600  held-uninstall    uac/uninstall-all.ps1
+sys          120  j7-pending        uac/j7.ps1
+user         600  install-3         bootstrap/install.ps1
+sys          240  arm-yes-4         uac/arm.ps1
+user         600  cache-install-3   worker/cache-install.ps1
+sys          120  restart-1         uac/restart.ps1
+wait         600  signin-1          logon
+sys          120  j7-restarted      uac/j7.ps1
+# UN9's audit: the last uninstall elevates the bin\ worker (the prompt's details), a restart, the
+# root gone, the trace audit as before the first install
+sys          240  arm-details       uac/arm.ps1
+user         600  final-uninstall   uac/uninstall-all.ps1
+sys          120  restart-2         uac/restart.ps1
+wait         600  signin-2          logon
+sys          120  root-gone         uac/j7.ps1
+user         180  audit-after       audit/after-uninstall.ps1
+sys          120  done              uac/done.ps1

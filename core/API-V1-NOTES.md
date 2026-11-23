@@ -537,6 +537,9 @@ No frozen signature, layout, enum value or rule changes; `sizeof(core_host)` is 
    offer), 13 "run again" (the attempt runs once more), 1223 UAC declined (the user stopped).
 7. **Click ids** `restore_pioneer` (R1's button) and `uninstall_from_settings` (the Apps &
    features entry's Uninstall; the shell sends it after "shown"), both refused by a Mac core.
+8. **`CORE_STEP_WIN_R1_DISMISS = 62`** (N10), the click `r1_dismiss` (refused by a Mac core),
+   **`FACT_R1_DISMISSED`** in CORE_SLOW_R1's answer and **`F_WIN_R1_DISMISS_VISIBLE`,
+   `F_WIN_R1_DISMISS_ENABLED`**: R1's "Don't Ask Again for This Version" (below).
 
 **Decisions**
 - The Windows flow variants are `core/flows_win.c`, included at the end of flows.c under
@@ -568,6 +571,43 @@ in front while a UAC elevation is in flight. The aggregator adds no event: it se
 "activated" (from Application.Activated and the window leaving Minimized, coalesced per turn,
 never for our own windows) and, for a second start, "activated" then "check_request"
 (events.def's header). Tests: `core/tests/win_front.c`.
+
+**menus.def's Windows rows** (app.md §4.5; W-core, merged by M2 after G4): Exit
+(native, Alt+F4) at the end of the first menu, Edit drawn from the table (Cut, Copy, Paste,
+Select All: native, WPF's commands, Ctrl+X/C/V/A), About (native) at the end of Help; no Hide and
+no Window menu. Titles carry WPF's access keys ("_" before the letter) in the Windows column; the
+first menu's Windows title is `T_WIN_MENU_APP` (core_menu_at gives it to M_APP on Windows, so
+T_APP_NAME stays the app's name). The Manage-only layout's hidden rows (View > Status, View > Prepare,
+the Prepare menu) follow §13's `"prepare_tabs"` and its one rule, `view_tabs_hidden`; the branch's
+own `"prepare": false` key and `view_tab_exists` (reviews C5, WR2, WR3) were dropped at the merge
+in its favour, since §13 covers the same paths (start tab, {"ev":"tab"}, menu and click). core_menu_state
+pulls the same first-menu title core_menu_at gives (C15). T_WIN_MENU_APP is the last text row, so
+no other Windows text id moves when this lands (C10). Tests: `core/tests/win_menus.c`.
+
+**schema.def's Windows fields** (W-core, merged by M2): `F_WIN_R1_LINE`,
+`F_WIN_RESTORE_VISIBLE`, `F_WIN_RESTORE_ENABLED` in S_APP, after every shared field so no shared
+field's Windows id moves; `win_r1_fields(model, FACT_R1_STATE, action_running)` (win.c) sets them
+in view_refresh. **R1's light** (review C19): under CORE_WIN_POLICY, `cache_light_in.win_r1` takes
+the view's R1 state, and a non-zero state gives Stems Cache's light the not-working look with
+`w_r1_line` as its tip, before every other rule. texts.def's and facts.def's Windows rows are at
+their ends for the same reason; menus.def's sit at their place in their menu (the table's order
+is the menu's order).
+
+**R1 in the app** (review WR1, CW1-CW3): `view_r1_check` asks CORE_SLOW_R1 with the key "" (the
+backend's own verified current version folder, `nw_steps_rekordbox_folder`; no verified folder is
+no answer, never paths.rekordbox: CW1) on a CORE_WORK_FACT worker, at start, on `activated`, on
+`check_request` and when an action ends. `r1_gen` drops stale answers; no answer is R1_OK. On
+main, a changed answer refreshes (the light, F_WIN_R1_LINE, Put Back) and, with the tabs shown,
+checks the Prepare tab again quietly (CW2); after an action Put Back stays off until the next
+answer (`r1_after_action`, CW3); a refresh never asks, so there is no loop. view_busy_on turns
+Put Back off. Tests: flows_win_test.c `t_win_r1`, view_test `t_win_r1_prepare`.
+**R1's "Don't Ask Again for This Version"** (N10, review WCM3): `win_r1_fields(model, state,
+dismissed, action_running)` shows it with Put Back while FACT_R1_DISMISSED isn't set, enabled as
+Put Back (view_busy_on turns it off too). The click starts `win_r1_dismiss_flow` (flows_win.c): no
+question, one CORE_STEP_WIN_R1_DISMISS, its log line, then `view_r1_check` again, whose answer
+hides the button (a moved FACT_R1_DISMISSED refreshes once, with no Prepare check). The DLL's
+step and its FACT_R1_DISMISSED read go through win/c/dismissed.c, the watcher's writer too.
+Tests: flows_win_test.c `t_win_r1_dismiss`, win_front.c `t_r1_fields`, watch_test `test_dismissed`.
 
 ## 10. M4, the view model (wave 3, `w4/core-viewmodel`): API additions and decisions
 
@@ -920,8 +960,10 @@ lib's Mac archive), so the Mac objects are unchanged (`make mac-unchanged`).
   exported. Unverified on Windows until the VM run.
   `w6/win-critical` appends `core_win_critical_running` and `core_win_critical_wait(ms)`: win/c/shell.c's
   CriticalWork, one per process (`critical_process`), which the DLL now links; the gate checks the
-  seven. The elevated worker's run counts in it (native_admin.c, from its first pipe line to the
-  elevation's end). The same branch makes UPDATE_SWAP (update_step_swap with the shell's quit,
+  seven. The elevated worker's run counts in it (native_admin.c, from the app's read of its first
+  pipe line to the elevation's end). The worker can open its root and clean leftovers before
+  that read. Both are safe to stop and the next run cleans leftovers again. The same branch
+  makes UPDATE_SWAP (update_step_swap with the shell's quit,
   core_win_set_quit; no quit registered: 3, nothing started; its download's progress as DOWNLOAD's)
   and UPDATE_RESULT (update_result_take: FACT_STEP_FLAG, FACT_STEP_TEXT the "failed <key>" line,
   said once) native.
@@ -933,11 +975,17 @@ lib's Mac archive), so the Mac objects are unchanged (`make mac-unchanged`).
   MC5), and MODEL_COPY and MODEL_RESTORE, which count in CriticalWork for the copy through the
   rename only (models.c's critical_try_begin, models.critical NULL being the process's; the save
   and the prompts stay outside, as Models.swift's critical.run: MC3/MC4), answer MODELS_STOPPED
-  (1, no code) with nothing changed. A step already running, or the worker already past its
+  (1, no code) with rekordbox's model folder untouched. The install may already have saved the
+  original in the support folder. A step already running, or the worker already past its
   prompt, is still waited for (review WC1/WC2, "must land with models"). Follow-up (MC5, shared
   flows.c and core.h, so it touches mac-unchanged): a quiet stop for a refused MODEL_COPY or
   MODEL_RESTORE (today a refused restore offers Remove Anyway, which can't show while quitting
   and counts as Cancel: nothing is deleted).
+  `w6/audit-fixes` appends `core_win_token_check()` (the gate checks it; review a-a4-F5):
+  lifecycle_win.c's `life_token_check`, CORE_WIN_TOKEN_* asserted as LIFE_TOKEN_*. The shell asks it
+  first on every start (StartSequence.Run, before update_at_start and the one-copy mutex; under a
+  READY --swap among the checks, so a refusal is a failed swap): only OK starts, ELEVATED says
+  T_START_ROOT, UAC_OFF T_WIN_START_UAC_OFF, SERVICE and UNKNOWN T_CANT_OPEN (app.md §5.9, I35).
 - **BLOCKED on Windows (additive, `w5/core-native-steps-2`).** facts.def appends one Windows row,
   `FACT_ORT_LISTED` (BLOCKED "cache"'s, and the cheap sheet's for the view): Pioneer's
   onnxruntime.dll's sha256 is in the verified payload's `windows.compatible.ort_sha256`. The core
@@ -1026,29 +1074,30 @@ lib's Mac archive), so the Mac objects are unchanged (`make mac-unchanged`).
   none for a cancelled confirmation, none once the mark is reset to NULL. tests/mac/shell-test.swift:
   Help > Create Report... gives exactly one `trigger.actionEnd` through the shell.
 
-## 13. The first release's menu rows (`w6/win-prepare-menus`): config addition
+## 13. Windows Status and Prepare menu rows (`w6/win-prepare-menus`)
 
 - **`"prepare_tabs"` in the start config** (additive: a new optional key, CORE_WIN_POLICY only,
   with `"os":"win"` only; the Mac build doesn't know it and a Windows core refuses it with
-  `"os":"mac"`). A boolean: true when the shell shows the Status and Prepare tabs (the Prepare
-  release, a TEST build's prepare scenarios). Absent or false (the first release, app.md §4.5,
-  I10, I86): `core_menu_state` answers `CORE_MENU_HIDDEN` and not enabled for View > Status,
+  `"os":"mac"`). A boolean: true when the shell shows the Status and Prepare tabs (Windows 1.5.0
+  and a TEST build's prepare scenarios). Absent or false (a Manage-only host, app.md §4.5):
+  `core_menu_state` answers `CORE_MENU_HIDDEN` and disables View > Status,
   View > Prepare, the Prepare menu and every row under it, so their shortcuts (Ctrl+1, Ctrl+2,
   Ctrl+R, Ctrl+.) and `{"ev":"menu"}` events do nothing ("a menu item that is off is ignored").
-  The default is the safe one: a shell that doesn't send the key gets the first release's menus.
+  A host that omits the field gets the Manage-only menus.
 - **The rest of the way in (PM2, hardening).** One rule, `view_tabs_hidden(c)`, also keeps the
   core out of the hidden tabs by every other path: `{"ev":"tab"}` to Status or Prepare is ignored
   (logged), the hidden tabs' clicks (`tab_status`, `tab_prepare`, `prepare_playlist`,
   `check_again`, `pause`, `stop`) are off, and the start tab is Manage even with something
-  installed. The first-release shell sends none of these; with `"prepare_tabs":true` and on the
-  Mac nothing changes.
+  installed. The 1.5.0 release shell sends `"prepare_tabs":true`, and these routes work as they
+  do on Mac.
 - **Mac-neutral by construction.** The field (`core.prepare_tabs`), menu_facts' `tabs_hidden`,
   the config key and the rule in `menu_rule` are all under `#ifdef CORE_WIN_POLICY`, which lib's
   Mac archive never defines; `make mac-unchanged` checks it.
 - **Tests.** view_test `t_win_prepare_tabs`: each row's state with the key absent, false and true,
   and with the Mac's config in the same build; the menu events tab_prepare and tab_status move
   F_TAB only when shown; the refused forms (with "os":"mac", not a boolean). unit.c: the Mac build
-  refuses the key. ShellTests `PrepareTabsMenus`: Host.WithPrepareTabs's config through the core.
+  refuses the key. ShellTests `ReleasePrepareTabsMenus` sends CoreConfig.Build's release config
+  through the core.
 
 ## 14. Windows' unchecked ORT (`w6/host-facts-hf4-hf7`, HF7): additions
 
@@ -1089,7 +1138,7 @@ lib's Mac archive), so the Mac objects are unchanged (`make mac-unchanged`).
   them; the Mac's texts are unchanged.
 - A connected drive with neither a label nor a letter (folder-mounted, or its letter removed)
   also gives "". Its connected-only texts (Uninstall All, Clear, deleting, Settings' location
-  row, the install note) have no nameless form yet: they are added before LIVE=1 (review NT1-NT5).
+  row, the install note) use the additional nameless forms described in §17 (review NT1-NT5).
 - Tests: pure.c (every row's slots), view_test `t_win_nameless_light` (each light and the paused
   tip), flows_win (the not-connected flow texts): no `""` in the output.
 
@@ -1133,3 +1182,21 @@ lib's Mac archive), so the Mac objects are unchanged (`make mac-unchanged`).
 - **Before the dialog**, the after-exit registers the temp folder's RunOnce value
   (`ax_os.clean_at_logon`), so a restart with the dialog still open still cleans it up at the next
   logon; `clean_later` still runs once the dialog is closed.
+
+## 19. Windows' Stems Cache opt-in record (`w6/optin-record`; owner, 2026-11-17): addition
+
+- **facts.def appends `FACT_CACHE_RECORD_OK`** (flag, Windows only, a REFRESH row): Stems Cache
+  is in and the worker's installed-bridge record in the root names the live onnxruntime.dll's
+  sha256 (host_facts.c). No id moves; the Mac's facts are unchanged. Multi-version (1.5.0): the
+  per-installation receipts (win/c/receipt.h) replace that record; the flag means every eligible
+  version is On.
+- **install_body, Windows:** Stems Cache already in rekordbox is turned on with no admin run only
+  when FACT_CACHE_RECORD_OK is set and BRIDGE_SHA equals FACT_PAYLOAD_BRIDGE_SHA (flows_win.c
+  `win_cache_opt_in`, after the payload is read, with the facts read again there so the record and
+  the live DLL's sha256 are read together, review OR4); otherwise the install runs as for a first one.
+  The Mac's rule (the bridge's text alone) is unchanged. Refused on an account that may not run
+  the worker (cache_why not FEAT_OK, e.g. FEAT_NEEDS_ADMIN): "Install failed" with cache_why's
+  line, and with nothing else to install the flow ends before SET_CHOSEN (review OR5).
+- Tests: flows_win `t_win_cache_opt_in` (record and hash, no record, other bridge, unreadable DLL,
+  Reinstall, the record gone during the payload step, a standard account, the Mac's way),
+  host_facts_test (the record's forms).

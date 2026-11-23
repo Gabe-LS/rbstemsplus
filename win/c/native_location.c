@@ -8,9 +8,12 @@
 #include "pure.h"
 
 #include <errno.h>
+#include <inttypes.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #if defined(_WIN32)
 #  define NL_SEP "\\"
@@ -57,61 +60,84 @@ int native_location_line_says(const char *line, size_t n) {
 
 /* ---------------------------------------------------------------- probeLocation */
 
-static int plat_volume_of(const char *dir, char *mount, size_t n, int *system, int *local, int *readonly) {
-    int e = plat_volume_holding(dir, mount, n, system);
-    if (e) return e;
-    plat_volume v;
-    if ((e = plat_volume_info(mount, &v))) return e;
-    *local = v.local;
-    *readonly = v.readonly;
-    return 0;
+void native_location_identity(plat_id id, char out[NL_IDENTITY_MAX]) {
+    snprintf(out, NL_IDENTITY_MAX, "%016" PRIx64 "%016" PRIx64 "%016" PRIx64, id.vol, id.file[0], id.file[1]);
 }
 
-int native_location_probe(const native_location_ops *ops, const char *dir, const char *id) {
+static int saved_volume(const char *dir, char *mount, size_t n, vol_facts *facts) {
+#if defined(_WIN32)
+    size_t g = vol_guid_root(dir);
+    if (!g || g >= n) return ENOENT;
+    snprintf(mount, n, "%.*s", (int)g, dir);
+    return vol_facts_read(mount, 1, facts);
+#else
+    (void)dir; (void)mount; (void)n; (void)facts;
+    return ENOENT;
+#endif
+}
+
+static int folder_probe_error(int e) {
+    return e == EACCES || e == EPERM ? PROBE_NO_PERMISSION : e == ELOOP ? PROBE_LINK : PROBE_FOLDER_MISSING;
+}
+
+static int probe(const native_location_ops *ops, const char *dir, const char *id, char *identity) {
     char mount[PLAT_MOUNT_MAX];
-    int system = 0, local = 1, readonly = 0;
     int win = dir[0] != '/';
-    int e = ops && ops->volume ? ops->volume(ops->ctx, dir, mount, sizeof mount, &system, &local, &readonly)
-                               : plat_volume_of(dir, mount, sizeof mount, &system, &local, &readonly);
-    /* mountHolding: none, or this PC's own volume (the Mac's "/" isn't a location's) */
+    vol_facts facts;
+    int e = win && !vol_guid_root(dir) ? ENOENT
+          : ops && ops->volume ? ops->volume(ops->ctx, dir, mount, sizeof mount, &facts)
+                               : saved_volume(dir, mount, sizeof mount, &facts);
     if (e) return e == ENOENT && ops && ops->remote && ops->remote(ops->ctx, dir) ? PROBE_NETWORK : PROBE_NOT_CONNECTED;
-    if (system) return PROBE_NOT_CONNECTED;
-    if (!local) return PROBE_NETWORK;
-    /* every component from the volume down a real folder, none followed */
-    size_t n = strlen(dir), root = win ? paths_root_win(dir) : 1;
-    if (!root || n > PATHS_LOCATION_MAX) return PROBE_FOLDER_MISSING;
-    char p[PATHS_LOCATION_MAX + 1], sep = win ? '\\' : '/';
-    memcpy(p, dir, n + 1);
-    size_t start = win ? root : (strcmp(mount, "/") ? strlen(mount) : 0) + 1;
-    if (!win && (strncmp(dir, mount, strlen(mount)) || (dir[strlen(mount)] != '/' && strcmp(mount, "/")))) return PROBE_FOLDER_MISSING;
-    for (char *s = start <= n ? p + start : NULL; s && *s;) {
-        char *c = strchr(s, sep);
-        if (c) *c = 0;
-        plat_stat st;
-        int se = plat_stat_path(p, 0, &st);
-        if (se) return se == EACCES || se == EPERM ? PROBE_NO_PERMISSION : PROBE_FOLDER_MISSING;
-        if (st.kind == PLAT_OTHER) return PROBE_LINK;   /* a link, a junction or another reparse point */
-        if (st.kind != PLAT_DIR) return PROBE_FOLDER_MISSING;
-        if (!c) break;
-        *c = sep;
-        s = c + 1;
-    }
-    /* the marker (readMarker: the folder opened without following a link) */
+    int refusal = vol_location_refusal(&facts);
+    if (refusal == VOL_REFUSE_NETWORK) return PROBE_NETWORK;
+    if (refusal != VOL_OK && refusal != VOL_REFUSE_READ_ONLY) return PROBE_NOT_CONNECTED;
+    size_t start = win ? vol_guid_root(dir) : (strcmp(mount, "/") ? strlen(mount) : 0) + 1;
+    size_t n = strlen(dir);
+    if (n <= start || n > PATHS_LOCATION_MAX) return PROBE_FOLDER_MISSING;
+    if (win && !paths_location_ok_win(dir)) return PROBE_FOLDER_MISSING;
+    if (win ? strncasecmp(dir, mount, start)
+            : strncmp(dir, mount, start - 1) || dir[start - 1] != '/') return PROBE_FOLDER_MISSING;
+    /* Open each component under its checked parent and take the identity from the marker's handle. */
     plat_dir d;
-    if ((e = plat_dir_open(dir, &d))) return e == EACCES || e == EPERM ? PROBE_NO_PERMISSION : PROBE_MARKER_MISSING_OR_WRONG;
+    if ((e = plat_dir_open(mount, &d))) return folder_probe_error(e);
+    plat_stat st;
+    if (plat_dir_stat(d, &st)) {
+        plat_dir_close(d);
+        return PROBE_FOLDER_MISSING;
+    }
+    uint64_t volume = st.id.vol;
+    char path[PATHS_LOCATION_MAX + 1];
+    memcpy(path, dir + start, n - start + 1);
+    char *save = NULL;
+    for (char *part = strtok_r(path, NL_SEP, &save); part; part = strtok_r(NULL, NL_SEP, &save)) {
+        plat_dir child;
+        e = plat_dir_open_at(d, part, &child);
+        plat_dir_close(d);
+        if (e) return folder_probe_error(e);
+        d = child;
+        if (plat_dir_stat(d, &st) || st.id.vol != volume) {
+            plat_dir_close(d);
+            return PROBE_FOLDER_MISSING;
+        }
+    }
     const char *why = marker_check_at(d, id);
     if (why) {
         plat_dir_close(d);
         return !strcmp(why, "no-permission") ? PROBE_NO_PERMISSION : PROBE_MARKER_MISSING_OR_WRONG;
     }
-    if (readonly) {
+    if (refusal == VOL_REFUSE_READ_ONLY) {
         plat_dir_close(d);
         return PROBE_READ_ONLY;
     }
     e = plat_dir_writable(d);
     plat_dir_close(d);
     if (e) return e == EROFS ? PROBE_READ_ONLY : PROBE_NO_PERMISSION;
+    if (identity) native_location_identity(st.id, identity);
     return PROBE_AVAILABLE;
+}
+
+int native_location_probe(const native_location_ops *ops, const char *dir, const char *id) {
+    return probe(ops, dir, id, NULL);
 }
 
 /* ---------------------------------------------------------------- measureCheapState */
@@ -178,8 +204,8 @@ static int hint_read(const char *support, nl_hint *h) {
     return h->dir[0] != 0;
 }
 
-/* only on a change; an empty label is written only to clear a label kept for the same folder */
-static void hint_write(const char *support, const char *dir, const char *label) {
+/* Only on a change. An empty label clears a label kept for the same folder. */
+void native_location_remember_label(const char *support, const char *dir, const char *label) {
     nl_hint old;
     int had = hint_read(support, &old) && !strcmp(old.dir, dir);
     if (had ? !strcmp(old.label, label) : !label[0]) return;
@@ -189,72 +215,129 @@ static void hint_write(const char *support, const char *dir, const char *label) 
         (void)win_write_atomic(support, NL_HINT, text, (size_t)k);   /* best effort: the name stays known while plugged in */
 }
 
-void native_location_drive_name(const native_location_env *e, const char *dir, int remember, char *out, size_t n) {
-    if (!n) return;
+static int drive_name(const native_location_env *e, const char *dir, char label[NL_DRIVE_MAX], char *out, size_t n) {
     out[0] = 0;
     const native_location_ops *ops = e->ops;
-    char label[NL_DRIVE_MAX], letter[8];
-    if (ops && ops->volume_name && !ops->volume_name(ops->ctx, dir, label, sizeof label, letter, sizeof letter)) {
+    char letter[8];
+    if (ops && ops->volume_name && !ops->volume_name(ops->ctx, dir, label, NL_DRIVE_MAX, letter, sizeof letter)) {
         const char *name = label[0] ? label : letter;   /* connected: the label, else "E:" (HF5) */
         copy(out, n, name, strlen(name));
-        if (remember && e->support) hint_write(e->support, dir, label);
-        return;
+        return 1;
     }
     /* not there (unplugged): the label kept for that folder, else "" (the texts' nameless form) */
     nl_hint h;
     if (e->support && hint_read(e->support, &h) && !strcmp(h.dir, dir)) copy(out, n, h.label, strlen(h.label));
+    return 0;
 }
 
-int native_location_measure(const native_location_env *e, native_location *out) {
+void native_location_drive_name(const native_location_env *e, const char *dir, int remember, char *out, size_t n) {
+    char label[NL_DRIVE_MAX];
+    if (n && drive_name(e, dir, label, out, n) && remember && e->support)
+        native_location_remember_label(e->support, dir, label);
+}
+
+int native_location_picker_name(const native_location_env *e, const char *dir, char label[NL_DRIVE_MAX], char *out, size_t n) {
+    return drive_name(e, dir, label, out, n);
+}
+
+static void disk_space(const native_location_env *e, const char *folder, uint64_t *avail, uint64_t *total) {
+    char vp[NL_PATH_MAX];
+    volume_path(folder, vp, sizeof vp);
+    *avail = *total = 0;
+    if (e->ops && e->ops->space) e->ops->space(e->ops->ctx, vp, avail, total);
+    else {
+        const char *how;
+        plat_volume v;
+        *avail = plat_free_bytes(vp, 0, &how);
+        *total = plat_volume_info(vp, &v) ? 0 : v.total;
+    }
+}
+
+void native_location_describe(const native_location_env *e, const native_location *l,
+                              const char *dir, const char *id, native_location_details *out) {
     memset(out, 0, sizeof *out);
-    out->probe = -1;
-    out->paused_floor = -1;
-    const native_location_ops *ops = e->ops;
-    if (!e->support || !e->cache_default || !ops || !ops->live_bridge || !ops->rekordbox_running || !ops->process_start || !ops->volume_name)
-        return -1;
-    /* config.ini (readConfigState): no file, this PC; unreadable or bad, its status */
+    if (l && !native_location_matches_config(l, dir, id)) l = NULL;
+    if (dir[0]) {
+        if (l && l->has_status_drive) copy(out->drive, sizeof out->drive, l->status_drive, strlen(l->status_drive));
+        else {
+            native_location_env hint = {.support = e->support};
+            native_location_drive_name(&hint, dir, 0, out->drive, sizeof out->drive);
+        }
+    }
+    if (l && l->has_in_use) {
+        out->has_disk = 1;
+        out->available = l->available;
+        out->total = l->total;
+    }
+}
+
+/* config.ini (readConfigState): no file, this PC; unreadable or bad, its status */
+static int read_config_location(const char *support, cfg_config *c) {
+#ifdef NATIVE_LOCATION_TEST_HOOKS
+    if (native_location_test_config_read) native_location_test_config_read(support);
+#endif
     char path[NL_PATH_MAX];
-    cfg_config c;
-    memset(&c, 0, sizeof c);
+    memset(c, 0, sizeof *c);
     int unreadable = 0;
-    if (!join(path, sizeof path, e->support, "config.ini")) return -1;
+    if (!join(path, sizeof path, support, "config.ini")) return NL_NO_ANSWER;
     char *b = NULL;
     size_t n = 0;
     int r = plat_read_file(path, CFG_MAX, &b, &n);
     if (r && r != ENOENT) unreadable = 1;
-    else if (!r && cfg_parse(b, n, &c, NULL) < 0) unreadable = 1;
+    else if (!r && cfg_parse(b, n, c, NULL) < 0) unreadable = 1;
     free(b);
+    return unreadable ? LOC_CONFIG_UNREADABLE : c->location == 0 ? LOC_THIS_MAC
+                       : c->location < 0 ? LOC_CONFIG_MALFORMED : LOC_CHOSEN;
+}
+
+int native_location_matches_config(const native_location *l, const char *dir, const char *id) {
+    return !strcmp(l->config_dir, dir) && !strcmp(l->config_id, id);
+}
+
+int native_location_checked(const native_location *l) {
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    if (l->kind == LOC_THIS_MAC && l->probe == PROBE_AVAILABLE) return 1;
+#endif
+    return l->kind != LOC_THIS_MAC || l->has_bridge;
+}
+
+static int measure_config(const native_location_env *e, int kind, const cfg_config *config, native_location *out) {
+    memset(out, 0, sizeof *out);
+    out->probe = -1;
+    out->paused_floor = -1;
+    const native_location_ops *ops = e->ops;
+    if (kind == NL_NO_ANSWER || !e->cache_default || !ops || !ops->live_bridge || !ops->rekordbox_running || !ops->process_start || !ops->volume_name)
+        return -1;
+    char path[NL_PATH_MAX];
     int installed = 0, says = 0;
     if (ops->live_bridge(ops->ctx, &installed, &says)) return -1;
     installed = installed != 0;
     says = installed && says;   /* installed && bridgeSaysLocation() */
-    int chosen = !unreadable && c.location == 1;
+    int chosen = kind == LOC_CHOSEN;
     if (chosen) {   /* the probe runs once, and the drive's name with it (state()) */
-        out->probe = native_location_probe(ops, c.dir, c.id);
+        memcpy(out->config_dir, config->dir, sizeof out->config_dir);
+        memcpy(out->config_id, config->id, sizeof out->config_id);
+        out->probe = probe(ops, config->dir, config->id, out->identity);
         /* the label is remembered only once the marker confirmed the folder (review NR4) */
-        native_location_drive_name(e, c.dir, out->probe == PROBE_AVAILABLE || out->probe == PROBE_READ_ONLY, out->status_drive,
+        native_location_drive_name(e, config->dir, out->probe == PROBE_AVAILABLE || out->probe == PROBE_READ_ONLY, out->status_drive,
                                    sizeof out->status_drive);
         out->has_status_drive = 1;
     }
     /* locationStatus */
-    if (unreadable) out->kind = LOC_CONFIG_UNREADABLE;
-    else if (c.location == 0) out->kind = LOC_THIS_MAC;
-    else if (c.location < 0) out->kind = LOC_CONFIG_MALFORMED;
-    else if (installed && !says) out->kind = LOC_BRIDGE_TOO_OLD;
-    else out->kind = LOC_CHOSEN;
+    out->kind = chosen && installed && !says ? LOC_BRIDGE_TOO_OLD : kind;
     /* rekordbox and the bridge's state for it, for the location config.ini names now */
     int running = ops->rekordbox_running(ops->ctx);
     if (running < 0) return -1;
     out->rekordbox_running = running;
     if (running && join(path, sizeof path, e->support, "Logs" NL_SEP "bridge-state")) {
-        b = NULL;
-        n = 0;
+        char *b = NULL;
+        size_t n = 0;
         if (!plat_read_file(path, 8192, &b, &n)) {
             arena a = {0};
             bridge_state bs;
             int64_t started = -1;   /* review NL3: no such process (-1) is never live, whatever start= says */
             if (bridge_state_parse(&a, b, n, &bs) == 1 && (started = ops->process_start(ops->ctx, bs.pid)) >= 0
-                && bridge_state_live(&bs, chosen ? c.dir : "", started)) {
+                && bridge_state_live(&bs, chosen ? config->dir : "", started)) {
                 out->has_bridge = 1;
                 copy(out->bridge_state, sizeof out->bridge_state, bs.state.s, bs.state.n);
                 copy(out->bridge_reason, sizeof out->bridge_reason, bs.reason.s, bs.reason.n);
@@ -270,55 +353,292 @@ int native_location_measure(const native_location_env *e, native_location *out) 
         free(b);
     }
     /* folderInUse and its floor (cachePausedFloor on the folder's disk) */
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
+    if (out->kind == LOC_THIS_MAC && !out->has_bridge) {
+        if (!ops->pc_cache_probe) return -1;
+        int r = ops->pc_cache_probe(e->support, e->cache_default);
+        out->probe = !r || r == ENOENT ? PROBE_AVAILABLE : PROBE_MARKER_MISSING_OR_WRONG;
+        if (out->probe != PROBE_AVAILABLE) return 0;
+    }
+#endif
     const char *in_use = out->kind == LOC_THIS_MAC || out->kind == LOC_BRIDGE_TOO_OLD ? e->cache_default
-                       : out->kind == LOC_CHOSEN && out->probe == PROBE_AVAILABLE ? c.dir
+                       : out->kind == LOC_CHOSEN && out->probe == PROBE_AVAILABLE ? config->dir
                                                                                   : NULL;
     if (in_use) {
         copy(out->in_use, sizeof out->in_use, in_use, strlen(in_use));
         out->has_in_use = 1;
-        char vp[NL_PATH_MAX];
-        volume_path(in_use, vp, sizeof vp);
-        /* review NL6: the bridge's measure, so the floor is where the bridge pauses: free space from
-         * plat_free_bytes (0 when it can't be read, on which the bridge pauses too), the total 0 when
-         * unknown (a SUBST or mapped drive has no volume info): the 50 GB floor then */
-        uint64_t avail = 0, total = 0;
-        if (ops->space) ops->space(ops->ctx, vp, &avail, &total);
-        else {
-            const char *how;
-            plat_volume v;
-            avail = plat_free_bytes(vp, 0, &how);
-            total = plat_volume_info(vp, &v) ? 0 : v.total;
-        }
+        /* The bridge pauses on unknown free space (0) and uses the 50 GB floor
+         * for an unknown total. Keep the inputs for Create Report (review N3R9). */
+        disk_space(e, in_use, &out->available, &out->total);
         int64_t floor;
-        if (state_paused_floor((int64_t)avail, (int64_t)total, &floor)) out->paused_floor = floor;
+        if (state_paused_floor((int64_t)out->available, (int64_t)out->total, &floor)) out->paused_floor = floor;
     }
     return 0;
 }
 
+int native_location_measure(const native_location_env *e, native_location *out) {
+    cfg_config config;
+    int kind = e->support ? read_config_location(e->support, &config) : NL_NO_ANSWER;
+    return measure_config(e, kind, &config, out);
+}
+
+/* A timed-out read owns only its copied inputs and result. Keep a stuck drive from
+ * accumulating queued checks on retries, and leave a second worker for another drive. */
+struct native_location_io {
+    plat_fn check;
+    void (*commit)(native_location_io *, void *);
+    uint64_t deadline;
+    int slot, kind, done, abandoned, mutating, replacing, replaced;
+    uint64_t finished;
+    char path[NL_PATH_MAX];   /* immutable even while check writes its result */
+    max_align_t data[];
+};
+
+static plat_mutex choice_lock = PLAT_MUTEX_INIT;
+static plat_cond choice_done;
+/* Drive jobs and support-folder jobs each have NL_MAX_JOBS workers. */
+static plat_queue *choice_queues[2 * NL_MAX_JOBS];
+static native_location_io *choice_active[2 * NL_MAX_JOBS];
+static int choice_initialized;
+
+static void choice_job_run(void *ctx) {
+    native_location_io *j = ctx;
+    if (plat_now_mono_ns() < j->deadline) {
+        if (j->commit) j->commit(j, j->data);
+        else j->check(j->data);
+    }
+    plat_mutex_lock(&choice_lock);
+    j->done = 1;
+    j->finished = plat_now_mono_ns();
+    choice_active[j->slot] = NULL;
+    int abandoned = j->abandoned;
+    plat_cond_broadcast(&choice_done);
+    plat_mutex_unlock(&choice_lock);
+    if (abandoned) free(j);
+}
+
+static int wait_io(plat_fn check, void (*commit)(native_location_io *, void *), void *data, size_t size,
+                   uint64_t deadline, int kind, const char *path, int local, int concurrent, int *mutating, int *replaced) {
+    if (plat_now_mono_ns() >= deadline) return NL_TIMEOUT;
+    size_t path_len = strlen(path);
+    if (path_len >= NL_PATH_MAX) return NL_NO_ANSWER;
+    plat_mutex_lock(&choice_lock);
+    if (!choice_initialized) {
+        plat_cond_init(&choice_done);
+        choice_initialized = 1;
+    }
+    int slot = -1;
+    for (int i = 0; i < 2 * NL_MAX_JOBS; i++) {
+        int same_pool = (i >= NL_MAX_JOBS) == local;
+        native_location_io *active = choice_active[i];
+        if (!active) {
+            if (same_pool && slot < 0) slot = i;
+            continue;
+        }
+        if ((!same_pool && !commit) || active->check != check || active->commit != commit ||
+            active->kind != kind || strcmp(active->path, path)) continue;
+        int expired = plat_now_mono_ns() >= active->deadline;
+        if (concurrent && !expired) continue;
+        /* Use This PC can pass an expired drive commit once it can no longer replace config.ini. */
+        if (!same_pool && local && expired && !active->replacing) continue;
+        plat_mutex_unlock(&choice_lock);
+        return NL_TIMEOUT;
+    }
+    if (slot < 0) {
+        plat_mutex_unlock(&choice_lock);
+        return NL_BUSY;
+    }
+    if (!choice_queues[slot]) choice_queues[slot] = plat_queue_new("rbsp.core.location-choice", PLAT_WORK_DEFAULT);
+    native_location_io *j = choice_queues[slot] ? malloc(sizeof *j + size) : NULL;
+    if (!j) {
+        plat_mutex_unlock(&choice_lock);
+        return NL_NO_ANSWER;
+    }
+    *j = (native_location_io){.check = check, .commit = commit, .deadline = deadline, .slot = slot, .kind = kind};
+    memcpy(j->path, path, path_len + 1);
+    memcpy(j->data, data, size);
+    if (plat_async(choice_queues[slot], choice_job_run, j)) {
+        plat_mutex_unlock(&choice_lock);
+        free(j);
+        return NL_NO_ANSWER;
+    }
+    choice_active[slot] = j;
+    while (!j->done) {
+        uint64_t now = plat_now_mono_ns();
+        if (j->replacing) plat_cond_wait(&choice_done, &choice_lock);
+        else if (now >= deadline) break;
+        else plat_cond_wait_ns(&choice_done, &choice_lock, deadline - now);
+    }
+    int done = j->done;
+    int rc = done && j->finished < deadline ? 0 : NL_TIMEOUT;
+    if (!rc) memcpy(data, j->data, size);
+    if (mutating) *mutating = j->mutating;
+    if (replaced) *replaced = j->replaced;
+    j->abandoned = !done;
+    plat_mutex_unlock(&choice_lock);
+    if (done) free(j);
+    return rc;
+}
+
+int native_choice_read_keyed(plat_fn check, void *data, size_t size, uint64_t deadline, int kind, const char *path) {
+    return wait_io(check, NULL, data, size, deadline, kind, path, 0, 0, NULL, NULL);
+}
+
+int native_support_read_bounded(plat_fn check, void *data, size_t size, uint64_t deadline, const char *path) {
+    return wait_io(check, NULL, data, size, deadline, 0, path, 1, 0, NULL, NULL);
+}
+
+int native_location_commit_wait(void (*commit)(native_location_io *, void *), void *data, size_t size,
+                                uint64_t deadline, const char *support, int local, int *mutating, int *replaced) {
+    return wait_io(NULL, commit, data, size, deadline, 0, support, local, 0, mutating, replaced);
+}
+
+int native_location_begin_mutation(native_location_io *io, int replace) {
+    plat_mutex_lock(&choice_lock);
+    int allowed = plat_now_mono_ns() < io->deadline;
+    if (allowed) {
+        io->mutating = 1;
+        io->replacing = replace;
+    }
+    plat_mutex_unlock(&choice_lock);
+    return allowed;
+}
+
+int native_location_io_expired(const native_location_io *io) {
+    return io && plat_now_mono_ns() >= io->deadline;
+}
+
+void native_location_end_replace(native_location_io *io, int replaced) {
+    plat_mutex_lock(&choice_lock);
+    io->replaced = replaced;
+    io->replacing = 0;
+    plat_cond_broadcast(&choice_done);
+    plat_mutex_unlock(&choice_lock);
+}
+
+typedef struct {
+    char support[NL_PATH_MAX];
+    int kind;
+    cfg_config config;
+} location_config_read;
+
+static void run_config_read(void *ctx) {
+    location_config_read *read = ctx;
+    read->kind = read_config_location(read->support, &read->config);
+}
+
+#ifdef NATIVE_LOCATION_TEST_HOOKS
+int native_location_test_commit_pending(const char *support) {
+    int pending = 0;
+    plat_mutex_lock(&choice_lock);
+    for (int i = 0; i < 2 * NL_MAX_JOBS; i++) {
+        const native_location_io *j = choice_active[i];
+        if (j && j->commit && !strcmp(j->path, support)) pending = 1;
+    }
+    plat_mutex_unlock(&choice_lock);
+    return pending;
+}
+#endif
+
+static int bounded_config_read(const char *support, uint64_t end, cfg_config *config) {
+    location_config_read read;
+    if (snprintf(read.support, sizeof read.support, "%s", support) >= (int)sizeof read.support) return NL_NO_ANSWER;
+    int rc = wait_io(run_config_read, NULL, &read, sizeof read, end, 0, support, 1, 1, NULL, NULL);
+    if (rc) return rc;
+    *config = read.config;
+    return read.kind;
+}
+
 /* ---------------------------------------------------------------- the worker */
 
-/* one measure, owned by its caller while it waits and by the queue's job after (under r->lock) */
-typedef struct {
+/* The queue owns a job until it finishes; each caller holds it while it waits (under r->lock). */
+typedef struct nl_job {
     native_location_runner *r;
     native_location_ops ops;
     native_location_env env;
+    cfg_config config;
     native_location out;
-    int rc, finished, waiting;
+    uint64_t generation;
+    int slot, kind, rc, finished, waiters;
     char strings[];   /* support, then cache_default */
 } nl_job;
 
 static void nl_job_run(void *ctx) {
     nl_job *j = ctx;
     native_location_runner *r = j->r;
-    int rc = native_location_measure(&j->env, &j->out);
+    int rc = measure_config(&j->env, j->kind, &j->config, &j->out);
     plat_mutex_lock(&r->lock);
     j->rc = rc;
     j->finished = 1;
-    r->busy = 0;
-    int waiting = j->waiting;
-    if (waiting) plat_cond_broadcast(&r->done);
+    r->jobs[j->slot] = NULL;
+    int waiters = j->waiters;
+    if (waiters) plat_cond_broadcast(&r->done);
     plat_mutex_unlock(&r->lock);
-    if (!waiting) free(j);   /* its caller stopped waiting: the answer is dropped */
+    if (!waiters) free(j);
+}
+
+static int nl_same_target(int kind, const char *dir, const char *id, int other_kind, const cfg_config *other) {
+    return kind == other_kind && (kind != LOC_CHOSEN || (!strcmp(dir, other->dir) && !strcmp(id, other->id)));
+}
+
+/* Under r->lock, advance only when the location keys change, even if every slot is busy. */
+static void nl_observe_config(native_location_runner *r, int kind, const cfg_config *config) {
+    if (!r->generation) plat_cond_init(&r->done);
+    else if (nl_same_target(r->config_kind, r->config_dir, r->config_id, kind, config)) return;
+    r->generation++;
+    r->config_kind = kind;
+    if (kind == LOC_CHOSEN) {
+        memcpy(r->config_dir, config->dir, sizeof r->config_dir);
+        memcpy(r->config_id, config->id, sizeof r->config_id);
+    }
+}
+
+/* Read the local config without holding the runner lock. If another call observed a change
+ * meanwhile, read again before selecting a generation. Success returns with the lock held. */
+static int nl_lock_config(native_location_runner *r, const char *support, uint64_t end, cfg_config *config) {
+    plat_mutex_lock(&r->lock);
+    for (;;) {
+        uint64_t generation = r->generation;
+        plat_mutex_unlock(&r->lock);
+        int kind = bounded_config_read(support, end, config);
+        plat_mutex_lock(&r->lock);
+        if (kind < 0) {
+            plat_mutex_unlock(&r->lock);
+            return kind;
+        }
+        if (generation == r->generation) return kind;
+        if (plat_now_mono_ns() >= end) break;
+    }
+    plat_mutex_unlock(&r->lock);
+    return NL_NO_ANSWER;
+}
+
+/* Under r->lock, use a separate serial queue per slot so a hung job cannot block another slot. */
+static nl_job *nl_job_start(native_location_runner *r, int slot, const native_location_env *e, int kind, const cfg_config *config) {
+    if (!r->queues[slot]) {
+        r->queues[slot] = plat_queue_new("rbsp.core.location", PLAT_WORK_DEFAULT);
+        if (!r->queues[slot]) return NULL;
+    }
+    size_t ns = strlen(e->support) + 1, nc = strlen(e->cache_default) + 1;
+    nl_job *j = malloc(sizeof *j + ns + nc);
+    if (!j) return NULL;
+    memset(j, 0, sizeof *j);
+    memcpy(j->strings, e->support, ns);
+    memcpy(j->strings + ns, e->cache_default, nc);
+    j->r = r;
+    j->ops = *e->ops;
+    j->env.support = j->strings;
+    j->env.cache_default = j->strings + ns;
+    j->env.ops = &j->ops;
+    j->slot = slot;
+    j->kind = kind;
+    j->config = *config;
+    j->generation = r->generation;
+    if (plat_async(r->queues[slot], nl_job_run, j)) {
+        free(j);
+        return NULL;
+    }
+    return r->jobs[slot] = j;
 }
 
 int native_location_measure_bounded(native_location_runner *r, const native_location_env *e, const plat_thread_id *ui, uint64_t wait_ns,
@@ -328,70 +648,105 @@ int native_location_measure_bounded(native_location_runner *r, const native_loca
     out->paused_floor = -1;
     if (ui && plat_thread_equal(plat_thread_self(), *ui)) return NL_ON_UI;   /* never a volume query on the UI thread */
     if (!e->support || !e->cache_default || !e->ops) return NL_NO_ANSWER;
-    size_t ns = strlen(e->support) + 1, nc = strlen(e->cache_default) + 1;
-    nl_job *j = malloc(sizeof *j + ns + nc);
-    if (!j) return NL_NO_ANSWER;
-    memset(j, 0, sizeof *j);
-    memcpy(j->strings, e->support, ns);
-    memcpy(j->strings + ns, e->cache_default, nc);
-    j->r = r;
-    j->ops = *e->ops;
-    j->env.support = j->strings;
-    j->env.cache_default = j->strings + ns;
-    j->env.ops = &j->ops;
-    j->waiting = 1;
-    plat_mutex_lock(&r->lock);
-    if (!r->ready && (r->q = plat_queue_new("rbsp.core.location", PLAT_WORK_DEFAULT))) {
-        plat_cond_init(&r->done);
-        r->ready = 1;
+    uint64_t now = plat_now_mono_ns(), end = wait_ns > UINT64_MAX - now ? UINT64_MAX : now + wait_ns;
+    cfg_config config;
+    uint64_t generation = 0;
+    int kind;
+retry:
+    kind = nl_lock_config(r, e->support, end, &config);
+    if (kind < 0) return kind;
+    nl_job *j = NULL;
+    int slot = -1;
+    for (int i = 0; i < NL_MAX_JOBS; i++) {
+        nl_job *job = r->jobs[i];
+        if (!job) {
+            if (slot < 0) slot = i;
+        } else if (strcmp(e->support, job->env.support) || strcmp(e->cache_default, job->env.cache_default)) {
+            plat_mutex_unlock(&r->lock);
+            return NL_BUSY;
+        } else if (nl_same_target(job->kind, job->config.dir, job->config.id, kind, &config)) {
+            j = job;
+        }
     }
-    int busy = r->busy;
-    if (r->ready && !busy) r->busy = 1;
-    int ready = r->ready;
-    plat_mutex_unlock(&r->lock);
-    if (!ready || busy) {
-        free(j);
-        return busy ? NL_BUSY : NL_NO_ANSWER;
-    }
-    if (plat_async(r->q, nl_job_run, j)) {
-        plat_mutex_lock(&r->lock);
-        r->busy = 0;
+    nl_observe_config(r, kind, &config);
+    if (generation && generation != r->generation) {
         plat_mutex_unlock(&r->lock);
-        free(j);
         return NL_NO_ANSWER;
     }
-    plat_mutex_lock(&r->lock);
+    generation = r->generation;
+    if (!j) {
+        if (slot < 0) {
+            plat_mutex_unlock(&r->lock);
+            return NL_BUSY;
+        }
+        j = nl_job_start(r, slot, e, kind, &config);
+    }
+    if (!j) {
+        plat_mutex_unlock(&r->lock);
+        return NL_NO_ANSWER;
+    }
+    /* A waiter can wait for a matching target's slot, but only its own generation can answer. */
+    j->waiters++;
     /* review NW2: a wakeup that isn't the job's end waits only for what is left of wait_ns */
-    uint64_t now = plat_now_mono_ns(), end = wait_ns > UINT64_MAX - now ? UINT64_MAX : now + wait_ns;
+    now = plat_now_mono_ns();
     while (!j->finished && now < end) {
         if (plat_cond_wait_ns(&r->done, &r->lock, end - now) == ETIMEDOUT) break;
         now = plat_now_mono_ns();
     }
-    int finished = j->finished;
-    j->waiting = 0;   /* not finished: the job frees itself when it is */
+    int stale = generation != j->generation;
+    int retry_stale = j->finished && stale && generation == r->generation;
+    int rc = !j->finished ? NL_TIMEOUT : j->rc || stale || generation != r->generation ? NL_NO_ANSWER : 0;
+    native_location l;
+    if (!rc) memcpy(&l, &j->out, sizeof l);
+    int last = --j->waiters == 0 && j->finished;
     plat_mutex_unlock(&r->lock);
-    if (!finished) return NL_TIMEOUT;
-    int rc = j->rc;
-    if (!rc) memcpy(out, &j->out, sizeof *out);
-    free(j);
-    return rc ? NL_NO_ANSWER : 0;
+    if (last) free(j);
+    if (retry_stale && plat_now_mono_ns() < end) goto retry;
+    if (rc) return rc;
+    /* review N3R18: a probe that started before a config change is for the old folder or marker */
+    int current = bounded_config_read(e->support, end, &config);
+    if (current < 0) return current;
+    plat_mutex_lock(&r->lock);
+    if (generation == r->generation) nl_observe_config(r, current, &config);
+    if (current != kind || generation != r->generation || (kind == LOC_CHOSEN && !native_location_matches_config(&l, config.dir, config.id)))
+        rc = NL_NO_ANSWER;
+    else memcpy(out, &l, sizeof *out);
+    plat_mutex_unlock(&r->lock);
+    return rc;
 }
 
-/* CORE_SLOW_LOCATION (review HF5): off until the VM rounds (the NL rulings' wintest rows): until
- * then the answer is -1 (core.h: the core then keeps no memo of its own) */
-#define NATIVE_LOCATION_LIVE 0
+/* Windows 1.5.0 enables the location choice and the bounded CORE_SLOW_LOCATION measure. */
+#define NATIVE_LOCATION_LIVE 1
 #ifdef NATIVE_LOCATION_TEST_HOOKS
-int native_location_test_live, native_location_test_no_memory;
+int native_location_test_off, native_location_test_no_memory;
+void (*native_location_test_config_read)(const char *support);
+int native_location_test_waiters(native_location_runner *r) {
+    plat_mutex_lock(&r->lock);
+    int waiters = 0;
+    for (int i = 0; i < NL_MAX_JOBS; i++) {
+        nl_job *job = r->jobs[i];
+        if (job && nl_same_target(r->config_kind, r->config_dir, r->config_id, job->kind, &job->config))
+            waiters += job->waiters;
+    }
+    plat_mutex_unlock(&r->lock);
+    return waiters;
+}
 #endif
+
+int native_location_live(void) {
+#ifdef NATIVE_LOCATION_TEST_HOOKS
+    if (native_location_test_off) return 0;
+#endif
+    return NATIVE_LOCATION_LIVE;
+}
 
 int32_t native_location_slow_fact(native_location_runner *r, const native_location_env *e, const plat_thread_id *ui, uint64_t wait_ns,
                                   int (*write)(void *ctx, const native_location *l), void (*log)(void *ctx, const char *line), void *ctx) {
-    int live = NATIVE_LOCATION_LIVE, no_memory = 0;
+    int no_memory = 0;
 #ifdef NATIVE_LOCATION_TEST_HOOKS
-    live |= native_location_test_live;
     no_memory = native_location_test_no_memory;
 #endif
-    if (!live || !e->support || !e->cache_default) return -1;
+    if (!native_location_live() || !e->support || !e->cache_default) return -1;
     native_location *l = no_memory ? NULL : malloc(sizeof *l);
     if (!l) return CORE_SLOW_NOT_NOW;
     int rc = native_location_measure_bounded(r, e, ui, wait_ns, l);
@@ -399,7 +754,11 @@ int32_t native_location_slow_fact(native_location_runner *r, const native_locati
     else if (rc == NL_TIMEOUT) log(ctx, "location: the measure took over 15 s: no answer");
     else if (rc == NL_BUSY) log(ctx, "location: the measure before is still running: no answer");
     else if (rc == NL_NO_ANSWER) log(ctx, "location: the measure had no answer");
+#if defined(_WIN32) || defined(RBSTEMS_WIN_CACHE_TEST)
     if (!rc) rc = write(ctx, l);
+#else
+    if (!rc) rc = native_location_checked(l) ? write(ctx, l) : NL_NO_ANSWER;
+#endif
     free(l);
     if (rc == NL_TIMEOUT || rc == NL_BUSY || rc == NL_NO_ANSWER) return CORE_SLOW_NOT_NOW;
     return rc ? -1 : 0;

@@ -1,4 +1,5 @@
-# Part B4 (app.md 5.4's W13a item): Expand-Archive's own traversal guard on 5.1, on a zip made
+# Information since BS2 (bootstrap.ps1 unpacks with its own Expand-RbspZip, whose cases unit-51
+# runs on 5.1). Part B4 (app.md 5.4's W13a item): Expand-Archive's own traversal guard on 5.1, on a zip made
 # here with a "../" entry (bootstrap.ps1's Test-RbspZip refuses such a name before unpacking;
 # this is the guard behind it). Part B5 (information, not a gate): a stored entry whose declared
 # size is smaller than its data, through Expand-Archive, with the bytes it writes recorded.

@@ -133,5 +133,16 @@ FACT(FACT_OUR_MODELS,          str,  all, "ourModel, then savedManifest()'s mode
 FACT(FACT_KEPT_SETS,           str,  all, "keptSets(), one set a line: its name, a tab, its until date as the Status tab shows it (dateOnly; \"\" unknown), a tab, its manifest's file count")
 /* appended (HF7), Windows only, written with CORE_FACTS_REFRESH (not a KEPT row: the parts above are the Mac's) */
 FACT(FACT_LIB_UNCHECKED,       flag, win, "Windows' cheap sheet: BLOCKED \"cache\"'s rules had no answer for a supported rekordbox (the live onnxruntime.dll or ort\\'s copy couldn't be looked at, or the pin had none): Pioneer's ORT not checked, the lib rows unset")
+/* appended (the opt-in rule, owner 2026-11-17), Windows only, written with CORE_FACTS_REFRESH */
+FACT(FACT_CACHE_RECORD_OK,     flag, win, "Windows' cheap sheet: Stems Cache is in (FACT_STEMS_CACHE_PRESENT), the inventory is complete and every eligible version is On: its live onnxruntime.dll is the bridge and its receipt in <Program Files>\\RB Stems Plus\\receipts (written last, after the verify and the load check) binds it: the install finished")
+/* appended (N10), Windows only */
+FACT(FACT_R1_DISMISSED,        flag, win, "CORE_SLOW_R1, with a non-zero FACT_R1_STATE: the version folder's version is in dismissed (\"r1:<version>\": R1's Don't Ask Again for This Version)")
+/* appended (multi-version rekordbox, .orchestration/mv-spec.md §2.4), Windows only. FACT_WIN_RB_ROWS
+ * is a REFRESH row (the cheap sheet); the others are CORE_STEP_WIN_SCOPE's and CORE_STEP_REKORDBOX's */
+FACT(FACT_WIN_RB_ROWS,         str,  win, "Windows' cheap sheet: one line per installed rekordbox the UI shows, newest first: version, state, why, running, r1, r1_dismissed, display_version, tab-separated, each line ending in \\n (state: pure.h WIN_ROW_*; why: WIN_WHY_*; running, r1_dismissed: 0/1; r1: R1_*); \"\" none")
+FACT(FACT_WIN_SCOPE,           str,  win, "CORE_STEP_WIN_SCOPE: the scope token host->admin passes as the worker's --targets (\"*\", or X.Y.Z:<16 hex> items joined by commas); \"\" an empty scope")
+FACT(FACT_WIN_SCOPE_VERSIONS,  str,  win, "CORE_STEP_WIN_SCOPE: the scope's versions (X.Y.Z), one a line, oldest first, for the texts")
+FACT(FACT_WIN_SCOPE_AFFECTED,  str,  win, "CORE_STEP_WIN_SCOPE uninstall and restore: the versions holding our bridge or needing repair, one a line, oldest first")
+FACT(FACT_WIN_RB_OPEN_VERSIONS, str, win, "CORE_STEP_REKORDBOX: the versions (X.Y.Z) whose rekordbox.exe runs, one a line, when every running rekordbox.exe's path is known; \"\" otherwise")
 
 #undef FACT

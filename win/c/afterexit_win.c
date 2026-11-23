@@ -9,6 +9,7 @@
 #include <windows.h>
 
 #include "afterexit.h"
+#include "afterexit_dialog_win.h"
 #include "core.h"   /* core_text: the kept dialog's words */
 #include "lifecycle.h"
 #include "plat.h"
@@ -124,6 +125,7 @@ typedef struct {
     wchar_t self_dir[AX_PATH_MAX];   /* the temp folder this process runs from */
     wchar_t parent[AX_PATH_MAX];     /* its parent, with a trailing '\\': cmd's working folder */
     char name[64];                   /* its name (ax_is_temp_name's, once self_ok said so) */
+    HANDLE lock;                     /* the install lock, while held (w_lock) */
 } win_ax;
 
 /* review UN1: this copy runs from <GetTempPathW>\rbsp-uninstall-<16 hex>, a plain folder: the
@@ -247,22 +249,44 @@ static void w_log(void *ctx, const char *line) {
     OutputDebugStringA("\n");
 }
 
+/* the install lock (AX_INSTALL_LOCK, bootstrap.ps1's [Threading.Mutex]): taken with no wait; an
+ * abandoned one (a bootstrap that was killed) is ours. Mutexes are per thread: ax_run takes and
+ * releases it on this one */
+static int w_lock(void *ctx) {
+    win_ax *w = ctx;
+    HANDLE m = CreateMutexW(NULL, FALSE, L"" AX_INSTALL_LOCK);
+    if (!m) return -1;
+    DWORD r = WaitForSingleObject(m, 0);
+    if (r == WAIT_OBJECT_0 || r == WAIT_ABANDONED) {
+        w->lock = m;
+        return 1;
+    }
+    CloseHandle(m);
+    return r == WAIT_TIMEOUT ? 0 : -1;
+}
+static void w_unlock(void *ctx) {
+    win_ax *w = ctx;
+    if (!w->lock) return;
+    ReleaseMutex(w->lock);
+    CloseHandle(w->lock);
+    w->lock = NULL;
+}
+
 /* the kept dialog (afterexit.h's kept_dialog): a plain MessageBoxW in this copy's session, the
  * user's (the app started it), its words from the core's Windows column; a text that can't be had
  * is logged, never replaced */
-static void w_kept_dialog(void *ctx) {
+static void w_kept_dialog(void *ctx, int scan_unknown) {
     static char msg[1024], app[64];
     static wchar_t wm[1024], wa[64];
     size_t len;
-    if (core_text(CORE_OS_WIN, T_WIN_UNINSTALL_KEPT, NULL, 0, msg, sizeof msg, &len) != CORE_OK
+    core_text_id text = scan_unknown ? T_WIN_UNINSTALL_KEPT_UNKNOWN : T_WIN_UNINSTALL_KEPT;
+    if (core_text(CORE_OS_WIN, text, NULL, 0, msg, sizeof msg, &len) != CORE_OK
         || core_text(CORE_OS_WIN, T_APP_NAME, NULL, 0, app, sizeof app, &len) != CORE_OK || to_wide(msg, wm, 1024) || to_wide(app, wa, 64)) {
         w_log(ctx, "after-exit: the kept dialog's text couldn't be had: not shown");
         return;
     }
-    /* topmost: it opens 60 s or more after the app quit, its starter gone, and the foreground lock
-     * can defeat MB_SETFOREGROUND (it would stay behind Settings) */
-    if (!MessageBoxW(NULL, wm, wa, MB_OK | MB_ICONWARNING | MB_SETFOREGROUND | MB_TOPMOST)) {
-        DWORD e = GetLastError();
+    DWORD e;
+    if (!ax_win_kept_message_box(wm, wa, &e)) {
         char l[96];
         snprintf(l, sizeof l, "after-exit: the kept dialog couldn't be shown (error %lu)", (unsigned long)e);
         w_log(ctx, l);
@@ -285,8 +309,13 @@ CORE_API int32_t CORE_CALL core_win_after_exit(const char *args) {
     wmemcpy(w.parent, w.self_dir, (size_t)(cut - w.self_dir) + 1);
     w.parent[cut - w.self_dir + 1] = 0;
     /* ax_run checks self_ok and home before anything (reviews UN1, UN11) */
+#if defined(__aarch64__)
+    const char *arch = "arm64";
+#else
+    const char *arch = "x64";
+#endif
     ax_os os = {w_self_ok,    w_home,           w_wait_parent, w_stop_watchers, w_running_under, w_remove_tree,
                 w_clean_later, w_remove_run,    w_remove_records, w_now_ms,    w_sleep_ms,      w_log,
-                w_runonce,     w_kept_dialog,   &w};
+                w_runonce,     w_kept_dialog,   &w,               w_lock,      w_unlock,       arch};
     return ax_run(&os, &a);
 }

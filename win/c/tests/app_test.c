@@ -3,15 +3,18 @@
  * plat_mac.c, CriticalWork with real threads, and a seeded fuzz of the text parsers (no crash,
  * and each one's own property), under run.sh's sanitizers. Its own binary, beside winc-test.
  *
- *   winc-app-test SCRATCH [FUZZ_ITERATIONS]     SCRATCH: an empty folder */
+ *   winc-app-test SCRATCH [FUZZ_ITERATIONS [WIN_C_SRC]]     SCRATCH: an empty folder */
 #include "../lifecycle.h"
 #include "core_win.h"   /* the core DLL exports the one-copy answers under its names */
 #include "../report.h"
 #include "../shell.h"
+#include "../unzip.h"
 #include "../stub.h"
 #include "../volumes.h"
 #include "../watch.h"
 
+#include <dirent.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -202,6 +205,27 @@ static void test_external(void) {
 
 /* ------------------------------------------------------------------ volumes: paths and events */
 
+static int display_mounted(const char *guid_path, char *out, size_t n) {
+    return vol_join_mount(guid_path, "E:\\", out, n);
+}
+
+static int display_unmounted(const char *guid_path, char *out, size_t n) {
+    (void)guid_path;
+    (void)out;
+    (void)n;
+    return ENOENT;
+}
+
+/* Lane C (F7): the uninstall shows a mount path if available, or the full saved path */
+static void test_uninstall_path(void) {
+    char dir[256], out[256];
+    snprintf(dir, sizeof dir, "%sMusic\\RB Stems Plus Cache.noindex", G);
+    const char *shown = vol_uninstall_path(dir, display_mounted, out, sizeof out);
+    CHECK(!strcmp(shown, "E:\\Music\\RB Stems Plus Cache.noindex"), "mounted: %s", shown);
+    shown = vol_uninstall_path(dir, display_unmounted, out, sizeof out);
+    CHECK(!strcmp(shown, dir), "unmounted: %s", shown);
+}
+
 static void test_paths(void) {
     char p[256], out[256];
     CHECK(vol_guid_root(G) == VOL_GUID_LEN, "%zu", vol_guid_root(G));
@@ -356,8 +380,7 @@ static void test_size(const char *scratch) {
     snprintf(link, sizeof link, "%s/%s.flac", pre, "0aaa00112233445566778899aabbccddeeff00112233445566778899aabbccdd");
     CHECK(symlink(name, link) == 0, "a link named like an entry");
     spit(name, 70000);
-    int64_t b0b = blocks(name);
-    want += b0b;                                           /* 0b/0b...flac counts */
+    want += blocks(name);                                  /* 0b/0b...flac counts */
     snprintf(p, sizeof p, "%s/0A", model);
     mkdir(p, 0755);
     snprintf(name, sizeof name, "%s/0Acc%s.flac", p, e + 4);   /* (a case-blind volume: the same folder as 0a) */
@@ -376,9 +399,9 @@ static void test_size(const char *scratch) {
     CHECK(vol_entries_size(p) == -1, "a file: can't be read");
     snprintf(link, sizeof link, "%s/linked", scratch);
     CHECK(symlink(top, link) == 0 && vol_entries_size(link) == -1, "a link to the folder: -1");
-    chmod(pre, 0);
-    if (geteuid() != 0) CHECK(vol_entries_size(top) == b0b, "a prefix folder that can't be listed counts nothing: %lld", (long long)vol_entries_size(top));
-    chmod(pre, 0755);
+    CHECK(chmod(pre, 0000) == 0, "make one prefix folder unreadable");
+    if (geteuid() != 0) CHECK(vol_entries_size(top) == -1, "an unreadable prefix makes the size unknown even with readable siblings");
+    CHECK(chmod(pre, 0755) == 0, "restore prefix permissions");
     CHECK(vol_entries_size(top) == want, "again");
 }
 
@@ -559,6 +582,11 @@ static void test_report_pure(void) {
     CHECK(WANTED("<Event><EventData><Data>RBSP-WATCH-ARM64.EXE</Data></EventData></Event>"), "the watcher, case");
     CHECK(WANTED("<Event><EventData><Data>c:\\x\\rbsp-core.dll</Data></EventData></Event>"), "the core DLL");
     CHECK(WANTED("<Event><System><Provider Name=\"rbsp-watch.exe\"/></System></Event>"), "a provider named after our image");
+    CHECK(!WANTED("<EventData><Data>rekordbox.exe.old</Data></EventData>"), "the image's name must end at a boundary");
+    CHECK(!WANTED("<Provider Name='RB Stems Plus.exeHelper'/>"), "a provider with a longer name");
+    CHECK(!WANTED("<EventData><Data>rbsp-core.dllx</Data></EventData>"), "an extension prefix");
+    CHECK(WANTED("<EventData><Data>'rekordbox.exe' crashed</Data></EventData>"), "a quoted image");
+    CHECK(WANTED("<EventData><Data>rbsp-core.dll crashed</Data></EventData>"), "whitespace after the image");
     CHECK(!WANTED("<Event><EventData><Data>myrekordbox.exe</Data><Data>rbsp-.exe</Data><Data>rbsp-x.ex</Data></EventData></Event>"),
           "inside a longer word, no name, no extension");
     CHECK(!WANTED("<Event><System><Provider Name='rekordbox'/></System><EventData><Data>rekordbox</Data></EventData></Event>"),
@@ -896,14 +924,557 @@ static void test_fuzz(long iterations) {
     }
 }
 
+/* ------------------------------------------------------------------ Create Report (report_build.c) */
+
+static int has_sub(const char *s, const char *sub) { return s && strstr(s, sub) != NULL; }
+
+static void test_report_text(void) {
+    char *c = report_cap_bytes("abc", 3);
+    CHECK(c && !strcmp(c, "abc"), "fits: whole");
+    free(c);
+    c = report_cap_bytes("abcdef", 5);
+    CHECK(c && !strcmp(c, "ab\xE2\x80\xA6"), "cut with an ellipsis in 5 bytes: %s", c);
+    free(c);
+    c = report_cap_bytes("\xC3\xA9\xC3\xA9\xC3\xA9", 6);   /* ééé: 6 bytes, fits */
+    CHECK(c && strlen(c) == 6, "6 bytes fit in 6");
+    free(c);
+    c = report_cap_bytes("\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9", 6);
+    CHECK(c && !strcmp(c, "\xC3\xA9\xE2\x80\xA6"), "a code point kept whole: %s", c);
+    free(c);
+
+    static const char A64[] = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    char text[400];
+    snprintf(text, sizeof text, "model %s, commit %.40s, upper %s, long %sff, short %.20s", A64, A64,
+             "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF", A64, A64);
+    char **list = NULL;
+    int n = 0;
+    CHECK(!report_known_checksums(text, strlen(text), &list, &n), "the checksums");
+    CHECK(n == 2 && !strcmp(list[0], A64) && strlen(list[1]) == 40, "64 and 40 hex digits only, lower case (the upper one is the first), each once, never "
+                                                                      "inside a longer run: %d", n);
+    report_strings_free(list, n);
+
+    const char *facts[] = {"RB Stems Plus: 1.5.0 (x64); lights: Demucs v4 green (on)", "Windows: 10.0 build 26100", "line\nwith a break"};
+    char *d = report_issue_details("", facts, 3);
+    CHECK(d && !strcmp(d, "RB Stems Plus: 1.5.0 (x64); lights: Demucs v4 green (on)\nWindows: 10.0 build 26100\nline with a break"),
+          "no problem: the facts one a line: %s", d);
+    free(d);
+    d = report_issue_details("Last problem:\nx", facts, 1);
+    CHECK(d && !strncmp(d, "Last problem:\nx\n\nRB Stems Plus", 30), "the problem, a blank line, the facts: %s", d);
+    free(d);
+
+    char *u = report_issue_url("Problem report: a+b", "1+1 & = ? #");
+    CHECK(u && !strncmp(u, REPORT_ISSUES_URL "?title=Problem%20report%3A%20a%2Bb&body=", 80) && has_sub(u, "1%2B1%20%26%20%3D%20%3F%20%23"),
+          "every byte but the unreserved ones encoded: a + stays a +: %s", u);
+    CHECK(has_sub(u, "%23%23%23%20What%20happened%3F%0A%0A%0A%0A%23%23%23%20Technical%20details%0APlease%20also%20drag%20in"),
+          "the user's text first, then the technical details");
+    free(u);
+    /* the worst case: characters that take 9 bytes in the link each */
+    char wide[6001], big[9000];
+    size_t k = 0;
+    for (int i = 0; i < 1000; i++) k += (size_t)snprintf(wide + k, sizeof wide - k, "\xC3\xA9\xE2\x80\x94");
+    snprintf(big, sizeof big, "Last problem:\n2026-11-18 10:00:00  %s", wide);
+    const char *f4[40];
+    char lines[40][700];
+    for (int i = 0; i < 40; i++) {
+        snprintf(lines[i], sizeof lines[i], "fact %d: %.600s", i, wide);
+        f4[i] = lines[i];
+    }
+    d = report_issue_details(big, f4, 40);
+    u = d ? report_issue_url(wide, d) : NULL;
+    CHECK(u && strlen(u) <= REPORT_URL_MAX, "the worst case link is at most %d bytes: %zu", REPORT_URL_MAX, u ? strlen(u) : 0);
+    CHECK(has_sub(u, "Last%20problem%3A") && has_sub(u, "fact%200%3A") && has_sub(u, "fact%203%3A") && !has_sub(u, "fact%2039%3A"),
+          "the last problem and the first four facts fit; the bottom ones go");
+    free(d);
+    free(u);
+
+    const char *names[] = {"SAMSUNG"};
+    char *m = report_mask_location("D:\\Stems: saving to E:\\Music\\RB Stems Plus\\x.flac (on \"SAMSUNG\"), C:\\Users\\dj\\x and \\\\nas\\share\\y",
+                                   "D:\\Stems", 'C', names, 1);
+    CHECK(m && has_sub(m, "saving to <drive>:\\<path>") && has_sub(m, "C:\\Users\\dj\\x") && has_sub(m, "<stems folder>") && !has_sub(m, "Music")
+              && !has_sub(m, "nas") && !has_sub(m, "SAMSUNG"),
+          "another drive's paths, a share and the drive's name go; the system drive's stays (redact's): %s", m);
+    free(m);
+    m = report_mask_location("\\\\音楽\\share\\x\nD:/x\nC:/Windows", "", 'C', NULL, 0);
+    CHECK(m && !strcmp(m, "\\\\<drive>\\<path>\n<drive>:\\<path>\nC:/Windows"), "a Unicode UNC host and a drive with slash separators: %s", m);
+    free(m);
+
+    CHECK(!strcmp(report_light_colour("0"), "green") && !strcmp(report_light_colour("1"), "yellow") && !strcmp(report_light_colour("2"), "red"),
+          "the lights' colours");
+    char a[32];
+    report_ago(-1, a, sizeof a);
+    CHECK(!strcmp(a, "never"), "never checked");
+    report_ago(600, a, sizeof a);
+    CHECK(!strcmp(a, "10 min ago"), "%s", a);
+    report_ago(5 * 3600, a, sizeof a);
+    CHECK(!strcmp(a, "5 h ago"), "%s", a);
+    report_ago(3 * 86400, a, sizeof a);
+    CHECK(!strcmp(a, "3 days ago"), "%s", a);
+    report_gb(25600000000, a, sizeof a);
+    CHECK(!strcmp(a, "25.6 GB"), "%s", a);
+}
+
+/* a log of (seconds before now, message) lines, as app.log writes them */
+static char *mklog(time_t now, const int *ago, const char *const *msg, int n) {
+    size_t cap = 64;
+    for (int i = 0; i < n; i++) cap += strlen(msg[i]) + 32;
+    char *b = malloc(cap);
+    size_t k = 0;
+    b[0] = 0;
+    for (int i = 0; i < n; i++) {
+        time_t t = now - ago[i];
+        struct tm tm;
+        localtime_r(&t, &tm);
+        k += (size_t)snprintf(b + k, cap - k, "%04d-%02d-%02d %02d:%02d:%02d  %s\n", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min,
+                              tm.tm_sec, msg[i]);
+    }
+    return b;
+}
+static void stamp(time_t t, char out[20]) {
+    struct tm tm;
+    localtime_r(&t, &tm);
+    snprintf(out, 20, "%04d-%02d-%02d %02d:%02d:%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+}
+
+#define LP(app, bridge)                                                                                \
+    do {                                                                                               \
+        free(title);                                                                                   \
+        free(text);                                                                                    \
+        title = text = NULL;                                                                           \
+        CHECK(!report_last_problem(app, strlen(app), bridge, strlen(bridge), lnow, &title, &text), "read"); \
+    } while (0)
+
+static void test_report_problem(void) {
+    time_t now = time(NULL);
+    int64_t lnow = report_local_s(now);
+    char *title = NULL, *text = NULL, *l = NULL, want[600], at[20];
+    LP("", "");
+    CHECK(title && !title[0] && text && !text[0], "no logs: no last problem");
+    {
+        int ago[] = {4 * 3600};
+        const char *m[] = {"download failed: nothing changed"};
+        l = mklog(now, ago, m, 1);
+        LP(l, "");
+        CHECK(!title[0], "a failure 4 hours old is left out");
+        free(l);
+    }
+    {
+        int ago[] = {3600, 3000};
+        const char *m[] = {"download failed: nothing changed", "state: rekordbox 7.2.19"};
+        l = mklog(now, ago, m, 2);
+        LP(l, "");
+        stamp(now - 3600, at);
+        snprintf(want, sizeof want, "Last problem:\n%s  download failed: nothing changed", at);
+        CHECK(!strcmp(title, "download failed: nothing changed") && !strcmp(text, want), "a failure 1 hour old is in, dated: %s", text);
+        free(l);
+    }
+    LP("download failed: nothing changed\n10:00 refused\n", "");
+    CHECK(!title[0], "lines without a date are skipped");
+    {
+        int ago[] = {1000, 990, 900, 890, 800, 790};
+        const char *m[] = {"admin run (install), attempt 1", "  FAILED: Operation not permitted", "admin run (install), attempt 2",
+                           "  FAILED: Operation not permitted", "admin run (install), attempt 3", "  FAILED: Operation not permitted"};
+        l = mklog(now, ago, m, 6);
+        LP(l, "");
+        stamp(now - 990, at);
+        char last[20];
+        stamp(now - 790, last);
+        snprintf(want, sizeof want, "Last problem:\n%s  admin run (install) FAILED: Operation not permitted (3 times, last at %.5s)", at, last + 11);
+        CHECK(!strcmp(title, "admin run (install) failed") && !strcmp(text, want), "three identical failures are one line: %s", text);
+        free(l);
+    }
+    {
+        int ago[] = {1000, 990, 900, 890};
+        const char *m[] = {"admin run (install), attempt 1", "  FAILED: Operation not permitted", "admin run (install), attempt 2", "  ok: installed"};
+        l = mklog(now, ago, m, 4);
+        LP(l, "");
+        CHECK(!title[0], "a failure then a success of the same run: none");
+        free(l);
+        const char *m2[] = {"admin run (install), attempt 1", "  FAILED: Operation not permitted", "admin run (uninstall), attempt 1", "  ok: removed"};
+        l = mklog(now, ago, m2, 4);
+        LP(l, "");
+        CHECK(!strcmp(title, "admin run (install) failed"), "another run's success doesn't hide it");
+        free(l);
+    }
+    {
+        int ago[] = {700, 600};
+        const char *m[] = {"Demucs v4 not installed: the STEMS Engine isn't downloaded", "Demucs v4: installed (0cc50d877629)"};
+        l = mklog(now, ago, m, 2);
+        LP(l, "");
+        CHECK(!title[0], "Demucs v4 not installed, then installed: none");
+        free(l);
+        l = mklog(now, ago, m, 1);
+        LP(l, "");
+        CHECK(!strcmp(title, "Demucs v4 not installed: the STEMS Engine isn't downloaded"), "not installed is a problem");
+        free(l);
+        const char *m2[] = {"Stems Cache not installed: rekordbox 7.3.0 isn't supported", "admin run (install), attempt 1"};
+        l = mklog(now, ago, m2, 1);
+        LP(l, "");
+        CHECK(!strcmp(title, "Stems Cache not installed: rekordbox 7.3.0 isn't supported"), "Stems Cache not installed is one");
+        free(l);
+    }
+    {
+        int ago[] = {500, 400, 300};
+        const char *m[] = {"ERROR no real ONNX Runtime library: rekordbox's analysis will fail", "bridge loaded (real library x)", "hit  abc"};
+        l = mklog(now, ago, m, 2);
+        LP("", l);
+        CHECK(!title[0], "a loading error, then loaded: none");
+        free(l);
+        const char *m2[] = {"ERROR writing C:\\x\\y.flac", "bridge loaded (real library x)", "hit  abc"};
+        l = mklog(now, ago, m2, 3);
+        LP("", l);
+        stamp(now - 500, at);
+        snprintf(want, sizeof want, "Last problem:\nbridge.log:\n%s  ERROR writing", at);
+        CHECK(!strcmp(title, "Stems Cache: writing C:\\x\\y.flac") && !strncmp(text, want, strlen(want)), "another bridge error stays: %s", text);
+        free(l);
+    }
+    {
+        int ago[8];
+        const char *m[8];
+        char buf[8][32];
+        for (int i = 0; i < 8; i++) {
+            ago[i] = 900 - i * 10;
+            snprintf(buf[i], sizeof buf[i], "step %d failed", i);
+            m[i] = buf[i];
+        }
+        l = mklog(now, ago, m, 8);
+        LP(l, "");
+        int lines = 1;
+        for (const char *p = text; *p; p++) lines += *p == '\n';
+        CHECK(lines == 6 && has_sub(text, "step 7 failed") && !has_sub(text, "step 2 failed"), "app.log's newest 5 only (%d lines)", lines);
+        free(l);
+        for (int i = 0; i < 6; i++) {
+            snprintf(buf[i], sizeof buf[i], "ERROR writing %d.flac", i);
+            ago[i] = 600 - i * 10;
+        }
+        l = mklog(now, ago, m, 6);
+        LP("", l);
+        lines = 1;
+        for (const char *p = text; *p; p++) lines += *p == '\n';
+        CHECK(lines == 5 && has_sub(text, "5.flac") && !has_sub(text, "2.flac"), "the bridge's newest 3 only (%d lines)", lines);
+        free(l);
+    }
+    {
+        int ago[] = {60};
+        const char *m[] = {"report: couldn't save it on the Desktop (error 13)"};
+        l = mklog(now, ago, m, 1);
+        LP(l, "");
+        CHECK(!title[0], "the report's own lines aren't problems");
+        free(l);
+        char longm[200];
+        memset(longm, 'x', 100);
+        snprintf(longm + 100, sizeof longm - 100, " failed");
+        const char *m2[] = {longm};
+        l = mklog(now, ago, m2, 1);
+        LP(l, "");
+        CHECK(strlen(title) == 59 + 3 && !strcmp(title + 59, "\xE2\x80\xA6"), "a long title is cut to 60 characters: %zu", strlen(title));
+        free(l);
+        const char *m3[] = {"the update couldn't start", "Errors: 0", "terrorist", "cannot", "notfailed here"};
+        int ago3[] = {50, 40, 30, 20, 10};
+        l = mklog(now, ago3, m3, 5);
+        LP(l, "");
+        CHECK(has_sub(text, "couldn't start") && has_sub(text, "  cannot") && !has_sub(text, "terrorist") && !has_sub(text, "notfailed") && !has_sub(text, "Errors"),
+              "the words whole, case ignored: %s", text);
+        free(l);
+    }
+    free(title);
+    free(text);
+}
+#undef LP
+
+static void test_report_zip(const char *scratch) {
+    report_zip z;
+    report_zip_init(&z);
+    struct tm when = {.tm_year = 126, .tm_mon = 10, .tm_mday = 18, .tm_hour = 10, .tm_min = 15, .tm_sec = 30};
+    CHECK(!report_zip_add(&z, "top/a.txt", "hello", 5, &when) && !report_zip_add(&z, "top/crash-reports/b.wer.txt", "", 0, &when), "two entries");
+    CHECK(report_zip_add(&z, "../x", "x", 1, &when) == 0, "a name the reader refuses is still written (the caller's names are fixed)");
+    report_zip_free(&z);
+    report_zip_init(&z);
+    report_zip_add(&z, "top/a.txt", "hello", 5, &when);
+    report_zip_add(&z, "top/crash-reports/b.wer.txt", "", 0, &when);
+    CHECK(report_zip_add(&z, "top\\c", "x", 1, &when) == EINVAL && report_zip_end(&z) == EINVAL, "a backslash: refused, and the zip with it");
+    report_zip_free(&z);
+    report_zip_init(&z);
+    report_zip_add(&z, "top/a.txt", "hello", 5, &when);
+    report_zip_add(&z, "top/crash-reports/b.wer.txt", "", 0, &when);
+    CHECK(!report_zip_end(&z) && unzip_check(z.b, z.n) == UNZIP_OK, "the updater's strict reader takes it");
+    char dest[1100], p[1200];
+    snprintf(dest, sizeof dest, "%s/zip-out", scratch);
+    mkdir(dest, 0755);
+    int err = 0;
+    CHECK(unzip_extract(z.b, z.n, dest, &err) == UNZIP_OK, "extracted (%d)", err);
+    snprintf(p, sizeof p, "%s/top/a.txt", dest);
+    FILE *f = fopen(p, "rb");
+    char got[16] = "";
+    if (f) {
+        got[fread(got, 1, sizeof got - 1, f)] = 0;
+        fclose(f);
+    }
+    CHECK(!strcmp(got, "hello"), "its bytes: %s", got);
+    CHECK(report_crc32(0, "123456789", 9) == 0xCBF43926u, "zip's CRC-32");
+    report_zip_free(&z);
+}
+
+typedef struct {
+    report_mask_names names;
+    const char *disappears;
+} mask_fixture;
+
+static char *mask_report(void *ctx, const char *s, size_t n, const char *const *keep, int nkeep, size_t *len) {
+    mask_fixture *m = ctx;
+    /* All candidates were scanned by the time the first one's text is masked. */
+    if (m->disappears && n == 4 && !memcmp(s, "V=1\n", n)) {
+        CHECK(unlink(m->disappears) == 0, "a WER candidate disappears between scan and read");
+        m->disappears = NULL;
+    }
+    return report_mask_with(&m->names, s, n, keep, nkeep, len);
+}
+static int fake_events(void *ctx, char **out, size_t *len) {
+    (void)ctx;
+    *out = strdup("<Event>rekordbox.exe at /Users/dj/x</Event>\n");
+    *len = strlen(*out);
+    return 0;
+}
+static void put_file(const char *dir, const char *name, const char *text) {
+    char p[1200];
+    snprintf(p, sizeof p, "%s/%s", dir, name);
+    FILE *f = fopen(p, "wb");
+    if (!f) abort();
+    fputs(text, f);
+    fclose(f);
+}
+static char *slurp_bytes(const char *p, size_t *len) {
+    FILE *f = fopen(p, "rb");
+    if (!f) return NULL;
+    char *b = calloc(1, 1 << 20);
+    size_t n = fread(b, 1, (1 << 20) - 1, f);
+    if (len) *len = n;
+    b[n] = 0;
+    fclose(f);
+    return b;
+}
+static char *slurp(const char *dir, const char *name) {
+    char p[1300];
+    snprintf(p, sizeof p, "%s/%s", dir, name);
+    return slurp_bytes(p, NULL);
+}
+static int count_entries(const char *dir) {
+    int n = 0;
+    DIR *d = opendir(dir);
+    if (!d) return -1;
+    for (struct dirent *e; (e = readdir(d));)
+        if (e->d_name[0] != '.') n++;
+    closedir(d);
+    return n;
+}
+static void report_says(void *ctx, const char *line) { strncat((char *)ctx, line, 1000); }
+
+static void test_report_build(const char *scratch) {
+    char sup[1024], logs[1100], desk[1024], fb[1100], wer[1024], wer2[1024], p[1200], said[2048] = "";
+    snprintf(sup, sizeof sup, "%s/support", scratch);
+    snprintf(logs, sizeof logs, "%s/Logs", sup);
+    snprintf(fb, sizeof fb, "%s/reports", logs);
+    snprintf(desk, sizeof desk, "%s/Desktop", scratch);
+    snprintf(wer, sizeof wer, "%s/wer", scratch);
+    snprintf(wer2, sizeof wer2, "%s/wer2", scratch);
+    mkdir(sup, 0755);
+    mkdir(logs, 0755);
+    mkdir(desk, 0755);
+    mkdir(wer, 0755);
+    mkdir(wer2, 0755);
+    snprintf(p, sizeof p, "%s/payload", sup);
+    mkdir(p, 0755);
+    snprintf(p, sizeof p, "%s/kept", sup);
+    mkdir(p, 0755);
+    time_t now = time(NULL);
+    int ago[] = {120};
+    const char *m[] = {"download failed for dj at /Users/dj/AppData on E:\\Music\\x"};
+    char *app = mklog(now, ago, m, 1);
+    put_file(logs, "app.log", app);
+    free(app);
+    put_file(logs, "watcher.log", "watcher: started\n");
+    put_file(sup, "installed", "model=1\ncache=0\n");
+    put_file(sup, "config.ini", "max_gb = 20\n");
+    snprintf(p, sizeof p, "%s/payload", sup);
+    put_file(p, "payload.json", "{\"model\":{\"sha256\":\"feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface\"}}");
+    snprintf(p, sizeof p, "%s/kept", sup);
+    put_file(p, "Playlist.kept", "a track name.mp3\n");             /* kept sets: never in the report */
+    put_file(sup, "master.db", "not ours to send");                   /* nor anything else in the folder */
+    put_file(sup, "shown-version", "1.5.0\n1.5.0\n");
+    static const unsigned char rep[] = {'V', '=', '1', '\n'};
+    wer_folder(wer, "AppCrash_rekordbox.exe_1", rep, sizeof rep, now - 600);
+    wer_folder(wer, "AppCrash_rekordbox.exe_gone", rep, sizeof rep, now - 660);
+    char gone[1100];
+    snprintf(gone, sizeof gone, "%s/AppCrash_rekordbox.exe_gone/Report.wer", wer);
+    mask_fixture mask = {{.home = "/Users/dj", .short_home = "C:\\Users\\DANAJO~1", .full = "Dana Jones", .user = "Dana", .folder_name = "dj"}, gone};
+    report_facts f = {0};
+    report_fact_add(&f, 1, "RB Stems Plus: 1.5.0 (x64); lights: Demucs v4 %s (on)", report_light_colour("0"));
+    report_fact_add(&f, 1, "saved stems location: thisPC; folder E:\\Stems\\RB Stems Plus");
+    report_fact_add(&f, 0, "model in rekordbox, full: %s", "feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface");
+    report_fact_add(&f, 1, "account: Dana Jones");
+    report_fact_add(&f, 1, "profile: c:\\users\\danajo~1\\Logs");
+    report_fact_add(&f, 0, "other folder: C:\\Users\\DANAJO~10\\Logs; bare: DANAJO~1");
+    const char *roots[] = {wer, wer2};
+    report_env e;
+    memset(&e, 0, sizeof e);
+    e.ctx = &mask;
+    e.mask = mask_report;
+    e.events = fake_events;
+    e.log = report_says;
+    e.log_ctx = said;
+    e.support = sup;
+    e.logs = logs;
+    e.wer_roots = roots;
+    e.nwer = 1;
+    e.desktop = desk;
+    e.fallback = fb;
+    e.facts = &f;
+    e.location_dir = "";
+    e.sysdrive = 'C';
+    e.now = now;
+    report_result r;
+    CHECK(report_build(&e, &r) == 0, "built");
+    CHECK(!strncmp(r.path, desk, strlen(desk)) && has_sub(r.path, "/RB Stems Plus report "), "on the Desktop: %s", r.path);
+    CHECK(!mask.disappears && has_sub(said, "report: 2 crash or hang reports from the last 7 days, 1 included"), "the missing candidate: %s", said);
+    CHECK(r.title && !strcmp(r.title, "Problem report: download failed for <user> at ~/AppData on <drive>:\\<path>"),
+          "the title: the last problem, masked, no drive's path: %s", r.title);
+    CHECK(r.details && has_sub(r.details, "Last problem:\n") && has_sub(r.details, "RB Stems Plus: 1.5.0 (x64); lights: Demucs v4 green (on)")
+              && has_sub(r.details, "folder <drive>:\\<path>") && !has_sub(r.details, "model in rekordbox, full"),
+          "the details: the problem, then the link's facts only, masked: %s", r.details);
+    char *url = report_issue_url(r.title, r.details);
+    CHECK(url && has_sub(url, "account%3A%20%3Cuser%3E") && !has_sub(url, "Jones"), "the full name is masked in the issue URL");
+    CHECK(url && has_sub(url, "profile%3A%20~%5CLogs") && !has_sub(url, "danajo"), "the short profile path is masked in the issue URL");
+    free(url);
+    /* what the zip holds: exactly these */
+    size_t zn = 0;
+    char *zb = slurp_bytes(r.path, &zn);
+    CHECK(zb && unzip_check(zb, zn) == UNZIP_OK, "a zip the strict reader takes");
+    char out[1100], top[1300];
+    snprintf(out, sizeof out, "%s/out", scratch);
+    mkdir(out, 0755);
+    int err = 0;
+    CHECK(zb && unzip_extract(zb, zn, out, &err) == UNZIP_OK, "extracted");
+    free(zb);
+    const char *slash = strrchr(r.path, '/');
+    snprintf(top, sizeof top, "%s/%.*s", out, (int)(strlen(slash + 1) - 4), slash + 1);
+    CHECK(count_entries(out) == 1, "one folder at the top");
+    CHECK(count_entries(top) == 8, "summary, app.log, watcher.log, installed, config.ini, payload.json, the event log, crash-reports: %d (no bridge.log, "
+                                   "busy, request or dismissed here)",
+          count_entries(top));
+    char *t = slurp(top, "summary.txt");
+    CHECK(t && !strncmp(t, "RB Stems Plus report, ", 22) && has_sub(t, "\nRB Stems Plus: 1.5.0 (x64)") && has_sub(t, "full: feedfacefeedface"),
+          "summary.txt: every fact, the checksums it prints kept: %s", t);
+    CHECK(t && has_sub(t, "account: <user>\n") && !has_sub(t, "Jones"), "the full name is masked in summary.txt");
+    CHECK(t && has_sub(t, "profile: ~\\Logs") && has_sub(t, "other folder: C:\\Users\\DANAJO~10\\Logs; bare: DANAJO~1"),
+          "the short profile path is masked at a component boundary: %s", t);
+    free(t);
+    t = slurp(top, "app.log");
+    CHECK(t && has_sub(t, "for <user> at ~/AppData") && !has_sub(t, "/Users/dj"), "the logs masked: %s", t);
+    free(t);
+    t = slurp(top, "payload.json");
+    CHECK(t && has_sub(t, "feedfacefeedfacefeedface"), "payload.json's checksums kept");
+    free(t);
+    t = slurp(top, "event-log-errors.txt");
+    CHECK(t && has_sub(t, "at ~/x"), "the event log masked: %s", t);
+    free(t);
+    snprintf(p, sizeof p, "%s/crash-reports", top);
+    t = slurp(p, "0-AppCrash_rekordbox.exe_1.wer.txt");
+    CHECK(t && !strcmp(t, "V=1\n"), "the crash report: %s", t ? t : "(none)");
+    free(t);
+    CHECK(!slurp(top, "master.db") && !slurp(top, "Playlist.kept") && !slurp(top, "shown-version"), "nothing else from support");
+    report_result_free(&r);
+
+    /* The same folder name can occur under two different WER roots. */
+    static const unsigned char rep2[] = {'V', '=', '2', '\n'};
+    wer_folder(wer2, "AppCrash_rekordbox.exe_1", rep2, sizeof rep2, now - 720);
+    e.nwer = 2;
+    said[0] = 0;
+    CHECK(report_build(&e, &r) == 0, "built with two WER reports of the same name");
+    zb = slurp_bytes(r.path, &zn);
+    CHECK(zb && unzip_check(zb, zn) == UNZIP_OK && has_sub(said, "2 included"), "two WER roots produce distinct ZIP entries");
+    free(zb);
+    report_result_free(&r);
+
+    /* The Desktop can be opened by itself but leave no room for a ZIP name in r.path. */
+    char long_desk[REPORT_PATH_MAX];
+    snprintf(long_desk, sizeof long_desk, "%s", desk);
+    while (strlen(long_desk) < sizeof long_desk - 20) strcat(long_desk, "/.");
+    e.desktop = long_desk;
+    said[0] = 0;
+    e.now++;
+    CHECK(report_build(&e, &r) == 0 && !strncmp(r.path, fb, strlen(fb)), "a Desktop result path that can't fit uses the fallback");
+    CHECK(count_entries(desk) == 1, "a path that can't be returned never writes a new ZIP on the Desktop");
+    report_result_free(&r);
+
+    /* the Desktop refused: next to the logs; both refused: not made */
+    snprintf(p, sizeof p, "%s/no-desktop", scratch);
+    e.desktop = p;
+    said[0] = 0;
+    CHECK(report_build(&e, &r) == 0 && !strncmp(r.path, fb, strlen(fb)), "the fallback: %s", r.path);
+    CHECK(has_sub(said, "report: couldn't save it on the Desktop"), "said: %s", said);
+    report_result_free(&r);
+    e.fallback = "";
+    CHECK(report_build(&e, &r) != 0 && !r.title && !r.details, "nowhere to save it: an error, nothing kept");
+    e.fallback = fb;
+    e.desktop = desk;
+    e.events = NULL;
+    e.logs = NULL;
+    CHECK(report_build(&e, &r) == 0 && r.title && !strcmp(r.title, "Problem report"), "no logs, no event log: still a report, a plain title");
+    report_result_free(&r);
+
+    /* Leave room for "<user>…" at each cut, with the full name extending past it. */
+    char line_prefix[200 - 21 - 7 + 1], title_prefix[60 - 7 + 1], long_line[220], long_title[80];
+    snprintf(line_prefix, sizeof line_prefix, "%-*s", (int)sizeof line_prefix - 1, "download failed:");
+    snprintf(title_prefix, sizeof title_prefix, "%-*s", (int)sizeof title_prefix - 1, "download failed:");
+    snprintf(long_line, sizeof long_line, "%s%s while loading", line_prefix, mask.names.full);
+    snprintf(long_title, sizeof long_title, "%s%s while loading", title_prefix, mask.names.full);
+    int boundary_ago[] = {120, 60};
+    const char *boundary_msgs[] = {long_line, long_title};
+    app = mklog(now, boundary_ago, boundary_msgs, 2);
+    put_file(logs, "app.log", app);
+    free(app);
+    e.logs = logs;
+    CHECK(report_build(&e, &r) == 0, "built with a full name across both cuts");
+    snprintf(long_line, sizeof long_line, "%s<user>…\n", line_prefix);
+    snprintf(long_title, sizeof long_title, "Problem report: %s<user>…", title_prefix);
+    CHECK(has_sub(r.details, long_line), "the last problem line masks a full name across the 200-character cut");
+    CHECK(r.title && !strcmp(r.title, long_title), "the title masks a full name across the 60-character cut");
+    report_result_free(&r);
+    report_facts_free(&f);
+}
+
+/* The host can check these Win32 lifetime rules in source. Runtime coverage needs Windows. */
+static void test_windows_startup(const char *src) {
+    char *s = slurp(src, "notify_win.c");
+    char *worker = s ? strstr(s, "static DWORD WINAPI nt_thread(") : NULL;
+    char *init = worker ? strstr(worker, "static BOOL WINAPI nt_init(") : NULL;
+    char *show = init ? strstr(init, "int notify_show(") : NULL;
+    CHECK(init && strstr(init, "DuplicateHandle(") && !strstr(init, "nt_thread, &"), "the worker owns a separate event handle");
+    CHECK(init && strstr(worker, "SetEvent(ready);") && strstr(worker, "CloseHandle(ready);"),
+          "the worker signals and closes its event even after the caller times out");
+    CHECK(show && strstr(worker, "InterlockedExchangePointer(&nt_hwnd") && strstr(show, "InterlockedCompareExchangePointer(&nt_hwnd"),
+          "the window is published and read atomically");
+    CHECK(init && strstr(init, "if (!ready) return FALSE;") && strstr(init, "wait == WAIT_TIMEOUT ||"),
+          "a failed startup can retry, while a timed-out worker can still publish its window");
+    free(s);
+
+    s = slurp(src, "update_win.c");
+    char *scan = s ? strstr(s, "static int win_watchers_in(") : NULL;
+    char *end = scan ? strstr(scan, "\n}") : NULL;
+    if (end) *end = 0;
+    CHECK(end && strstr(scan, "malloc(NT_MAX * sizeof *path)") && !strstr(scan, "static wchar_t path") && strstr(scan, "free(path);"),
+          "each watcher scan owns its path buffer");
+    free(s);
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
-        fprintf(stderr, "usage: %s SCRATCH [FUZZ_ITERATIONS]\n", argv[0]);
+        fprintf(stderr, "usage: %s SCRATCH [FUZZ_ITERATIONS [WIN_C_SRC]]\n", argv[0]);
         return 2;
     }
     char sub[1024];
     test_external();
     test_paths();
+    test_uninstall_path();
     snprintf(sub, sizeof sub, "%s/size", argv[1]);
     mkdir(sub, 0755);
     test_size(sub);
@@ -914,6 +1485,13 @@ int main(int argc, char **argv) {
     mkdir(sub, 0755);
     test_report_files(sub);
     test_report_queue(sub);
+    test_report_text();
+    test_report_problem();
+    snprintf(sub, sizeof sub, "%s/report", argv[1]);
+    mkdir(sub, 0755);
+    test_report_zip(sub);
+    test_report_build(sub);
+    test_windows_startup(argc > 3 ? argv[3] : "win/c");
     test_critical();
     test_fuzz(argc > 2 ? atol(argv[2]) : 20000);
     printf("%d checks, %d failed\n", checks, failures);

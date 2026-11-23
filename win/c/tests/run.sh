@@ -24,12 +24,15 @@
 #    imports KERNEL32, ADVAPI32 and api-ms-win-crt-* only (wintrust and crypt32 are loaded at run
 #    time); update_win.c with plat_win.c (tests/gate_update.c): the core DLL's allowlist, KERNEL32,
 #    ADVAPI32, USER32, ntdll, SHELL32, ole32 and the UCRT
-#    (winhttp.dll is loaded at run time); the start stub (stub.c, -municode -mwindows): KERNEL32,
-#    USER32 and the UCRT only (app.md §7, J21). An import list without KERNEL32.dll (llvm-objdump
+#    (winhttp.dll is loaded at run time), and built again with UPDATE_WIN_TEST_HOOKS as
+#    winc-update-wintest.exe (its NT path match, run in the VM; review K2), the same allowlist;
+#    the start stub (stub.c, -municode -mwindows): KERNEL32, USER32 and the UCRT only (app.md §7, J21). An import list without KERNEL32.dll (llvm-objdump
 #    failing) fails the gate;
 #  - no win/c object refers to bcrypt's, wintrust's, crypt32's, version.dll's or winhttp.dll's
 #    functions at all, imported or not (llvm-nm -u, its own failure a failure);
-#  - the app's own platform calls (W6a): app.sh.
+#  - the app's own platform calls (W6a): app.sh;
+#  - native-steps-reach.py: every step the shared flows ask on Windows has a case in
+#    core_native_steps.c (or its proof that Windows never asks it), and its own mutants.
 #
 #   win/c/tests/run.sh [OUT]       builds into OUT (default build/winc); exits 1 on a failure
 set -eu
@@ -55,6 +58,11 @@ cleanup() {
 trap cleanup EXIT
 fails=0
 cd "$root"   # relative names from here on: the repository's path has spaces
+
+sh win/c/tests/watcher-step-test.sh "$out" || fails=$((fails + 1))
+sh win/c/tests/update-scan-test.sh "$out" || fails=$((fails + 1))
+sh win/c/tests/prepare-args-test.sh "$out" || fails=$((fails + 1))
+sh win/c/tests/admin-connect-test.sh "$out" || fails=$((fails + 1))
 
 # the shared fixtures, again when the Swift they come from is newer, or when the last ones were
 # partial (Swift couldn't write config.ini in a sandbox: review S44)
@@ -96,18 +104,24 @@ if [ -z "$ours_swift" ] || [ "$ours_swift" != "$ours_c" ]; then echo "FAIL model
 # the pure modules and their tests; the core's JSON reader and arena as the core builds them, and its
 # busy marker's rules (state.c, with text.c and helper_lines.c: native_leftover's)
 WINC="win/c/sig.c win/c/payload.c win/c/update_rules.c win/c/stub_rules.c"
-STORE="win/c/payload_store.c win/c/fs_write.c win/c/compat.c win/c/unzip.c win/c/update.c win/c/sha_memo.c win/c/native_facts.c win/c/native_steps.c win/c/native_config.c win/c/models.c win/c/shell.c common/marker.c win/c/volumes.c win/c/afterexit.c win/c/host_facts.c win/c/native_location.c common/cfg_ini.c common/path_rules.c common/plat_mac.c"
+STORE="win/c/payload_store.c win/c/fs_write.c win/c/compat.c win/c/inventory.c win/c/receipt.c win/c/pe_code.c win/c/unzip.c win/c/sha_memo.c win/c/native_facts.c win/c/native_steps.c win/c/native_config.c win/c/models.c win/c/shell.c common/marker.c win/c/volumes.c win/c/afterexit.c win/c/host_facts.c win/c/native_location.c common/cfg_ini.c common/path_rules.c common/plat_mac.c"
 CORE="core/json.c core/arena.c core/state.c core/text.c core/helper_lines.c core/words.c"
 TESTS="win/c/tests/main.c win/c/tests/fixtures_test.c win/c/tests/sig_test.c win/c/tests/payload_test.c win/c/tests/store_test.c win/c/tests/compat_test.c
-  win/c/tests/update_rules_test.c win/c/tests/unzip_test.c win/c/tests/update_test.c win/c/tests/sha_memo_test.c win/c/tests/native_facts_test.c win/c/tests/native_steps_test.c win/c/tests/models_test.c win/c/tests/models_fixtures_test.c win/c/tests/afterexit_test.c win/c/tests/host_facts_test.c win/c/tests/native_location_test.c win/c/tests/sig_mac.c"
+  win/c/tests/update_rules_test.c win/c/tests/unzip_test.c win/c/tests/update_test.c win/c/tests/sha_memo_test.c win/c/tests/native_facts_test.c win/c/tests/native_steps_test.c win/c/tests/models_test.c win/c/tests/models_fixtures_test.c win/c/tests/afterexit_test.c win/c/tests/host_facts_test.c win/c/tests/native_location_test.c win/c/tests/location_choice_test.c win/c/tests/sig_mac.c"
 FW="-framework Security -framework CoreFoundation -framework Accelerate"
+build_host_tests() {   # UPDATE_SOURCE OUTPUT FLAGS...
+  update_src="$1" host_exe="$2"; shift 2
+  # shellcheck disable=SC2086
+  clang $STD $WARN $MAC "$@" -DCOMPAT_TEST_HOOKS -DUPDATE_TEST_HOOKS -DNATIVE_STEPS_TEST_HOOKS -DMODELS_TEST_HOOKS -DNATIVE_LOCATION_TEST_HOOKS -DHOST_FACTS_TEST_HOOKS -DRBSTEMS_WIN_CACHE_TEST \
+    -Icore -Icommon -Iwin/c $WINC $STORE "$update_src" $CORE $TESTS $FW -o "$host_exe"
+}
 for v in plain asan; do
   case "$v" in
     plain) san="-O2" ;;
     asan) san="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined" ;;
   esac
   # shellcheck disable=SC2086
-  clang $STD $WARN $MAC $san -DCOMPAT_TEST_HOOKS -DUPDATE_TEST_HOOKS -DNATIVE_STEPS_TEST_HOOKS -DMODELS_TEST_HOOKS -DNATIVE_LOCATION_TEST_HOOKS -Icore -Icommon $WINC $STORE $CORE $TESTS $FW -o "$out/winc-test-$v"
+  build_host_tests win/c/update.c "$out/winc-test-$v" $san
   d="$scratch/$v"; mkdir -p "$d"
   if "$out/winc-test-$v" "$fx" "$d" "$pe" "$zips" > "$out/winc-test-$v.log" 2>&1; then echo "ok   win/c tests ($v): $(tail -1 "$out/winc-test-$v.log")"
   else tail -30 "$out/winc-test-$v.log"; echo "FAIL win/c tests ($v)"; fails=$((fails + 1)); fi
@@ -129,6 +143,30 @@ for v in plain asan; do
     echo "ok   a mapped view's failed flush ($v): $(tail -1 "$out/flush-fault-$v.log")"
   else tail -20 "$out/flush-fault-$v.log"; echo "FAIL a mapped view's failed flush ($v)"; fails=$((fails + 1)); fi
 done
+
+# WC3: remove UPDATE_SWAP's lock in a scratch copy. Require the specific regression, rather than
+# treating a compile error, crash or unrelated failure as a mutant caught by the sweep test.
+mkdir "$scratch/unlocked"
+if awk '
+  /^int update_step_swap\(/ { in_swap = 1 }
+  /^}/ { in_swap = 0 }
+  in_swap && /plat_mutex_(lock|unlock)\(&apps_lock\)/ { removed++; next }
+  { print }
+  END { if (removed != 2) exit 1 }
+' win/c/update.c > "$scratch/update-unlocked.c" \
+   && build_host_tests "$scratch/update-unlocked.c" "$scratch/winc-unlocked" -O2 > "$out/winc-unlocked.log" 2>&1; then
+  rc=0
+  "$scratch/winc-unlocked" "$fx" "$scratch/unlocked" "$pe" "$zips" > "$out/winc-unlocked.log" 2>&1 || rc=$?
+  if [ "$rc" = 1 ] && grep -q '^FAIL .*WC3: UPDATE_SWAP during the sweep:' "$out/winc-unlocked.log" \
+     && grep -q '^[0-9][0-9]* checks, 1 failed$' "$out/winc-unlocked.log"; then
+    echo "ok   WC3: removing UPDATE_SWAP's lock triggers the sweep test ($(tail -1 "$out/winc-unlocked.log"))"
+  else
+    tail -30 "$out/winc-unlocked.log"; echo "FAIL WC3: unlocked build did not fail only the sweep assertion"; fails=$((fails + 1))
+  fi
+else
+  [ ! -f "$out/winc-unlocked.log" ] || cat "$out/winc-unlocked.log"
+  echo "FAIL WC3: couldn't build the unlocked updater"; fails=$((fails + 1))
+fi
 
 # the plain tests once more with their scratch on a case-sensitive APFS image (review RF2's Fix B):
 # REMOVE_LOCATION's case-sensitive cases (MS6's other file in another case, MT2 and RF1's hard
@@ -228,6 +266,32 @@ for a in x64 arm64; do
   else
     cat "$out/gate-update-$a.log"; echo "FAIL winc-update-gate.exe ($a) doesn't build"; fails=$((fails + 1))
   fi
+  # the same with update_win.c's test exports: winc-update-wintest.exe, run in the VM (review K2),
+  # with an asInvoker manifest: UAC's installer detection asks to elevate an unmanifested exe
+  # whose name holds "update" (ERROR_ELEVATION_REQUIRED, VM round 3)
+  exe="$out/win-$a/winc-update-wintest.exe"
+  # shellcheck disable=SC2086
+  if "$WCC" --tool "$a" windres -I win/c/tests win/c/tests/asinvoker.rc -O coff -o "$out/win-$a/asinvoker.res.o" > "$out/update-wintest-$a.log" 2>&1 \
+     && "$WCC" "$a" $WARN -Wno-unused-command-line-argument -DCORE_WIN_POLICY -DPLAT_NO_BLOCKS -DUPDATE_WIN_TEST_HOOKS -Icore -Icommon -I"$pf" \
+       win/c/update_win.c win/c/update_rules.c win/c/payload.c win/c/sig.c win/c/sig_bcrypt.c common/plat_win.c $CORE \
+       win/c/tests/gate_update.c "$out/win-$a/pocketfft.o" "$out/win-$a/asinvoker.res.o" -lntdll -lshell32 -lole32 -o "$exe" >> "$out/update-wintest-$a.log" 2>&1; then
+    gate "$a" "$exe" 'KERNEL32\.dll|ADVAPI32\.dll|USER32\.dll|ntdll\.dll|SHELL32\.dll|ole32\.dll|api-ms-win-crt-[a-z0-9-]+\.dll'
+  else
+    cat "$out/update-wintest-$a.log"; echo "FAIL winc-update-wintest.exe ($a) doesn't build"; fails=$((fails + 1))
+  fi
+  # the location's native code on real volumes (plan N3; tests/win/suites/location.suite runs it):
+  # winc-location-wintest.exe, the core DLL's allowlist and the fixture-only --internal-ok
+  exe="$out/win-$a/winc-location-wintest.exe"
+  # shellcheck disable=SC2086
+  if "$WCC" "$a" $WARN -Wno-unused-command-line-argument -DCORE_WIN_POLICY -DPLAT_NO_BLOCKS -DVOL_TEST_INTERNAL_OK -Icore -Icommon -I"$pf" \
+       win/c/native_steps.c win/c/native_choice_win.c win/c/native_location.c win/c/volumes.c win/c/volumes_win.c win/c/fs_write.c \
+       win/c/native_config.c common/marker.c common/cfg_ini.c common/path_rules.c common/plat_win.c win/c/compat.c win/c/compat_win.c \
+       win/c/payload.c win/c/payload_store.c win/c/sig.c win/c/sig_bcrypt.c win/c/update.c win/c/update_rules.c win/c/unzip.c $CORE \
+       win/c/tests/location_wintest.c "$out/win-$a/pocketfft.o" -lntdll -lshell32 -lole32 -o "$exe" > "$out/location-wintest-$a.log" 2>&1; then
+    gate "$a" "$exe" 'KERNEL32\.dll|ADVAPI32\.dll|USER32\.dll|ntdll\.dll|SHELL32\.dll|ole32\.dll|api-ms-win-crt-[a-z0-9-]+\.dll'
+  else
+    cat "$out/location-wintest-$a.log"; echo "FAIL winc-location-wintest.exe ($a) doesn't build"; fails=$((fails + 1))
+  fi
   # the start stub as it ships: its own program, the GUI subsystem, the narrowest allowlist (J21)
   exe="$out/win-$a/RB Stems Plus.exe"
   # shellcheck disable=SC2086
@@ -248,6 +312,9 @@ win/admin/tests/run.sh "$out/admin" "$pe" || fails=$((fails + 1))
 
 # the app's own platform calls (W6a: volumes, lifecycle, report, CriticalWork): their own script
 sh win/c/tests/app.sh "$out" || fails=$((fails + 1))
+
+# every step the shared flows ask on Windows has a native case in core_native_steps.c (plan N4)
+python3 -I win/c/tests/native-steps-reach.py || fails=$((fails + 1))
 
 notes="$(grep -h "^note:" "$out"/winc-test-plain.log 2>/dev/null | sort -u | tr "\n" " ")"
 [ "$fails" = 0 ] && echo "win/c: all passed${notes:+ ($notes)}" || { echo "win/c: $fails failed"; exit 1; }

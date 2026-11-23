@@ -23,8 +23,18 @@ func dismissed() -> Set<String> {
 
 // MARK: - request: the watcher's "Reinstall now"
 
-func writeReinstallRequest(_ path: String = requestFile) {
-    try? "reinstall\n".write(toFile: path, atomically: true, encoding: .utf8)
+func writeReinstallRequest(_ path: String = requestFile, features: String = "reinstall") {
+    try? "\(features)\n".write(toFile: path, atomically: true, encoding: .utf8)
+}
+
+func reinstallRequestText(_ path: String = requestFile) -> String {
+    guard let h = FileHandle(forReadingAtPath: path) else { return "?" }
+    defer { try? h.close() }
+    do {
+        let bytes = try h.read(upToCount: 32) ?? Data()
+        guard !bytes.contains(0), let text = String(data: bytes, encoding: .utf8) else { return "?" }
+        return text
+    } catch { return "?" }
 }
 
 /// How long ago the request was written, or nil if there is none. The request stays: the app

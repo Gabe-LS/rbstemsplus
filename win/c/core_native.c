@@ -29,12 +29,12 @@
  *    nw_admin_r1 (native_facts.c's rule with the app's verified payload lists). LOCATION:
  *    native_location.c's measure with this PC's answers (review HF5): the live bridge from
  *    host_facts.c's read, the measure on its own queue through native_location_slow_fact
- *    (never on the UI thread, one at a time, waited for NL_WAIT_NS); off (native_location.c's
- *    NATIVE_LOCATION_LIVE 0: nonzero) until the VM rounds.
+ *    (never on the UI thread, one at a time, waited for NL_WAIT_NS), enabled by
+ *    native_location.c's NATIVE_LOCATION_LIVE.
  *  - admin: core_native_admin.c (the worker through admin.c's client, one elevation per call);
  *    its check of the bridge copy hashes uncached (sha_file, never the memo).
- *  - step: core_native_steps.c (PAYLOAD, CACHE_PREPARE, DOWNLOAD, REKORDBOX, SPACE and BLOCKED so far; any other kind is CORE_E_STATE,
- *    as a step entry that isn't provided). */
+ *  - step: core_native_steps.c (every step the shared flows ask on Windows, native-steps-reach.py;
+ *    any other kind is CORE_E_STATE, as a step entry that isn't provided). */
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
 #endif
@@ -51,8 +51,10 @@
 #include "helper_proc.h"
 #include "helper_proc_win.h"
 #include "host_facts.h"
+#include "native_choice_win.h"   /* nl_rekordbox_running, nl_process_start */
 #include "native_facts.h"
 #include "native_location.h"
+#include "native_steps.h"
 #include "sha_memo.h"
 
 #include <stdio.h>
@@ -180,6 +182,25 @@ CORE_API int32_t CORE_CALL core_test_win_fake_helper(const char *path) {
 }
 #endif
 
+/* Build the command line with the DLL's paths and the proof for that exact rekordbox.exe.
+ * av has argc + 1 slots and rb stays alive through the spawn. */
+static int nw_prepare_args(nw *n, const char *const *argv, int argc, int is_run, char rb[COMPAT_PATH_MAX], const char **av) {
+    int has_rb;
+    if (helper_program_args(argv, argc, n->ort, "", av, &has_rb)) return -1;
+    int proved;
+    if (has_rb && nw_steps_rekordbox_known(n->steps, rb, COMPAT_PATH_MAX, &proved)) {
+        /* The helper stops parsing options at its first file operand. */
+        if (proved) av[0] = "--resample-proved";
+        if (helper_program_args(argv, argc, n->ort, rb, av + proved, NULL)) return -1;
+        return argc + proved;
+    }
+    if (helper_run_refused(has_rb, rb, is_run)) {
+        native_core_log(n->c, "helper: no verified current rekordbox, the run isn't started");
+        return -1;
+    }
+    return argc;
+}
+
 static int32_t nw_helper_spawn(void *st, uint64_t run, const char *const *argv, int32_t argc) {
     nw *n = st;
     const char *exe = n->helper;
@@ -191,6 +212,11 @@ static int32_t nw_helper_spawn(void *st, uint64_t run, const char *const *argv, 
     if (fake[0]) exe = fake;
 #endif
     if (!exe) return -1;
+    int is_run = helper_is_run(argv, argc);
+    if (is_run && !nw_steps_cache_covers_prepare(n->steps)) {
+        native_core_log(n->c, "helper: Stems Cache covers no rekordbox version");
+        return -1;
+    }
     hcall *h = calloc(1, sizeof *h);
     if (!h) return -1;
     if (!(h->work = CreateThreadpoolWork(close_call, h, NULL))) {
@@ -205,20 +231,13 @@ static int32_t nw_helper_spawn(void *st, uint64_t run, const char *const *argv, 
     n->calls = h;
     ReleaseSRWLockExclusive(&n->lock);
     /* the paths under Program Files are the DLL's own (PF3): --ort ours; --rekordbox, when the call
-     * names it, the folder a worker last verified as current, still the same (one stat here: no
-     * lookup on the UI thread, PF1). A run without one isn't started; an estimate gets "", from
-     * which it loads nothing (PF2) */
+     * names it, the newest covered folder still holding its verified EXE. Spawn checks the
+     * published file stamps. An estimate can use the current folder when Cache covers none. */
     char rb[COMPAT_PATH_MAX] = "";
-    int has_rb = 0, is_run = helper_is_run(argv, argc);
-    const char **av = argc > 0 ? malloc((size_t)argc * sizeof *av) : NULL;
+    const char **av = malloc(((size_t)argc + 1) * sizeof *av);
     helper_proc *p = NULL;
-    int bad = (argc > 0 && !av) || (av && helper_program_args(argv, argc, n->ort, "", av, &has_rb));
-    if (!bad && has_rb && nw_steps_rekordbox_known(n->steps, rb, sizeof rb)) bad = helper_program_args(argv, argc, n->ort, rb, av, &has_rb);
-    if (!bad && helper_run_refused(has_rb, rb, is_run)) {   /* review PF4: host-tested */
-        native_core_log(n->c, "helper: no verified current rekordbox, the run isn't started");
-        bad = 1;
-    }
-    if (bad || helper_proc_spawn(exe, av, argc, is_run, on_line, on_ended, on_log, h, &p)) {
+    int next_argc = av ? nw_prepare_args(n, argv, argc, is_run, rb, av) : -1;
+    if (next_argc < 0 || helper_proc_spawn(exe, av, next_argc, is_run, on_line, on_ended, on_log, h, &p)) {
         free(av);
         AcquireSRWLockExclusive(&n->lock);   /* not started: no ended came, none will */
         unlink_call(n, h);
@@ -251,72 +270,24 @@ static void nw_helper_signal(void *st, uint64_t run, core_helper_sig sig) {
  * sha_memo_file: it reads the very bytes about to be staged) */
 int nw_file_sha256(const char *path, char out[65]) { return sha_file(path, out); }
 
-/* sha_memo's stamp on Windows: the handle's size and 128-bit file id (plat_file_stat; its kind is
- * ignored, since it calls any reparse point PLAT_OTHER and the path was opened through links
- * already, so a WOF-compressed or cloud file still hashes) and its 100 ns last-write and change
- * times (FileBasicInfo), finer than plat_stat's seconds. A folder: EINVAL. */
-static int win_stamp(void *ctx, plat_file f, sha_memo_stamp *out) {
-    (void)ctx;
-    plat_stat st;
-    int e = plat_file_stat(f, &st);
-    if (e) return e;
-    FILE_BASIC_INFO b;
-    if (!GetFileInformationByHandleEx((HANDLE)f.h, FileBasicInfo, &b, sizeof b)) return EIO;
-    if (b.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) return EINVAL;
-    out->size = st.size;
-    out->mtime = b.LastWriteTime.QuadPart;
-    out->ctime = b.ChangeTime.QuadPart;
-    out->id[0] = st.id.vol;
-    out->id[1] = st.id.file[0];
-    out->id[2] = st.id.file[1];
-    return 0;
-}
-
 _Static_assert(NF_SLOW_DRIVE == CORE_SLOW_DRIVE && NF_SLOW_SIZE_WALK == CORE_SLOW_SIZE_WALK && NF_SLOW_ALPHATHETA == CORE_SLOW_ALPHATHETA,
                "native_facts.h's kinds are core.h's");
 
-/* CORE_SLOW_LOCATION (review HF5): native_location.c's measure with this PC's answers. Off until
- * the VM rounds (the NL rulings' wintest rows; native_location.c's NATIVE_LOCATION_LIVE): until
- * then the DLL answers -1 (core.h: the core then keeps no memo of its own). Live, a measure with
- * no answer this time is CORE_SLOW_NOT_NOW: the core keeps its memo, its size and its timer, and
- * a late answer is still dropped (review NW1). */
-
-/* how long a core worker waits for the measure (a sleeping USB disk spins up within it); past it
- * the answer is NL_TIMEOUT, and the measure still running answers NL_BUSY until it ends */
-#define NL_WAIT_NS (15ull * 1000000000ull)
+/* CORE_SLOW_LOCATION (review HF5): native_location.c's bounded measure with this PC's answers.
+ * CORE_SLOW_NOT_NOW keeps the memo, its size and its timer (review NW1). A late answer can serve
+ * another caller still waiting on the same paths (N3R18). */
 /* the measure's queue, one measure at a time for the process: a measure may outlive the core that
  * asked (its wait ran out), so neither it nor the ops below hold the core's state */
 static native_location_runner nl_runner = NATIVE_LOCATION_RUNNER_INIT;
 
-/* stemsCachePresent() and bridgeSaysLocation(): host_facts.c's read of the current rekordbox's live
- * onnxruntime.dll (compat.c's memo, the one FACT_STEMS_CACHE_PRESENT reads), under Windows' own
- * Program Files (plat_program_files: the registry value core_new reads, read again here because
- * the measure may outlive the core) */
+/* Check the live onnxruntime.dll in every verified rekordbox folder through compat.c's memo.
+ * Read Windows' Program Files again because the measurement may outlive the core. */
 static int nl_live_bridge(void *ctx, int *present, int *location) {
     (void)ctx;
     char rbs[1100];
     *present = *location = 0;
     if (plat_program_files(WR_PF_REKORDBOX, rbs, sizeof rbs)) return -1;
     return host_facts_live_bridge(compat_os_windows(), rbs, present, location);
-}
-/* rekordboxOpen(): a rekordbox.exe in any session (compat_processes) */
-static int nl_rekordbox_running(void *ctx) {
-    (void)ctx;
-    compat_procs p;
-    return compat_processes(compat_os_windows(), NULL, &p) ? -1 : p.running;
-}
-/* the process's creation time in seconds since 1970, as bridge-state's start= */
-static int64_t nl_process_start(void *ctx, int32_t pid) {
-    (void)ctx;
-    if (pid <= 0) return -1;
-    HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
-    if (!h) return -1;
-    FILETIME c, x, k, u;
-    BOOL ok = GetProcessTimes(h, &c, &x, &k, &u);
-    CloseHandle(h);
-    if (!ok) return -1;
-    ULARGE_INTEGER t = {.LowPart = c.dwLowDateTime, .HighPart = c.dwHighDateTime};
-    return (int64_t)((t.QuadPart - 116444736000000000ULL) / 10000000ULL);
 }
 /* the volume holding dir, named: plat_volume_name (its label and drive letter, through the same root
  * lookup as plat_volume_info: review NL1, NL5); native_location_drive_name picks and remembers */
@@ -328,16 +299,21 @@ static int nl_remote(void *ctx, const char *dir) {
     (void)ctx;
     return plat_win_drive_remote(dir);
 }
-static const native_location_ops nl_ops = {NULL, nl_live_bridge, nl_rekordbox_running, nl_process_start, nl_volume_name, nl_remote, NULL, NULL};
+/* rekordboxOpen() and the process's creation time: native_choice_win.c's, which winc-location-wintest
+ * runs on the VM with a stand-in rekordbox.exe (review N3R5) */
+const native_location_ops nw_location_ops = {NULL, nl_live_bridge, nl_rekordbox_running, nl_process_start, nl_volume_name, nl_remote, NULL, NULL,
+                                            native_pc_cache_probe};
 
 /* the measure's rows (ShellFacts.location's, row for row) */
-static int nl_location_write(const native_location *l, core_facts *out) {
-    core_fact_flag(out, FACT_LOC_MEASURED, 1);
+int nw_location_write(const native_location *l, core_facts *out) {
+    int checked = native_location_checked(l);
+    int local_problem = l->kind == LOC_THIS_MAC && l->probe == PROBE_MARKER_MISSING_OR_WRONG;
+    core_fact_flag(out, FACT_LOC_MEASURED, checked || local_problem);
     core_fact_flag(out, FACT_REKORDBOX_RUNNING, l->rekordbox_running);
-    core_fact_i64(out, FACT_LOC_PAUSED_FLOOR, l->paused_floor);
+    core_fact_i64(out, FACT_LOC_PAUSED_FLOOR, checked ? l->paused_floor : -1);
     if (l->has_status_drive) core_fact_str(out, FACT_LOC_DRIVE, l->status_drive, strlen(l->status_drive));   /* the snapshot's drive: config.ini's chosen folder's */
     core_fact_i64(out, FACT_LOC_KIND, l->kind);
-    if (l->kind == LOC_CHOSEN) core_fact_i64(out, FACT_LOC_PROBE, l->probe);
+    if (l->kind == LOC_CHOSEN || local_problem) core_fact_i64(out, FACT_LOC_PROBE, l->probe);
     if (l->has_status_drive && (l->kind == LOC_CHOSEN || l->kind == LOC_BRIDGE_TOO_OLD))
         core_fact_str(out, FACT_LOC_STATUS_DRIVE, l->status_drive, strlen(l->status_drive));
     if (l->has_in_use) core_fact_str(out, FACT_LOC_IN_USE, l->in_use, strlen(l->in_use));
@@ -353,18 +329,23 @@ static int nl_location_write(const native_location *l, core_facts *out) {
  * CORE_WORK_FACT: the thread pool): native_location_slow_fact, which maps no answer this time to
  * CORE_SLOW_NOT_NOW (review NW1, NW4) */
 typedef struct { const nw *n; core_facts *out; } nl_ctx;
-static int nl_write(void *ctx, const native_location *l) { return nl_location_write(l, ((nl_ctx *)ctx)->out); }
+static int nl_write(void *ctx, const native_location *l) { return nw_location_write(l, ((nl_ctx *)ctx)->out); }
 static void nl_log(void *ctx, const char *line) { native_core_log(((nl_ctx *)ctx)->n->c, line); }
 static int32_t nl_location_facts(const nw *n, core_facts *out) {
     nl_ctx x = {n, out};
-    native_location_env e = {n->support, n->cache_default, &nl_ops};
+    native_location_env e = {n->support, n->cache_default, &nw_location_ops};
     return native_location_slow_fact(&nl_runner, &e, &n->ui, NL_WAIT_NS, nl_write, nl_log, &x);
 }
 
-/* CORE_SLOW_MODEL_SHA and CORE_SLOW_BRIDGE_SHA: FACT_SHA256 of the file the key names, from the
- * memo while its stamp holds (core.h: memoised by path, size, mtime). DRIVE, SIZE_WALK and
- * ALPHATHETA: native_facts.c's. R1 (key: the current rekordbox version folder): FACT_R1_STATE,
- * nw_admin_r1's; no answer is "couldn't be measured". */
+int nw_location_measure_now(const char *support, const char *cache_default, uint64_t wait_ns, native_location *out) {
+    if (!support || !cache_default) return -1;
+    native_location_env e = {support, cache_default, &nw_location_ops};
+    return native_location_measure_bounded(&nl_runner, &e, NULL, wait_ns, out) ? -1 : 0;
+}
+
+/* MODEL_SHA and BRIDGE_SHA use the file memo. DRIVE, SIZE_WALK and ALPHATHETA
+ * use native_facts. R1 reads the inventory and returns the worst repair state
+ * and the rows for an empty key. An explicit folder is looked up in that inventory. */
 static int32_t nw_slow_fact(void *st, core_slow kind, const char *key, size_t key_len, core_facts *out) {
     nw *n = st;
     if (kind == CORE_SLOW_LOCATION) return nl_location_facts(n, out);   /* key ""; -1 while the gate is off */
@@ -373,6 +354,26 @@ static int32_t nw_slow_fact(void *st, core_slow kind, const char *key, size_t ke
         return -1;
     if (!key) return -1;
     if (key_len == CORE_NTS) key_len = strlen(key);
+    if (kind == CORE_SLOW_R1 && (key_len == 0 || !memchr(key, 0, key_len))) {
+        host_facts *h = malloc(sizeof *h);
+        if (!h) return -1;
+        int rc = host_facts_read_core(n->c, h), state = -1;
+        if (!rc && !key_len) {
+            core_fact_str(out, FACT_WIN_RB_ROWS, h->win_rows, CORE_NTS);
+            state = h->r1_state;
+            if (state > 0) core_fact_flag(out, FACT_R1_DISMISSED, h->r1_dismissed);
+        } else if (!rc && key_len < COMPAT_PATH_MAX) {
+            char folder[COMPAT_PATH_MAX];
+            memcpy(folder, key, key_len);
+            folder[key_len] = 0;
+            state = native_r1_assessed(h->inventory, h->assessment, folder);
+        }
+        if (state >= 0) core_fact_i64(out, FACT_R1_STATE, state);
+        host_facts_free(h);
+        free(h);
+        return state >= 0 || (!key_len && !rc) ? 0 : -1;
+    }
+    if (kind == CORE_SLOW_R1) return -1;
     char *path = malloc(key_len + 1);
     if (!path) return -1;
     memcpy(path, key, key_len);
@@ -380,13 +381,6 @@ static int32_t nw_slow_fact(void *st, core_slow kind, const char *key, size_t ke
     if (strlen(path) != key_len) {   /* a NUL inside the key: refused */
         free(path);
         return -1;
-    }
-    if (kind == CORE_SLOW_R1) {
-        int state = nw_admin_r1(n->admin, path);
-        free(path);
-        if (state < 0) return -1;
-        core_fact_i64(out, FACT_R1_STATE, state);
-        return 0;
     }
     if (kind != CORE_SLOW_MODEL_SHA && kind != CORE_SLOW_BRIDGE_SHA) {
         /* TODO(NF2): ALPHATHETA keys with '/' separators: rewrite '/' to '\\' in path here once the core sends them */
@@ -418,7 +412,7 @@ static void *nw_open(core *c) {
     n->ui = plat_thread_self();   /* core_new's thread (native_install): the UI thread */
     InitializeSRWLock(&n->lock);
     sha_memo_init(&n->shas);
-    n->shas.stat = win_stamp;
+    n->shas.stat = sha_memo_win_stamp;
     const char *helper = native_core_path(c, "helper");
     n->helper = dup_or_null(helper);
     n->support = dup_or_null(native_core_path(c, "support"));   /* NULL: CORE_SLOW_LOCATION has no answer */

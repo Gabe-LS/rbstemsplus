@@ -1,5 +1,5 @@
-/* The MP4 sound track's header for the Windows helper (pcm.h): mp4.c's walk (the first trak whose
- * hdlr is 'soun') on a plat_file with 64-bit offsets. moov is read whole (capped) and parsed in
+/* The MP4 sound track's header for the Windows helper (pcm.h) on a plat_file with 64-bit offsets.
+ * moov is read whole (capped) and parsed in
  * memory, every box inside its parent: a size past the parent's end, a count past its box, a
  * 64-bit size or size 0 (to the parent's end) never reads outside what was read. The ALAC
  * sample table (stsz/stz2, stsc, stco/co64) is walked here for alac.c, and an ALAC track's
@@ -8,6 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "pcm.h"
+#if defined(_WIN32) || defined(RBSP_TEST_MF_TRACK)
+#include "aac_mf.h"
+#endif
 
 enum { MOOV_MAX = 64 << 20 };            /* a long video's moov is a few MB */
 
@@ -94,55 +97,70 @@ typedef struct {
     char fmt[4];
     span stsz, stz2, stsc, stco, co64;   /* bodies; n 0 when missing */
     uint32_t timescale;
-    uint64_t duration;                   /* mdhd's (in timescale units) */
     uint64_t stts_total;                 /* the sample table's length (in timescale units) */
     uint32_t stts_n;
+    uint32_t descriptions;
     int fragmented;                      /* moov has mvex */
 } track;
 
-/* the first trak whose hdlr is 'soun' and its sample table: 0, or 1 and why */
-static int sound_track(span moov, track *t, char *why, size_t whyn) {
-    memset(t, 0, sizeof *t);
-    span x;
-    t->fragmented = !find(moov, "mvex", &x);
+/* Walk only audio tracks, leaving the cursor after the returned trak. */
+static int next_sound_track(span *s, span *tb) {
+    static const char *const hdlr[] = {"mdia", "hdlr"};
     char ty[4];
-    span s = moov, tb;
-    while (!next_box(&s, ty, &tb)) {
+    span b;
+    while (!next_box(s, ty, tb)) {
         if (memcmp(ty, "trak", 4)) continue;
-        static const char *const hdlr[] = {"mdia", "hdlr"};
-        span b;
-        if (find_path(tb, hdlr, 2, &b) || b.n < 12 || memcmp(b.p + 8, "soun", 4)) continue;
-        static const char *const mdhd[] = {"mdia", "mdhd"};
-        if (!find_path(tb, mdhd, 2, &b)) {
-            if (b.n >= 32 && b.p[0] == 1) { t->timescale = be32(b.p + 20); t->duration = be64(b.p + 24); }
-            else if (b.n >= 20 && b.p[0] == 0) { t->timescale = be32(b.p + 12); t->duration = be32(b.p + 16); }
-        }
-        static const char *const stbl[] = {"mdia", "minf", "stbl"};
-        span st;
-        if (find_path(tb, stbl, 3, &st)) { snprintf(why, whyn, "the sound track has no sample table"); return 1; }
-        if (find(st, "stsd", &b) || b.n < 8 || !be32(b.p + 4)) { snprintf(why, whyn, "the sound track has no sample description"); return 1; }
-        span e = {b.p + 8, b.n - 8};
-        if (next_box(&e, t->fmt, &t->entry)) { snprintf(why, whyn, "the sound track's sample description is cut short"); return 1; }
-        /* the time table: AAC's length (mp4.c); a cut-short one counts as none (ALAC doesn't use it) */
-        if (!find(st, "stts", &b) && b.n >= 8 && (uint64_t)be32(b.p + 4) * 8 <= b.n - 8) {
-            uint32_t n = be32(b.p + 4);
-            uint64_t total = 0;
-            for (uint32_t i = 0; i < n; i++) {
-                uint64_t d = (uint64_t)be32(b.p + 8 + 8 * (size_t)i) * be32(b.p + 12 + 8 * (size_t)i);
-                total = total + d < total ? UINT64_MAX : total + d;
-            }
-            t->stts_total = total;
-            t->stts_n = n;
-        }
-        if (find(st, "stsz", &t->stsz)) t->stsz.n = 0;
-        if (find(st, "stz2", &t->stz2)) t->stz2.n = 0;
-        if (find(st, "stsc", &t->stsc)) t->stsc.n = 0;
-        if (find(st, "stco", &t->stco)) t->stco.n = 0;
-        if (find(st, "co64", &t->co64)) t->co64.n = 0;
-        return 0;
+        if (!find_path(*tb, hdlr, 2, &b) && b.n >= 12 && !memcmp(b.p + 8, "soun", 4)) return 0;
     }
-    snprintf(why, whyn, "no sound track in the MP4");
     return 1;
+}
+
+static uint32_t track_id(span tb) {
+    span b;
+    if (find(tb, "tkhd", &b) || b.n < 16) return 0;
+    if (b.p[0] == 0) return be32(b.p + 12);
+    if (b.p[0] == 1 && b.n >= 24) return be32(b.p + 20);
+    return 0;
+}
+
+static int sample_description(span tb, span *st, track *t, char *why, size_t whyn) {
+    static const char *const stbl[] = {"mdia", "minf", "stbl"};
+    span b;
+    if (find_path(tb, stbl, 3, st)) { snprintf(why, whyn, "the sound track has no sample table"); return 1; }
+    if (find(*st, "stsd", &b) || b.n < 8 || !be32(b.p + 4)) { snprintf(why, whyn, "the sound track has no sample description"); return 1; }
+    t->descriptions = be32(b.p + 4);
+    span e = {b.p + 8, b.n - 8};
+    if (next_box(&e, t->fmt, &t->entry)) { snprintf(why, whyn, "the sound track's sample description is cut short"); return 1; }
+    return 0;
+}
+
+static int sound_track(span moov, span tb, track *t, char *why, size_t whyn) {
+    memset(t, 0, sizeof *t);
+    span b, st;
+    if (sample_description(tb, &st, t, why, whyn)) return 1;
+    t->fragmented = !find(moov, "mvex", &b);
+    static const char *const mdhd[] = {"mdia", "mdhd"};
+    if (!find_path(tb, mdhd, 2, &b)) {
+        if (b.n >= 32 && b.p[0] == 1) t->timescale = be32(b.p + 20);
+        else if (b.n >= 20 && b.p[0] == 0) t->timescale = be32(b.p + 12);
+    }
+    /* the time table: AAC's length (mp4.c); a cut-short one counts as none (ALAC doesn't use it) */
+    if (!find(st, "stts", &b) && b.n >= 8 && (uint64_t)be32(b.p + 4) * 8 <= b.n - 8) {
+        uint32_t n = be32(b.p + 4);
+        uint64_t total = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            uint64_t d = (uint64_t)be32(b.p + 8 + 8 * (size_t)i) * be32(b.p + 12 + 8 * (size_t)i);
+            total = total + d < total ? UINT64_MAX : total + d;
+        }
+        t->stts_total = total;
+        t->stts_n = n;
+    }
+    if (find(st, "stsz", &t->stsz)) t->stsz.n = 0;
+    if (find(st, "stz2", &t->stz2)) t->stz2.n = 0;
+    if (find(st, "stsc", &t->stsc)) t->stsc.n = 0;
+    if (find(st, "stco", &t->stco)) t->stco.n = 0;
+    if (find(st, "co64", &t->co64)) t->co64.n = 0;
+    return 0;
 }
 
 /* the sample entry's children (an ISO entry's, or a QuickTime v1/v2 entry's, or inside its 'wave') */
@@ -242,10 +260,24 @@ static int asc_rate(bits *b, uint32_t *rate) {
     return 0;
 }
 
+/* Ordinary LC's GASpecificConfig uses 1024 frames and has no core dependency or extension.
+ * Allow byte padding and the optional sync extension that explicitly signals no SBR. */
+static int lc_without_extensions(bits bs) {
+    uint32_t value;
+    if (getbits(&bs, 3, &value) || value) return 0;
+    size_t left = bs.n * 8 - bs.bit;
+    if (left >= 8) {
+        if (getbits(&bs, 11, &value) || value != 0x2b7 || getbits(&bs, 5, &value) || value != 5 ||
+            getbits(&bs, 1, &value) || value) return 0;
+        left = bs.n * 8 - bs.bit;
+    }
+    return left < 8 && !getbits(&bs, (int)left, &value) && !value;
+}
+
 /* an 'mp4a' entry's esds: PCM_AAC and the AudioSpecificConfig's rate and channels when it has
  * one (else the entry's), or 1 and why */
-static int aac_esds(const track *t, pcm_info *p, char *why, size_t whyn) {
-    span e, d, b;
+static int aac_esds(const track *t, pcm_info *p, int core, char *why, size_t whyn) {
+    span e, d, b = {0};
     int tag;
     if (entry_child(t, "esds", &e) || e.n < 4) { snprintf(why, whyn, "MPEG-4 audio without its decoder description (esds)"); return 1; }
     e.p += 4;                            /* version and flags */
@@ -277,15 +309,56 @@ static int aac_esds(const track *t, pcm_info *p, char *why, size_t whyn) {
             if (oti == 0x40 && aot >= 32 && aot <= 34) { snprintf(why, whyn, "MPEG audio (MP3) in an MP4: not read by this helper"); return 1; }
             int aac = aot == 1 || aot == 2 || aot == 3 || aot == 4 || aot == 5 || aot == 29 || aot == 23 || aot == 39;
             if (oti == 0x40 && !aac) { snprintf(why, whyn, "MPEG-4 audio object type %u: not AAC", aot); return 1; }
-            if ((aot == 5 || aot == 29) && !asc_rate(&bs, &ext) && ext) rate = ext;   /* explicit SBR: the output rate */
+            if ((oti == 0x40 || oti == 0x67) && aot == 2 && (chc == 1 || chc == 2) &&
+                t->descriptions == 1 && lc_without_extensions(bs)) {
+                p->aac_lc_rate = (int)rate;
+                p->aac_lc_ch = (int)chc;
+            }
+            if (!core && (aot == 5 || aot == 29) && !asc_rate(&bs, &ext) && ext) rate = ext;  /* explicit SBR */
             if (rate) p->rate = (int)rate;
             if (chc >= 1 && chc <= 7) p->ch = chc == 7 ? 8 : (int)chc;
-            if (aot == 29 && p->ch == 1) p->ch = 2;                                    /* parametric stereo */
+            if (!core && aot == 29 && p->ch == 1) p->ch = 2;   /* parametric stereo */
         }
     }
     p->kind = PCM_AAC;
     return 0;
 }
+
+#if defined(_WIN32) || defined(RBSP_TEST_MF_TRACK)
+/* The MPEG-4 source can assign its own IDs. Match the last Source Reader audio stream
+ * to a unique sample description, using AAC's core format for the native MF type. */
+static int match_mf_track(span s, const aac_mf_info *mf, span *selected, char *why, size_t whyn) {
+    enum { MF_AAC = 0x1610, MF_ALAC = 0x6c61 };
+    span tb;
+    int found = 0;
+    while (!next_sound_track(&s, &tb)) {
+        track t;
+        span st;
+        if (sample_description(tb, &st, &t, why, whyn)) return 1;
+        pcm_info p = {0};
+        if (mf->native_sub == MF_AAC && !memcmp(t.fmt, "mp4a", 4)) {
+            char detail[128];
+            if (aac_esds(&t, &p, 1, detail, sizeof detail)) continue;
+        } else if (mf->native_sub == MF_ALAC && !memcmp(t.fmt, "alac", 4)) {
+            unsigned char c[24];
+            if (alac_cookie(&t, c, why, whyn)) return 1;
+            p.rate = (int)be32(c + 20);
+            p.ch = c[9];
+        } else {
+            continue;
+        }
+        if (p.rate <= 0 || p.ch <= 0 || p.rate != mf->native_rate || p.ch != mf->native_ch) continue;
+        if (found) {
+            snprintf(why, whyn, "multiple MP4 sound tracks match Media Foundation's selected stream");
+            return 1;
+        }
+        *selected = tb;
+        found = 1;
+    }
+    if (!found) snprintf(why, whyn, "no MP4 sound track matches Media Foundation's selected stream");
+    return !found;
+}
+#endif
 
 /* every packet of the sample table in order: fn(ctx, offset, bytes) (0 on, 1 an error, 2 done);
  * *packets: how many the table has. 0 (all of them, or fn said done), 1 and why, or 2 (fn's
@@ -433,15 +506,30 @@ static int alac_length(plat_file f, int64_t size, span moov, const track *t, con
     return 0;
 }
 
-int m4a_probe(plat_file f, int64_t size, pcm_info *p, char *why, size_t whyn) {
+int m4a_probe(plat_file f, int64_t size, const char *ext, pcm_info *p, char *why, size_t whyn) {
     memset(p, 0, sizeof *p);
+    p->mf_stream = -1;
     unsigned char *buf;
     size_t len;
     if (read_moov(f, size, &buf, &len, why, whyn)) return 1;
     span moov = {buf, len};
     track t;
     int rc = 1;
-    if (sound_track(moov, &t, why, whyn)) goto done;
+    span scan = moov, selected;
+    if (next_sound_track(&scan, &selected)) { snprintf(why, whyn, "no sound track in the MP4"); goto done; }
+#if defined(_WIN32) || defined(RBSP_TEST_MF_TRACK)
+    aac_mf_info mf;
+    span second;
+    if (!next_sound_track(&scan, &second)) {
+        if (aac_mf_probe(f, ext, &mf, why, whyn) || match_mf_track(moov, &mf, &selected, why, whyn)) goto done;
+        p->mp4_track_id = track_id(selected);
+        if (!p->mp4_track_id) { snprintf(why, whyn, "the selected MP4 sound track has no track ID"); goto done; }
+        p->mf_stream = mf.stream;
+    }
+#else
+    (void)ext;
+#endif
+    if (sound_track(moov, selected, &t, why, whyn)) goto done;
     /* fragmented (moof): not read here; AudioToolbox reads fragmented ALAC, decode.c refuses AAC */
     if (t.fragmented || (!t.stts_n && memcmp(t.fmt, "alac", 4))) { snprintf(why, whyn, "no sample table for the sound track (fragmented MP4?)"); goto done; }
     if (!memcmp(t.fmt, "alac", 4)) {
@@ -456,9 +544,39 @@ int m4a_probe(plat_file f, int64_t size, pcm_info *p, char *why, size_t whyn) {
         if (!p->rate) p->rate = (int)t.timescale;
         if (p->rate > 0) p->seconds = (double)p->frames / p->rate;     /* AudioToolbox's estimate: the length */
     } else if (!memcmp(t.fmt, "mp4a", 4)) {
-        if (aac_esds(&t, p, why, whyn)) goto done;
-        if (t.timescale && t.duration && t.duration != UINT64_MAX && t.duration != UINT32_MAX) p->seconds = (double)t.duration / t.timescale;
-        else if (t.timescale) p->seconds = (double)t.stts_total / t.timescale;
+        if (aac_esds(&t, p, 0, why, whyn)) goto done;
+#if defined(_WIN32) || defined(RBSP_TEST_MF_TRACK)
+        if (p->mf_stream < 0) {
+            if (!aac_mf_available(why, whyn)) goto done;
+            /* A 22.05 kHz core can give 44.1 kHz PCM with implicit SBR. */
+            if (p->rate == 22050 || p->rate < 1 || p->ch < 1) {
+                if (aac_mf_probe(f, ext, &mf, why, whyn)) goto done;
+                p->mf_stream = mf.stream;
+            }
+        }
+        if (p->mf_stream >= 0) {
+            if (mf.rate < 1 || mf.ch < 1) {
+                snprintf(why, whyn, "the sound track Media Foundation reads isn't AAC (subtype 0x%08lx)",
+                         (unsigned long)mf.native_sub);
+                goto done;
+            }
+            p->rate = mf.rate;
+            p->ch = mf.ch;
+        }
+#endif
+        if (p->rate > 0) {
+            uint64_t rate = (uint64_t)p->rate;
+#if !defined(_WIN32) && !defined(RBSP_TEST_MF_TRACK)
+            if (rate == 22050) rate = 44100;  /* header-only host probe, with no MF */
+#endif
+            uint64_t scale = t.timescale ? t.timescale : rate;
+            /* Floor as the Mac's UNITS() does. Split the product to avoid overflow. */
+            uint64_t whole = t.stts_total / scale;
+            uint64_t rest = t.stts_total % scale * rate / scale;
+            if (whole > (INT64_MAX - rest) / rate) { snprintf(why, whyn, "the AAC sample table is too long"); goto done; }
+            p->frames = whole * rate + rest;
+            p->seconds = (double)p->frames / rate;
+        }
     } else {
         char s[5];
         for (int i = 0; i < 4; i++) s[i] = t.fmt[i] >= 32 && t.fmt[i] < 127 ? t.fmt[i] : '?';
@@ -473,7 +591,8 @@ done:
     return rc;
 }
 
-int m4a_alac_packets(plat_file f, int64_t size, unsigned char cookie[24], uint64_t *skip, m4a_packet_fn fn, void *ctx, char *why, size_t whyn) {
+int m4a_alac_packets(plat_file f, int64_t size, uint32_t id, unsigned char cookie[24], uint64_t *skip, m4a_packet_fn fn, void *ctx,
+                     char *why, size_t whyn) {
     unsigned char *buf;
     size_t len;
     if (read_moov(f, size, &buf, &len, why, whyn)) return 1;
@@ -481,7 +600,15 @@ int m4a_alac_packets(plat_file f, int64_t size, unsigned char cookie[24], uint64
     track t;
     uint64_t frames;
     int rc = 1;
-    if (sound_track(moov, &t, why, whyn)) goto done;
+    span scan = moov, selected = {0}, tb;
+    while (!next_sound_track(&scan, &tb)) {
+        if (!id) { selected = tb; break; }
+        if (track_id(tb) != id) continue;
+        if (selected.p) { snprintf(why, whyn, "the MP4 has duplicate sound track IDs"); goto done; }
+        selected = tb;
+    }
+    if (!selected.p) { snprintf(why, whyn, "no selected sound track in the MP4"); goto done; }
+    if (sound_track(moov, selected, &t, why, whyn)) goto done;
     if (memcmp(t.fmt, "alac", 4)) { snprintf(why, whyn, "the sound track isn't ALAC"); goto done; }
     if (alac_cookie(&t, cookie, why, whyn) || alac_length(f, size, moov, &t, cookie, &frames, skip, why, whyn)) goto done;
     rc = each_packet(&t, size, fn, ctx, NULL, why, whyn) ? 1 : 0;

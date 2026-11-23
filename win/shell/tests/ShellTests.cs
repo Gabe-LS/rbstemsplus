@@ -16,6 +16,7 @@ using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Xml.Linq;
 using RbStemsPlus.Core;
 using CoreText = RbStemsPlus.Core.Text;
 
@@ -78,7 +79,7 @@ namespace RbStemsPlus.Shell
     /// The core DLL's update entries, faked: each answer set by the test, each call recorded.
     internal sealed class FakeStart : IStartNative
     {
-        public int Wait = StartSequence.SwapReady, Failed, Os, At = StartSequence.UpdateFailNone;
+        public int Wait = StartSequence.SwapReady, Failed, Os, At = StartSequence.UpdateFailNone, Token;
         public bool StubOk = true;
         public readonly List<string> Calls = new List<string>();
         public int FailedBlockMs;     // SwapFailed blocks this long, then records "failed-end"
@@ -94,6 +95,7 @@ namespace RbStemsPlus.Shell
             return Failed;
         }
         public int OsCheck() { Add("os"); return Os; }
+        public int TokenCheck() { Add("token"); return Token; }
         public int AtStart() { Add("at_start"); return At; }
         public bool StartStub() { Add("stub"); return StubOk; }
         public void WaitOldApp(uint ms) { Add("waitold " + ms); }
@@ -117,7 +119,8 @@ namespace RbStemsPlus.Shell
         public int Ask(int what) { Calls.Add("ask " + what); return Answer; }
         public bool CriticalRunning() => Running;
         public long Now;
-        public long NowMs() => Now;
+        public Action ReadClock;
+        public long NowMs() { long now = Now; ReadClock?.Invoke(); return now; }
         /// a wait that times out takes its whole time on the fake clock
         public bool CriticalWait(int ms) { ClosesAtWait = CriticalCloses; Calls.Add("wait " + ms); if (!Idle) Now += ms; return Idle; }
         /// how many admission closes there had been when the last wait began (-1: no wait yet)
@@ -172,12 +175,32 @@ namespace RbStemsPlus.Shell
             string dylib = args.Length > 0 ? args[0] : "librbsp-core.dylib";
             NativeLibrary.SetDllImportResolver(typeof(Core).Assembly, (name, asm, path) =>
                 name == "rbsp-core.dll" ? NativeLibrary.Load(dylib) : IntPtr.Zero);
+            if (args.Length > 1 && args[1] == "--files")
+            {
+                Place();
+                LogFiles();
+                LogFilesWithoutCore();
+                return Summary();
+            }
+            if (args.Length > 1 && args[1] == "--row-automation")
+            {
+                VersionRowAutomation();
+                return Summary();
+            }
+            if (args.Length > 1 && args[1] == "--repaint")
+            {
+                Repaint();
+                SessionRenderReset();
+                RenderRecoveryDecisions();
+                return Summary();
+            }
             try
             {
                 Ids();
                 Pure();
                 Swap();
                 Close();
+                CloseHandoff();
                 QuitWindow();
                 OneCopyTests();
                 UninstallStart();
@@ -186,6 +209,7 @@ namespace RbStemsPlus.Shell
                 StatusTab();
                 BigSheets();
                 RowNames();
+                VersionRowAutomation();
                 BindingModes();
                 UntilOnce();
                 ProbeRecords();
@@ -195,17 +219,104 @@ namespace RbStemsPlus.Shell
                 StopRace();
                 Commit();
                 MainOnly();
-                PrepareTabsMenus();
+                ReleasePrepareTabsMenus();
                 ActivationWarm();
                 ActivationWarmStartOverlap();
                 Sink();
+                LogFiles();
+                LogFilesWithoutCore();
                 Aggregator();
                 MenuKeys();
                 Place();
+                Repaint();
+                SessionRenderReset();
+                RenderRecoveryDecisions();
+                UiWatchTests();
                 LifeCycle();
                 Check(offMainSeen.Count == 0, "no main-only host entry ran off main outside MainOnly (" + string.Join(",", offMainSeen) + ")");
             }
             catch (Exception e) { Check(false, "threw: " + e); }
+            return Summary();
+        }
+
+        [DllImport("libSystem.B.dylib", EntryPoint = "link", ExactSpelling = true)]
+        private static extern int Link([MarshalAs(UnmanagedType.LPUTF8Str)] string path,
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string link);
+
+        private static void LogFiles()
+        {
+            string dir = Directory.CreateTempSubdirectory("rbsp-shell-log-").FullName;
+            string logs = Path.Combine(dir, "Logs");
+            string path = Path.Combine(logs, "app.log");
+            var now = new DateTime(2026, 11, 12, 10, 0, 5);
+            var buf = new LogBuffer(dir, () => now);
+            try
+            {
+                Directory.CreateSymbolicLink(logs, ".");
+                buf.Add("directory link");
+                Check(!File.Exists(Path.Combine(dir, "app.log")) && buf.Take() == "10:00:05  directory link\n",
+                      "a linked Logs directory gets no file line, and the pane gets the line");
+                File.Delete(logs);
+
+                Directory.CreateDirectory(logs);
+                File.CreateSymbolicLink(path, "unused.log");
+                buf.Add("file link");
+                Check(!File.Exists(Path.Combine(logs, "unused.log")), "a linked app.log creates no target");
+                File.Delete(path);
+
+                string alias = Path.Combine(logs, "alias.log");
+                File.WriteAllText(alias, "kept\n");
+                if (Link(alias, path) != 0) throw new IOException("could not make the hard link fixture");
+                LogBuffer.Append(dir, now, "diagnostic");
+                Check(File.ReadAllText(alias) == "kept\n", "the diagnostics writer refuses a second hard link");
+                Directory.Delete(logs, true);
+
+                buf.Add("regular");
+                LogBuffer.Append(dir, now, "diagnostic é");
+                Check(File.ReadAllText(path) == "2026-11-12 10:00:05  regular\n2026-11-12 10:00:05  diagnostic é\n",
+                      "both writers append UTF-8 to a regular app.log");
+            }
+            finally { Directory.Delete(dir, true); }
+        }
+
+        private static void LogFilesWithoutCore()
+        {
+            string dir = Directory.CreateTempSubdirectory("rbsp-shell-log-fallback-").FullName;
+            string support = Path.Combine(dir, "support");
+            string logs = Path.Combine(support, "Logs");
+            string path = Path.Combine(logs, "app.log");
+            var now = new DateTime(2026, 11, 12, 10, 0, 5);
+            var sink = new LogSink(new LogBuffer(support, () => now, coreReady: false));
+            try
+            {
+                sink.Add("startup");
+                LogBuffer.Append(support, now, "diagnostic é", coreReady: false);
+                Check(File.Exists(path) && File.ReadAllText(path) == "2026-11-12 10:00:05  startup\n2026-11-12 10:00:05  diagnostic é\n",
+                      "without the core, the sink and diagnostics append to a regular app.log");
+
+                Directory.CreateDirectory(support);
+                if (Directory.Exists(logs)) Directory.Delete(logs, true);
+                Directory.CreateSymbolicLink(logs, "..");
+                sink.Add("linked Logs");
+                LogBuffer.Append(support, now, "diagnostic", coreReady: false);
+                Check(!File.Exists(Path.Combine(dir, "app.log")), "without the core, a linked Logs directory gets no file line");
+                File.Delete(logs);
+
+                Directory.CreateDirectory(logs);
+                File.CreateSymbolicLink(path, "unused.log");
+                sink.Add("linked app.log");
+                Check(!File.Exists(Path.Combine(logs, "unused.log")), "without the core, a linked app.log creates no target");
+
+                string linkedSupport = Path.Combine(dir, "linked-support");
+                Directory.CreateSymbolicLink(linkedSupport, ".");
+                LogBuffer.Append(linkedSupport, now, "linked support", coreReady: false);
+                Check(!Directory.Exists(Path.Combine(dir, "Logs")), "without the core, a linked support directory gets no Logs directory");
+            }
+            finally { Directory.Delete(dir, true); }
+        }
+
+        private static int Summary()
+        {
             Console.WriteLine("shell tests: " + passes + " passed, " + failures + " failed");
             return failures;
         }
@@ -231,12 +342,47 @@ namespace RbStemsPlus.Shell
             for (int i = 0; i < n; i++)
                 if (Core.core_menu_at(CoreApi.CORE_OS_WIN, i, out CoreMenuItem m) == CoreApi.CORE_OK && Enum.IsDefined(typeof(Menu), m.id)) named++;
             Check(n > 0 && named == n, "every Windows menu row has a generated name (" + named + " of " + n + ")");
+            // menus.def's native Windows rows (W-core): each one the shell draws, none left out
+            var natives = new List<string>();
+            int unknown = 0;
+            for (int i = 0; i < n; i++)
+            {
+                if (Core.core_menu_at(CoreApi.CORE_OS_WIN, i, out CoreMenuItem m) != CoreApi.CORE_OK || m.kind != CoreApi.CORE_MENU_NATIVE) continue;
+                if (MenuNatives.Of(m.id) == MenuNative.None) unknown++;
+                natives.Add(MenuNatives.Of(m.id).ToString());
+            }
+            Check(unknown == 0 && string.Join(",", natives) == "Exit,Cut,Copy,Paste,SelectAll,About",
+                  "the native Windows rows are the shell's, in menu order (" + string.Join(",", natives) + ")");
+            Check(Core.core_menu_at(CoreApi.CORE_OS_WIN, 0, out CoreMenuItem first) == CoreApi.CORE_OK && first.id == (int)Menu.M_APP
+                  && Texts.Get((CoreText)first.title) == "_RB Stems Plus", "the first menu's Windows title carries its access key");
+            // outside the menu bar (the Settings button, About's window title, the log's name) a
+            // menu title reads without its access key, as WPF's AccessText would draw it
+            Check(Texts.Plain(CoreText.T_MENU_SETTINGS) == "Settings…" && Texts.Plain(CoreText.T_MENU_ABOUT) == "About RB Stems Plus"
+                  && Texts.Plain(CoreText.T_MENU_SHOW_LOG) == "Show Log", "a menu title without its access key: Settings…, About, Show Log");
+            Check(Texts.StripAccessKey("E_xit") == "Exit" && Texts.StripAccessKey("a__b") == "a_b" && Texts.StripAccessKey("end_") == "end_"
+                  && Texts.StripAccessKey("") == "", "StripAccessKey: one marker dropped, \"__\" kept as one \"_\", a trailing \"_\" kept");
         }
 
         private static void Pure()
         {
             Check(Json.Quote("a\"b\\c\nd\u0001é") == "\"a\\\"b\\\\c\\nd\\u0001é\"", "Json.Quote escapes quotes, backslashes and controls");
             Check(Json.Click("install_plus") == "{\"ev\":\"click\",\"id\":\"install_plus\"}", "Json.Click");
+
+            // the start config gives rekordbox's model under roaming AppData (VM bug c: without it the
+            // complete uninstall always stopped at the model restore); no roaming folder, no "model"
+            string roaming = Path.Combine("C:", "Users", "u", "AppData", "Roaming");
+            using (var cfg = System.Text.Json.JsonDocument.Parse(CoreConfig.Build("1.5.0", "home", "support", "app", roaming, "tmp", "[]")))
+            {
+                var p = cfg.RootElement.GetProperty("paths");
+                Check(cfg.RootElement.GetProperty("os").GetString() == "win" && p.GetProperty("support").GetString() == "support"
+                      && p.GetProperty("model").GetString() == Path.Combine(roaming, "Pioneer", "rekordbox6", "models", "demucs3_model", "hdemucs.onnx"),
+                      "the start config: paths.model is rekordbox's hdemucs.onnx under roaming AppData");
+                Check(p.GetProperty("helper").GetString() == Path.Combine("app", "rbsp-prepare.exe")
+                      && p.GetProperty("kept").GetString() == Path.Combine("support", "kept"),
+                      "the start config: paths.helper is rbsp-prepare.exe beside the exe, paths.kept support\\kept (the Prepare and Status tabs' helper and kept sets)");
+            }
+            using (var cfg = System.Text.Json.JsonDocument.Parse(CoreConfig.Build("1.5.0", "home", "support", "app", "", "tmp", "[]")))
+                Check(!cfg.RootElement.GetProperty("paths").TryGetProperty("model", out _), "the start config: no roaming folder, no paths.model (the model steps fail closed)");
 
             var f = new DialogForm();
             f.Buttons.AddRange(new[] { "Continue", "Cancel", "Don't Ask Again…" });
@@ -245,7 +391,7 @@ namespace RbStemsPlus.Shell
 
             string dir = Path.Combine(Path.GetTempPath(), "rbsp-shell-test-" + Environment.ProcessId);
             string path = Path.Combine(dir, "Logs", "app.log");
-            var log = new LogBuffer(path, () => new DateTime(2026, 11, 12, 10, 0, 5));
+            var log = new LogBuffer(dir, () => new DateTime(2026, 11, 12, 10, 0, 5));
             bool first = log.Add("hello"), second = log.Add("world");
             Check(first && !second, "the log pane's flush is posted once per batch");
             Check(log.Take() == "10:00:05  hello\n10:00:05  world\n" && log.Take() == "", "the pane's lines with the time, taken once");
@@ -268,8 +414,8 @@ namespace RbStemsPlus.Shell
             Func<string> counted = () => { shown++; return null; };
 
             var n = new FakeStart();
-            Check(StartSequence.Run(false, null, n, counted, G(n), out exit, out sw) == StartOutcome.Go && n.Seq == "at_start" && shown == 0,
-                  "a normal start: update_at_start only, no off-screen window (" + n.Seq + ")");
+            Check(StartSequence.Run(false, null, n, counted, G(n), out exit, out sw) == StartOutcome.Go && n.Seq == "token,os,at_start" && shown == 0,
+                  "a normal start: the token, the minimum, update_at_start, no off-screen window (" + n.Seq + ")");
             n = new FakeStart { At = StartSequence.UpdateBusy };
             Check(StartSequence.Run(false, null, n, fine, G(n), out exit, out sw) == StartOutcome.Exit && exit == 0, "an update still running (UPDATE_BUSY): exit 0, no UI");
             n = new FakeStart { At = 6 };
@@ -280,12 +426,22 @@ namespace RbStemsPlus.Shell
 
             n = new FakeStart();
             shown = 0;
-            Check(StartSequence.Run(true, null, n, counted, G(n), out exit, out sw) == StartOutcome.Go && n.Seq == "wait 60000,os,at_start" && shown == 1,
-                  "--swap: the wait (60 s), the minimum, the off-screen start, then update_at_start (" + n.Seq + ")");
+            Check(StartSequence.Run(true, null, n, counted, G(n), out exit, out sw) == StartOutcome.Go && n.Seq == "wait 60000,token,os,at_start" && shown == 1,
+                  "--swap: the wait (60 s), the token, the minimum, the off-screen start, then update_at_start (" + n.Seq + ")");
             n = new FakeStart { Wait = StartSequence.SwapNone };
             shown = 0;
-            Check(StartSequence.Run(true, null, n, counted, G(n), out exit, out sw) == StartOutcome.Go && n.Seq == "wait 60000,at_start" && shown == 0,
+            Check(StartSequence.Run(true, null, n, counted, G(n), out exit, out sw) == StartOutcome.Go && n.Seq == "wait 60000,token,os,at_start" && shown == 0,
                   "--swap that no pending names: a normal start");
+            foreach (bool swap in new[] { false, true })
+            {
+                foreach (var (os, expected) in new[] { (1, CoreText.T_WIN_START_OLD_WINDOWS), (2, CoreText.T_WIN_START_OLD_NET) })
+                {
+                    n = new FakeStart { Wait = StartSequence.SwapNone, Os = os };
+                    Check(StartSequence.Run(swap, null, n, counted, G(n), out exit, out sw, out var refusal) == StartOutcome.Refuse
+                          && refusal == expected && !sw && n.Seq == (swap ? "wait 60000,token,os" : "token,os"),
+                          (swap ? "stale --swap" : "direct start") + ": minimum verdict " + os + " refuses before update_at_start (" + n.Seq + ")");
+                }
+            }
             n = new FakeStart { Wait = StartSequence.SwapOldRuns };
             Check(StartSequence.Run(true, null, n, counted, G(n), out exit, out sw) == StartOutcome.Exit && exit == 1 && n.Seq == "wait 60000,failed",
                   "--swap, the old app still running: failed swap, exit, no UI (" + n.Seq + ")");
@@ -293,17 +449,17 @@ namespace RbStemsPlus.Shell
             Check(StartSequence.Run(true, "the self-test failed (3)", n, counted, G(n), out exit, out sw) == StartOutcome.Exit && n.Seq == "wait 60000,failed",
                   "--swap, core_selftest failed: failed swap after the wait, nothing more (" + n.Seq + ")");
             n = new FakeStart { Os = 1 };
-            Check(StartSequence.Run(true, null, n, counted, G(n), out exit, out sw) == StartOutcome.Exit && n.Seq == "wait 60000,os,failed",
+            Check(StartSequence.Run(true, null, n, counted, G(n), out exit, out sw) == StartOutcome.Exit && n.Seq == "wait 60000,token,os,failed",
                   "--swap below the minimum Windows: failed swap");
             n = new FakeStart { Os = 2 };
-            Check(StartSequence.Run(true, null, n, counted, G(n), out exit, out sw) == StartOutcome.Exit && n.Seq == "wait 60000,os,failed", "--swap below .NET 4.8.1: failed swap");
+            Check(StartSequence.Run(true, null, n, counted, G(n), out exit, out sw) == StartOutcome.Exit && n.Seq == "wait 60000,token,os,failed", "--swap below .NET 4.8.1: failed swap");
             n = new FakeStart();
-            Check(StartSequence.Run(true, null, n, () => "XamlParseException", G(n), out exit, out sw) == StartOutcome.Exit && exit == 1 && n.Seq == "wait 60000,os,failed",
+            Check(StartSequence.Run(true, null, n, () => "XamlParseException", G(n), out exit, out sw) == StartOutcome.Exit && exit == 1 && n.Seq == "wait 60000,token,os,failed",
                   "--swap, the off-screen WPF start failed: failed swap, no UPDATE_RESULT kept here");
             n = new FakeStart { Os = -1 };
             Check(StartSequence.Run(true, null, n, fine, G(n), out exit, out sw) == StartOutcome.Go, "--swap, the minimum not askable: not a failure");
             n = new FakeStart { Failed = -1 };
-            Check(StartSequence.Run(true, null, n, () => "x", G(n), out exit, out sw) == StartOutcome.Exit && n.Seq == "wait 60000,os,failed,stub",
+            Check(StartSequence.Run(true, null, n, () => "x", G(n), out exit, out sw) == StartOutcome.Exit && n.Seq == "wait 60000,token,os,failed,stub",
                   "--swap, the result can't be written: the stub started by the shell");
             n = new FakeStart { Wait = -1 };
             Check(StartSequence.Run(true, "rbsp-core.dll can't be loaded (126)", n, counted, G(n), out exit, out sw) == StartOutcome.Exit && exit == 1 && n.Seq == "wait 60000,waitold 60000,stub",
@@ -326,6 +482,46 @@ namespace RbStemsPlus.Shell
             n = new FakeStart { At = StartSequence.UpdateBusy };
             StartSequence.Run(true, null, n, fine, G(n), out exit, out sw);
             Check(!sw, "not swapping: UPDATE_BUSY");
+
+            // the token's refusals (app.md §5.9, I35; review a-a4-F5): checked first on a normal start,
+            // before update_at_start writes anything; under --swap one of the checks, so failed swap
+            n = new FakeStart { Token = StartSequence.TokenElevated };
+            Check(StartSequence.Run(false, null, n, counted, G(n), out exit, out sw, out CoreText? refusalText) == StartOutcome.Refuse && refusalText == CoreText.T_START_ROOT
+                  && n.Seq == "token" && !sw, "Run as administrator: refused before update_at_start (" + n.Seq + ")");
+            n = new FakeStart { Token = StartSequence.TokenUacOff };
+            Check(StartSequence.Run(false, null, n, counted, G(n), out exit, out sw, out refusalText) == StartOutcome.Refuse && refusalText == CoreText.T_WIN_START_UAC_OFF && n.Seq == "token",
+                  "UAC off: refused before update_at_start");
+            n = new FakeStart { Token = StartSequence.TokenService };
+            Check(StartSequence.Run(false, null, n, counted, G(n), out exit, out sw, out refusalText) == StartOutcome.Refuse && n.Seq == "token", "a service account: refused");
+            n = new FakeStart { Token = StartSequence.TokenUnknown };
+            Check(StartSequence.Run(false, null, n, counted, G(n), out exit, out sw, out refusalText) == StartOutcome.Refuse && n.Seq == "token", "an unknown token: refused");
+            n = new FakeStart { Token = -1 };
+            Check(StartSequence.Run(false, null, n, counted, G(n), out exit, out sw, out refusalText) == StartOutcome.Refuse && n.Seq == "token", "the token check not callable: refused");
+            n = new FakeStart();
+            Check(StartSequence.Run(false, null, n, counted, G(n), out exit, out sw, out refusalText) == StartOutcome.Go && refusalText == null && n.Seq == "token,os,at_start",
+                  "a normal token: the start goes on (" + n.Seq + ")");
+            n = new FakeStart { Token = StartSequence.TokenElevated };
+            Check(StartSequence.Run(false, "the self-test failed", n, counted, G(n), out exit, out sw, out refusalText) == StartOutcome.Refuse && n.Calls.Count == 0,
+                  "a refused core: its own refusal, the token not asked");
+            n = new FakeStart { Token = StartSequence.TokenElevated };
+            shown = 0;
+            Check(StartSequence.Run(true, null, n, counted, G(n), out exit, out sw, out refusalText) == StartOutcome.Exit && exit == 1 && !sw && shown == 0
+                  && n.Seq == "wait 60000,token,failed", "--swap elevated: failed swap, no UI (" + n.Seq + ")");
+            n = new FakeStart { Token = StartSequence.TokenElevated, Wait = StartSequence.SwapNone };
+            Check(StartSequence.Run(true, null, n, counted, G(n), out exit, out sw, out refusalText) == StartOutcome.Refuse
+                  && refusalText == CoreText.T_START_ROOT && n.Seq == "wait 60000,token" && n.Lines.Count == 0,
+                  "--swap that no pending names, elevated: a normal start's refusal, no log (" + n.Seq + ")");
+            n = new FakeStart();
+            Check(StartSequence.Run(true, null, n, counted, G(n), out exit, out sw, out refusalText) == StartOutcome.Go && sw && n.Seq == "wait 60000,token,os,at_start",
+                  "--swap: the token asked once, among the checks (" + n.Seq + ")");
+            // each verdict's dialog: Windows' T_START_ROOT, T_WIN_START_UAC_OFF, else "can't open"
+            Check(StartSequence.TokenRefusal(StartSequence.TokenOk) == null, "token OK: no refusal");
+            Check(StartSequence.TokenRefusal(StartSequence.TokenElevated) == CoreText.T_START_ROOT
+                  && Texts.Get(CoreText.T_START_ROOT).Contains("Run as administrator"), "elevated: T_START_ROOT, Windows' text");
+            Check(StartSequence.TokenRefusal(StartSequence.TokenUacOff) == CoreText.T_WIN_START_UAC_OFF
+                  && Texts.Get(CoreText.T_WIN_START_UAC_OFF).Contains("User Account Control"), "UAC off: T_WIN_START_UAC_OFF");
+            Check(StartSequence.TokenRefusal(StartSequence.TokenService) == CoreText.T_CANT_OPEN && StartSequence.TokenRefusal(StartSequence.TokenUnknown) == CoreText.T_CANT_OPEN
+                  && StartSequence.TokenRefusal(-1) == CoreText.T_CANT_OPEN, "service, unknown, not callable: T_CANT_OPEN");
 
             // Recover: the result and the restart; the shell's stub when the core can't
             n = new FakeStart();
@@ -369,6 +565,17 @@ namespace RbStemsPlus.Shell
             Check(c1.Kills == 1 && n.Seq == "failed", "once: the recovery (failed swap, the old app restarted), then one kill (" + n.Seq + ")");
             Check(!g.Finish(), "Finish after it fired: false (the caller does nothing more)");
 
+            var wrap = new GuardCase();
+            n = new FakeStart();
+            long beforeWrap = long.MaxValue / 1000 - Stopwatch.Frequency;
+            Interlocked.Exchange(ref wrap.Now, beforeWrap);
+            g = new SwapGuard(n, () => Interlocked.Increment(ref wrap.Kills),
+                () => SwapGuard.TimestampMs(Interlocked.Read(ref wrap.Now)), 1);
+            g.Arm(SwapGuard.StageMs);
+            Interlocked.Exchange(ref wrap.Now, beforeWrap + (SwapGuard.StageMs / 1000) * Stopwatch.Frequency);
+            Check(Until(() => wrap.Kills == 1) && n.Seq == "failed", "the deadline across the timestamp multiplication limit: recovered and killed");
+            g.Finish();
+
             // a winning Finish: no kill, ever
             var c2 = new GuardCase();   // its own clock and kills: an earlier case's guard thread never touches them (WC11)
             n = new FakeStart();
@@ -396,7 +603,7 @@ namespace RbStemsPlus.Shell
             g = new SwapGuard(n, () => Interlocked.Increment(ref c4.Kills), () => Interlocked.Read(ref c4.Now), 1);
             Func<string> hang = () => { Interlocked.Exchange(ref c4.Now, SwapGuard.StageMs + SwapGuard.GraceMs); Until(() => Volatile.Read(ref c4.Kills) == 1); return "hung"; };
             var r = StartSequence.Run(true, null, n, hang, g, out int exit, out bool sw);
-            Check(r == StartOutcome.Exit && c4.Kills >= 1 && n.Seq == "wait 60000,os,failed", "a hung off-screen start: the guard's one recovery, its kill, none by the sequence (" + n.Seq + ")");
+            Check(r == StartOutcome.Exit && c4.Kills >= 1 && n.Seq == "wait 60000,token,os,failed", "a hung off-screen start: the guard's one recovery, its kill, none by the sequence (" + n.Seq + ")");
 
             // WV3: the off-screen stage's guard waits its 30 s plus the grace
             var c5 = new GuardCase();   // its own clock and kills: an earlier case's guard thread never touches them (WC11)
@@ -404,7 +611,7 @@ namespace RbStemsPlus.Shell
             g = new SwapGuard(n, () => Interlocked.Increment(ref c5.Kills), () => Interlocked.Read(ref c5.Now), 1);
             Func<string> slow = () => { Interlocked.Exchange(ref c5.Now, SwapGuard.StageMs + 1); Thread.Sleep(30); return "the off-screen window drew no frame in 30 s"; };
             r = StartSequence.Run(true, null, n, slow, g, out exit, out sw);
-            Check(r == StartOutcome.Exit && c5.Kills == 0 && n.Seq == "wait 60000,os,failed", "the off-screen start's own 30 s timeout wins over the guard's grace: a clean recovery, no kill (" + n.Seq + ")");
+            Check(r == StartOutcome.Exit && c5.Kills == 0 && n.Seq == "wait 60000,token,os,failed", "the off-screen start's own 30 s timeout wins over the guard's grace: a clean recovery, no kill (" + n.Seq + ")");
 
             // WV1: a recovery that blocks 300 ms, an off-screen failure after the deadline: Run returns after it and the kill
             var c6 = new GuardCase();   // its own clock and kills: an earlier case's guard thread never touches them (WC11)
@@ -414,7 +621,7 @@ namespace RbStemsPlus.Shell
             Func<string> late = () => { Interlocked.Exchange(ref c6.Now, SwapGuard.StageMs + SwapGuard.GraceMs); Until(() => g.HasFired); return "late"; };
             r = StartSequence.Run(true, null, n, late, g, out exit, out sw);
             string seq = n.Seq;
-            Check(r == StartOutcome.Exit && seq.StartsWith("wait 60000,os,failed,failed-end,kill"), "a fired guard: Run returns only after the recovery's end and the kill (" + seq + ")");
+            Check(r == StartOutcome.Exit && seq.StartsWith("wait 60000,token,os,failed,failed-end,kill"), "a fired guard: Run returns only after the recovery's end and the kill (" + seq + ")");
 
             // WV2: the log's lock held: the kill still comes, within the recovery's bound
             var c7 = new GuardCase();   // its own clock and kills: an earlier case's guard thread never touches them (WC11)
@@ -596,6 +803,37 @@ namespace RbStemsPlus.Shell
             Check(f.Calls.FindAll(c => c == "close").Count == 1, "only the latest veto's quit closes (" + f.Seq + ")");
         }
 
+        private static void CloseHandoff()
+        {
+            var f = new FakeClose();
+            var g = new CloseGate(f);
+            bool currentWritten = false;
+            g.RunHandoff(() => currentWritten = true);
+            Action handoff = f.Off.Dequeue();
+            g.OnClosing();
+            Action quit = f.Off.Dequeue();
+            using (var waiting = new ManualResetEventSlim(false))
+            {
+                f.ReadClock = waiting.Set;
+                var waiter = new Thread(() => { quit(); waiting.Set(); }) { IsBackground = true };
+                waiter.Start();
+                Check(waiting.Wait(5000) && f.Ui.Count == 0, "close waits while the first frame's update is still queued");
+                f.Now = 37;
+                handoff();
+                Check(waiter.Join(5000) && currentWritten && f.Ui.Count == 1, "close is approved once the update wrote current");
+                Check(f.Seq == "ask 0,wait " + (CloseGate.QuitWaitMs - 37), "the update and CriticalWork share one close deadline (" + f.Seq + ")");
+                f.Settle();
+                Check(g.OnClosing(), "the handoff releases the close gate");
+            }
+
+            f = new FakeClose();
+            g = new CloseGate(f);
+            g.RunHandoff(() => { });
+            Check(g.OnQueryEndSession() && f.Seq == "reason on", "a queued update handoff also holds logoff");
+            f.Settle();
+            Check(f.Seq == "reason on,wait 30000,reason off,close", "logoff resumes once the update handoff finishes");
+        }
+
         // a decided quit takes the one-copy window down at once (CloseGate's Quitting)
         private static void QuitWindow()
         {
@@ -743,7 +981,7 @@ namespace RbStemsPlus.Shell
             // the quit's kind (UN5): the uninstall's (ctx 1) leaves its deleted folder deleted
             string dir = Path.Combine(Path.GetTempPath(), "rbsp-shell-quit-" + Environment.ProcessId);
             string path = Path.Combine(dir, "Logs", "app.log");
-            var buf = new LogBuffer(path, () => new DateTime(2026, 11, 13, 10, 0, 0));
+            var buf = new LogBuffer(dir, () => new DateTime(2026, 11, 13, 10, 0, 0));
             var kind = new QuitKind(buf);
             kind.Quit(IntPtr.Zero);
             buf.Add("before");
@@ -1806,6 +2044,26 @@ namespace RbStemsPlus.Shell
             return bad;
         }
 
+        private static void VersionRowAutomation()
+        {
+            // WPF doesn't run on the Mac. Check the template and peer wiring, leaving UIA traversal to Windows.
+            string shellDir = Path.GetDirectoryName(Path.GetDirectoryName(ThisFile()));
+            var window = XDocument.Load(Path.Combine(shellDir, "MainWindow.xaml")).Root;
+            XNamespace wpf = window.GetDefaultNamespace();
+            var versions = window.Descendants(wpf + "ItemsControl")
+                .Single(item => (string)item.Attribute("ItemsSource") == "{Binding Versions}");
+            var row = versions.Descendants().SingleOrDefault(element =>
+                (string)element.Attribute("AutomationProperties.AutomationId") == "{Binding AutomationId}");
+            Check(row?.Name == window.GetNamespaceOfPrefix("local") + "RbVersionRowText"
+                  && (string)row.Attribute("AutomationProperties.Name") == "{Binding Spoken}"
+                  && (string)row.Attribute("AutomationProperties.HelpText") == "{Binding Tip}",
+                  "rekordbox row binds its automation ID, name and help on the control-view text element");
+            string code = File.ReadAllText(Path.Combine(shellDir, "MainWindow.xaml.cs"));
+            Check(Regex.IsMatch(code, @"class RbVersionRowText : TextBlock\s*\{\s*protected override AutomationPeer OnCreateAutomationPeer\(\) => new RowPeer\(this\);")
+                  && Regex.IsMatch(code, @"class RowPeer : TextBlockAutomationPeer\s*\{\s*public RowPeer\(RbVersionRowText owner\) : base\(owner\) \{ \}\s*protected override bool IsControlElementCore\(\) => true;"),
+                  "rekordbox row creates a text peer included in UI Automation's Control View");
+        }
+
         private static void BindingModes()
         {
             string shellDir = Path.GetDirectoryName(Path.GetDirectoryName(ThisFile()));
@@ -2179,7 +2437,156 @@ namespace RbStemsPlus.Shell
             var back = WindowPlace.Load(path);
             Check(saved && back != null && back.Format() == w.Format() && !File.Exists(path + ".tmp"),
                   "saved (its folder made), saved again over it, read back");
+            File.WriteAllText(path + ".tmp", "occupied");
+            w.Maximized = false;
+            Check(w.Save(path) && File.Exists(path + ".tmp") && File.ReadAllText(path + ".tmp") == "occupied"
+                  && WindowPlace.Load(path)?.Format() == w.Format(), "the save leaves an occupied window.tmp alone");
             Directory.Delete(dir, true);
+        }
+
+        private static void SessionRenderReset()
+        {
+            bool RequestsReset(int msg, int reason) => RepaintPlan.IsSessionReturn(msg, RepaintPlan.Classify(msg, reason));
+            const int wts = RepaintPlan.WM_WTSSESSION_CHANGE;
+            Check(RequestsReset(wts, RepaintPlan.WTS_CONSOLE_CONNECT)
+                  && RequestsReset(wts, RepaintPlan.WTS_REMOTE_CONNECT)
+                  && RequestsReset(wts, RepaintPlan.WTS_SESSION_UNLOCK)
+                  && !RequestsReset(wts, RepaintPlan.WTS_SESSION_LOCK)
+                  && !RequestsReset(wts, RepaintPlan.WTS_REMOTE_DISCONNECT)
+                  && !RequestsReset(RepaintPlan.WM_POWERBROADCAST, RepaintPlan.PBT_APMRESUMEAUTOMATIC)
+                  && !RequestsReset(RepaintPlan.WM_DISPLAYCHANGE, 32),
+                  "session render reset: only console connect, remote connect and unlock request a reset");
+
+            // The host compiles RepaintPlan but cannot create a WPF window. Check the adapter's
+            // wiring here and leave the actual presentation check to the Windows run.
+            string shellDir = Path.GetDirectoryName(Path.GetDirectoryName(ThisFile()));
+            string window = File.ReadAllText(Path.Combine(shellDir, "MainWindow.xaml.cs"));
+            string shell = File.ReadAllText(Path.Combine(shellDir, "Shell.cs"));
+            string recovery = File.ReadAllText(Path.Combine(shellDir, "RenderRecovery.cs"));
+            Check(window.Contains("HwndSource.FromHwnd(hwnd)?.AddHook(Hook);")
+                  && window.Contains("if (RepaintPlan.IsSessionReturn(msg, cause)) sessionRenderResetPending = true;")
+                  && Regex.IsMatch(window, @"while \(repaint\.Take\(NowMs\(\)\)\)\s*\{\s*if \(sessionRenderResetPending\) ResetSessionRenderTarget\(\);\s*Nudge\(\);")
+                  && window.Contains("renderRecovery.Reset(RenderResetReason.SessionChange);"),
+                  "session render reset: WPF window hook requests the reset in the existing redraw round");
+            Check(recovery.Contains("target.RenderMode = RenderMode.SoftwareOnly;")
+                  && Regex.IsMatch(recovery, @"target\.RenderMode = original;\s*Invalidate\(\);\s*"
+                      + @"log\?\.Invoke\(reason switch\s*\{\s*RenderResetReason.SessionChange => ""shell: session render target reset""")
+                  && shell.Contains("Window = new MainWindow(Model, Log);"),
+                  "session render reset: the per-window mode is restored before the completion line goes to the shell log");
+            Check(recovery.Contains("window.Closed += OnClosed;")
+                  && Regex.IsMatch(recovery, @"void OnClosed\(object sender, EventArgs e\)\s*\{[^}]*restore\?\.Stop\(\);"),
+                  "session render reset: window close cancels the delayed restore");
+        }
+
+        private static void RenderRecoveryDecisions()
+        {
+            Check(RenderResetDecision.Choose(true, false, true, false) == RenderResetReason.PresentFailed,
+                  "render recovery: a present failure requests a reset even after the first frame");
+            Check(RenderResetDecision.Choose(true, false, false, true) == RenderResetReason.FirstFrameTimeout,
+                  "render recovery: a missing first frame requests a reset without a present-failure message");
+            Check(RenderResetDecision.Choose(true, false, false, false) == RenderResetReason.None,
+                  "render recovery: a healthy window leaves its render mode alone");
+            Check(RenderResetDecision.Choose(true, true, true, true) == RenderResetReason.None,
+                  "render recovery: even both failure signals cannot repeat an automatic reset");
+            Check(RenderResetDecision.Choose(false, false, true, true) == RenderResetReason.None,
+                  "render recovery: a window ineligible for recovery leaves its render mode alone");
+        }
+
+        // The picture after a session or display change (Repaint.cs): which messages start a round,
+        // the round's nudges, a change while minimized or away waiting for the window, and away,
+        // minimizing and closing ending a round so none survives
+        private static void Repaint()
+        {
+            const int WTS = RepaintPlan.WM_WTSSESSION_CHANGE;
+            Check(RepaintPlan.Classify(WTS, RepaintPlan.WTS_CONSOLE_CONNECT) == RepaintCause.Back
+                  && RepaintPlan.Classify(WTS, RepaintPlan.WTS_REMOTE_CONNECT) == RepaintCause.Back
+                  && RepaintPlan.Classify(WTS, RepaintPlan.WTS_SESSION_UNLOCK) == RepaintCause.Back
+                  && RepaintPlan.Classify(RepaintPlan.WM_POWERBROADCAST, RepaintPlan.PBT_APMRESUMEAUTOMATIC) == RepaintCause.Back
+                  && RepaintPlan.Classify(RepaintPlan.WM_POWERBROADCAST, RepaintPlan.PBT_APMRESUMESUSPEND) == RepaintCause.Back,
+                  "repaint: console and remote connects, an unlock and a resume bring the session back");
+            Check(RepaintPlan.Classify(WTS, RepaintPlan.WTS_CONSOLE_DISCONNECT) == RepaintCause.Away
+                  && RepaintPlan.Classify(WTS, RepaintPlan.WTS_REMOTE_DISCONNECT) == RepaintCause.Away
+                  && RepaintPlan.Classify(WTS, RepaintPlan.WTS_SESSION_LOCK) == RepaintCause.Away
+                  && RepaintPlan.Classify(RepaintPlan.WM_POWERBROADCAST, RepaintPlan.PBT_APMSUSPEND) == RepaintCause.Away,
+                  "repaint: disconnects, a lock and a suspend take it away");
+            Check(RepaintPlan.Classify(RepaintPlan.WM_DISPLAYCHANGE, 32) == RepaintCause.Display
+                  && RepaintPlan.Classify(RepaintPlan.WM_DPICHANGED, 0x00C000C0) == RepaintCause.Display
+                  && RepaintPlan.Classify(RepaintPlan.WM_DWMCOMPOSITIONCHANGED, 0) == RepaintCause.Display,
+                  "repaint: display, DPI and composition changes");
+            Check(RepaintPlan.Classify(WTS, 5) == RepaintCause.None && RepaintPlan.Classify(WTS, 6) == RepaintCause.None
+                  && RepaintPlan.Classify(RepaintPlan.WM_POWERBROADCAST, 0x8013) == RepaintCause.None
+                  && RepaintPlan.Classify(0x000F, 0) == RepaintCause.None && RepaintPlan.Classify(0x001C, 1) == RepaintCause.None,
+                  "repaint: a logon or logoff, a power setting, WM_PAINT and WM_ACTIVATEAPP start nothing");
+
+            // the nudges due between FROM and TO (50 ms steps)
+            string Nudges(RepaintPlan p, long from, long to)
+            {
+                var seen = new List<string>();
+                for (long t = from; t <= to; t += 50)
+                    while (p.Take(t)) seen.Add(t.ToString());
+                return string.Join(",", seen);
+            }
+            var r = new RepaintPlan();
+            Check(r.DueIn(0) == -1 && !r.Take(100000), "repaint: nothing scheduled before a change");
+            r.Note(RepaintCause.Back, false, 1000);
+            Check(r.DueIn(1000) == 0 && r.Running, "repaint: the session back: a round starts at once");
+            Check(Nudges(r, 1000, 20000) == "1000,1500,3000,7000", "repaint: the round's nudges at 0, 0.5, 2 and 6 s");
+            Check(!r.Running && r.DueIn(20000) == -1 && !r.Pending, "repaint: nothing after the last nudge");
+            r.Note(RepaintCause.Display, false, 30000);
+            Check(r.DueIn(30100) == 0 && Nudges(r, 30100, 30100) == "30100", "repaint: a nudge due late is taken once at the next tick");
+            Check(Nudges(r, 30150, 60000) == "30500,32000,36000", "repaint: then the rest at their times");
+
+            // a new change in a round starts it again
+            r = new RepaintPlan();
+            r.Note(RepaintCause.Display, false, 0);
+            Check(Nudges(r, 0, 2000) == "0,500,2000", "repaint: a display change starts a round");
+            r.Note(RepaintCause.Display, false, 2100);
+            Check(Nudges(r, 2100, 20000) == "2100,2600,4100,8100", "repaint: a second change starts the round again");
+
+            // minimized: the change waits for the restore; a restore with nothing waiting does nothing
+            r = new RepaintPlan();
+            r.Note(RepaintCause.Restored, false, 0);
+            Check(!r.Running, "repaint: a restore with nothing waiting starts nothing");
+            r.Note(RepaintCause.Away, true, 10);
+            r.Note(RepaintCause.Back, true, 20);
+            r.Note(RepaintCause.Display, true, 30);
+            Check(!r.Running && r.Pending && !r.Take(100000), "repaint: changes while minimized wait");
+            r.Note(RepaintCause.Restored, true, 40);
+            Check(!r.Running, "repaint: still minimized: still waiting");
+            r.Note(RepaintCause.Restored, false, 5000);
+            Check(r.Running && !r.Pending && Nudges(r, 5000, 20000) == "5000,5500,7000,11000", "repaint: the restore runs the round");
+
+            // away (locked, disconnected) during a round: it ends, nothing stale is left to fire
+            r = new RepaintPlan();
+            r.Note(RepaintCause.Back, false, 0);
+            Nudges(r, 0, 600);
+            r.Note(RepaintCause.Away, false, 700);
+            Check(!r.Running && r.Away && r.DueIn(700) == -1 && !r.Take(100000), "repaint: a disconnect in a round cancels the rest of it");
+            r.Note(RepaintCause.Display, false, 800);
+            r.Note(RepaintCause.Restored, false, 900);
+            Check(!r.Running && r.Pending, "repaint: a display change or a restore while away waits for the session");
+            r.Note(RepaintCause.Back, false, 1000);
+            Check(r.Running && !r.Away && !r.Pending && Nudges(r, 1000, 20000) == "1000,1500,3000,7000", "repaint: back: a whole new round, none of the old one's times");
+
+            // minimizing in a round ends it; the restore runs a whole round
+            r = new RepaintPlan();
+            r.Note(RepaintCause.Back, false, 0);
+            Nudges(r, 0, 0);
+            r.Note(RepaintCause.Minimized, true, 300);
+            Check(!r.Running && r.Pending && !r.Take(100000), "repaint: minimized in a round: the rest waits for the restore");
+            r.Note(RepaintCause.Restored, false, 9000);
+            Check(Nudges(r, 9000, 30000) == "9000,9500,11000,15000", "repaint: the restore's round");
+            r.Note(RepaintCause.Minimized, true, 40000);
+            Check(!r.Pending && !r.Running, "repaint: minimized with no round: nothing waits");
+
+            // closed: nothing ever again
+            r = new RepaintPlan();
+            r.Note(RepaintCause.Back, false, 0);
+            r.Note(RepaintCause.Closed, false, 100);
+            Check(!r.Running && !r.Pending && r.DueIn(100) == -1, "repaint: closing ends the round");
+            r.Note(RepaintCause.Back, false, 200);
+            r.Note(RepaintCause.Display, false, 300);
+            Check(!r.Running && !r.Take(100000), "repaint: after the close no change starts one");
         }
 
         // (c) a PropertyChanged handler throws part-way (the render fails); the reload after it
@@ -2196,8 +2603,11 @@ namespace RbStemsPlus.Shell
             m.PropertyChanged += (s, e) => raised.Add(e.PropertyName);
             m.Apply(snap, true);
             var all = new HashSet<string>();
-            foreach (var p in typeof(ManageModel).GetProperties(BindingFlags.Public | BindingFlags.Instance)) all.Add(p.Name);
-            Check(threw && raised.SetEquals(all), "after a render that threw, the reload raises every property (" + raised.Count + " of " + all.Count + ")");
+            // a collection (Versions) is the same object throughout: it says what changed itself
+            foreach (var p in typeof(ManageModel).GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                if (!typeof(System.Collections.Specialized.INotifyCollectionChanged).IsAssignableFrom(p.PropertyType)) all.Add(p.Name);
+            all.ExceptWith(raised);
+            Check(threw && all.Count == 0, "after a render that threw, the reload raises every property (missing: " + string.Join(", ", all) + ")");
         }
 
         // (d) the presenter: two overlapping requests are shown one at a time, in call order; a
@@ -2296,31 +2706,19 @@ namespace RbStemsPlus.Shell
             Check(true, "PostMain racing Stop (20 rounds of 4 x 1000 posts): every job run or dropped, exactly once");
         }
 
-        // I10, I86: the start config's "prepare_tabs" (Host.WithPrepareTabs, from Shell.PrepareShown)
-        // decides the menu rows the shell builds from: without it View > Status, View > Prepare and
-        // the Prepare menu are hidden and off (no shortcut: MenuOn is false), with it they are on
-        private static void PrepareTabsMenus()
+        // Compile the release branch of CoreConfig and pass the app's startup config to the core.
+        private static void ReleasePrepareTabsMenus()
         {
-            string Base(Host h) => "{\"os\":\"win\",\"version\":\"1.4.0\",\"native\":" + h.NativeList + "}";
-            var rows = new[] { RbStemsPlus.Core.Menu.M_VIEW_STATUS, RbStemsPlus.Core.Menu.M_VIEW_PREPARE, RbStemsPlus.Core.Menu.M_PREPARE,
-                               RbStemsPlus.Core.Menu.M_PREP_PLAYLIST, RbStemsPlus.Core.Menu.M_PREP_STOP };
-            foreach (bool shown in new[] { false, true })
-            {
-                var ui = new FakeUi();
-                var host = NewHost(ui, shellWork: true);
-                string config = Host.WithPrepareTabs(Base(host), shown);
-                Check(shown ? config.EndsWith(",\"prepare_tabs\":true}") : config == Base(host), "PrepareTabsMenus: the config (" + config + ")");
-                Check(host.Start(config), "PrepareTabsMenus: the core takes it (" + shown + ")");
-                foreach (var id in rows)
-                {
-                    uint st = Core.core_menu_state(host.C, (int)id, out IntPtr _, out UIntPtr _);
-                    bool hidden = (st & CoreApi.CORE_MENU_HIDDEN) != 0, on = (st & CoreApi.CORE_MENU_ENABLED) != 0;
-                    Check(shown ? !hidden : hidden && !on, "PrepareTabsMenus: " + id + " " + (shown ? "shown" : "hidden and off") + " (" + st + ")");
-                }
-                uint manage = Core.core_menu_state(host.C, (int)RbStemsPlus.Core.Menu.M_VIEW_MANAGE, out IntPtr _, out UIntPtr _);
-                Check(manage == CoreApi.CORE_MENU_ENABLED, "PrepareTabsMenus: View > Manage on either way (" + manage + ")");
-                host.Stop();
-            }
+            var host = NewHost(new FakeUi(), shellWork: true);
+            string config = CoreConfig.Build("1.5.0", "home", "support", "app", "", "tmp", host.NativeList);
+            bool started = host.Start(config);
+            uint State(Menu id) => Core.core_menu_state(host.C, (int)id, out IntPtr _, out UIntPtr _);
+            Check(started && CoreConfig.PrepareShown
+                  && State(Menu.M_VIEW_STATUS) == CoreApi.CORE_MENU_ENABLED
+                  && State(Menu.M_VIEW_PREPARE) == CoreApi.CORE_MENU_ENABLED
+                  && (State(Menu.M_PREPARE) & CoreApi.CORE_MENU_HIDDEN) == 0,
+                  "release startup shows the Status and Prepare tabs and enables their View menu items");
+            host.Stop();
         }
 
         // WU1: the update commits only on a frame that shows an applied render, once
@@ -2597,6 +2995,63 @@ namespace RbStemsPlus.Shell
             Check(posted == 2, "the next batch posts its own flush");
         }
 
+        // The UI thread's watch (UiWatch.cs, TEST builds): a UI thread blocked inside a core call
+        // (here the first facts read, inside "start", held 6 s by the fake clock) is reported once
+        // with that call and the ones before it; the next beat ends the stall; no beat asked, or
+        // one answered in time, reports nothing
+        private static void UiWatchTests()
+        {
+            long now = 0;
+            var w = new UiWatch(() => now);
+            bool stalled;
+            Check(w.Check(out stalled) == null && !stalled, "UiWatch: nothing asked, nothing said");
+            Check(w.Ask() && !w.Ask(), "UiWatch: one beat out at a time");
+            now = UiWatch.StallMs - 1;
+            Check(w.Check(out stalled) == null, "UiWatch: under StallMs, no stall");
+            w.Beat();
+            now += 10 * UiWatch.StallMs;
+            Check(w.Check(out stalled) == null && w.Ask(), "UiWatch: a beat answered in time: no stall, the next one asked");
+            w.Beat();
+
+            var ui = new FakeUi();
+            var host = NewHost(ui, shellWork: true);
+            string config = "{\"os\":\"win\",\"version\":\"1.4.0\",\"native\":" + host.NativeList + "}";
+            now = 0;
+            w = new UiWatch(() => now);
+            host.Watch = w;
+            string report = null, again = null;
+            bool first = true, reportStalled = false;
+            host.CheapFacts = (c, sheet) =>
+            {
+                if (first)
+                {
+                    first = false;
+                    now += 100;
+                    w.Ask();                       // the watch's thread asks while the UI thread is in here
+                    now += UiWatch.StallMs + 1000;     // and it doesn't come back for 6 s
+                    report = w.Check(out reportStalled);
+                    again = w.Check(out bool _);   // said once per stall
+                }
+                return 0;
+            };
+            Check(host.Start(config), "UiWatch: the core starts with the watch told of its calls");
+            Check(reportStalled && report != null && report.Contains("hasn't answered for 6.0 s")
+                  && report.Contains("inside event {\"ev\":\"start\"} (6.1 s) > facts (6.1 s)"),
+                  "UiWatch: the stall names the core call the UI thread is inside (" + report + ")");
+            Check(again == null, "UiWatch: one report per stall");
+            w.Beat();
+            string back = w.Check(out stalled);
+            Check(back != null && back.Contains("answered again after") && !stalled, "UiWatch: the next beat ends the stall (" + back + ")");
+            Check(w.Ask(), "UiWatch: asked again after the stall");
+            now += UiWatch.StallMs;
+            report = w.Check(out stalled);
+            Check(stalled && report != null && report.Contains("inside no core call") && report.Contains("commit ")
+                  && report.Contains("event {\"ev\":\"start\"} "),
+                  "UiWatch: a stall outside the core says so, with the calls before it, newest first (" + report + ")");
+            Check(UiWatch.EventOp(new string('x', 100)).Length == "event ".Length + 83, "UiWatch: a long event is cut");
+            host.Stop();
+        }
+
         private static void LifeCycle()
         {
             var ui = new FakeUi();
@@ -2637,6 +3092,43 @@ namespace RbStemsPlus.Shell
             Check(answered && form != null, "host->dialog on the flow thread, answered with button 1 (the core's log: \"test flow: button 1\")");
             Check(form != null && form.Title.Length > 0 && form.Buttons.Count == 2 && form.Default >= 0 && form.Default < 2,
                   "the dialog model read: a title, two buttons, the default (" + (form == null ? "none" : form.Title + " / " + string.Join(" / ", form.Buttons)) + ")");
+
+            // With the Manage-only config (no "prepare_tabs", as in TEST builds without the trigger),
+            // the core hides their menu items, so their shortcuts' CanExecute is false; Manage's stay on
+            uint St(Menu id) => Core.core_menu_state(host.C, (int)id, out IntPtr _, out UIntPtr _);
+            Check((St(Menu.M_VIEW_STATUS) & CoreApi.CORE_MENU_HIDDEN) != 0 && (St(Menu.M_VIEW_PREPARE) & CoreApi.CORE_MENU_HIDDEN) != 0
+                  && (St(Menu.M_PREPARE) & CoreApi.CORE_MENU_HIDDEN) != 0 && (St(Menu.M_PREP_CHECK) & CoreApi.CORE_MENU_HIDDEN) != 0
+                  && (St(Menu.M_PREP_STOP) & CoreApi.CORE_MENU_HIDDEN) != 0,
+                  "no \"prepare_tabs\" hides View > Status, View > Prepare and the Prepare menu with its items");
+            Check(St(Menu.M_VIEW_MANAGE) == CoreApi.CORE_MENU_ENABLED && (St(Menu.M_HELP_HOME) & CoreApi.CORE_MENU_ENABLED) != 0,
+                  "View > Manage and Help stay on");
+            Check(host.Send(Json.Tab(CoreApi.CORE_TAB_STATUS)) == CoreApi.CORE_OK && ui.Pump(() => ui.Logged("core: a hidden tab is ignored")),
+                  "{\"ev\":\"tab\"} for Status is ignored without the tabs (logged)");
+
+            // R1's line and Put Back Pioneer's File (W-core's fields) reach the model
+            Core.core_test_set_str(host.C, (int)Field.F_WIN_R1_LINE, "rekordbox's onnxruntime.dll is missing", CoreApi.Nts);
+            Core.core_test_set_i64(host.C, (int)Field.F_WIN_RESTORE_VISIBLE, 1);
+            ui.Pump(() => ui.Model.RestoreVisible);
+            Check(ui.Model.R1Shown && ui.Model.R1Line.StartsWith("rekordbox's") && ui.Model.RestoreVisible && !ui.Model.RestoreEnabled,
+                  "R1's line shown, Put Back Pioneer's File shown and not enabled");
+            Check(Texts.Get(CoreText.T_WIN_BTN_RESTORE) == "Put Back Pioneer's File", "the button's title is the core's");
+            // Don't Ask Again for This Version beside it (N10): its fields reach the model, its title the Mac watcher's
+            Core.core_test_set_i64(host.C, (int)Field.F_WIN_R1_DISMISS_VISIBLE, 1);
+            Core.core_test_set_i64(host.C, (int)Field.F_WIN_R1_DISMISS_ENABLED, 1);
+            ui.Pump(() => ui.Model.R1DismissEnabled);
+            Check(ui.Model.R1DismissVisible && ui.Model.R1DismissEnabled, "Don't Ask Again for This Version shown and enabled");
+            Check(Texts.Get(CoreText.T_W_DONT_ASK) == "Don't Ask Again for This Version", "its title is the core's");
+            // the grouped ruling: the versions it covers reach the model, several make its title
+            // "for These Versions", and a click sends exactly those back as {"ev":"r1_dismiss"}
+            Core.core_test_set_str(host.C, (int)Field.F_WIN_R1_DISMISS_VERSIONS, "7.2.19", CoreApi.Nts);
+            ui.Pump(() => ui.Model.R1DismissVersions == "7.2.19");
+            Check(ui.Model.R1DismissTitle == CoreText.T_W_DONT_ASK, "one version: for This Version");
+            Core.core_test_set_str(host.C, (int)Field.F_WIN_R1_DISMISS_VERSIONS, "7.2.20,7.2.19", CoreApi.Nts);
+            ui.Pump(() => ui.Model.R1DismissVersions == "7.2.20,7.2.19");
+            Check(ui.Model.R1DismissTitle == CoreText.T_WIN_BTN_R1_DISMISS_MANY && Texts.Get(CoreText.T_WIN_BTN_R1_DISMISS_MANY) == "Don't Ask Again for These Versions",
+                  "several versions: for These Versions");
+            Check(Json.R1Dismiss(ui.Model.R1DismissVersions) == "{\"ev\":\"r1_dismiss\",\"versions\":\"7.2.20,7.2.19\"}", "the click names the versions shown");
+            Check(host.Send(Json.Click("r1_dismiss")) != CoreApi.CORE_OK, "a click without them is refused");
 
             // the aggregator's events are the core's
             Check(host.Send(Activation.Activated) == CoreApi.CORE_OK && host.Send(Activation.Deactivated) == CoreApi.CORE_OK

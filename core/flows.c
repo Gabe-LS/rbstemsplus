@@ -16,6 +16,7 @@
  * What stays M4's (marked "M4:"): the refresh's decisions behind the busy state (buttons, the
  * status line between actions), prepareChanged and the Prepare run's stop. */
 #include "internal.h"
+#include "native.h"
 #include <ctype.h>
 #include <math.h>
 #include <stdarg.h>
@@ -25,7 +26,17 @@
 
 /* ---------------------------------------------------------------- the flow's context */
 
-typedef struct { const char *dir, *id; } gate;   /* a LocationGate: dir NULL for none */
+typedef struct {
+    const char *dir, *id;
+#ifdef CORE_WIN_POLICY
+    const char *identity, *pc_identity;
+    const char *unchecked_dir, *unchecked_shown, *unchecked_drive;
+#endif
+} gate;   /* a LocationGate: dir NULL for none */
+
+#ifdef CORE_WIN_POLICY
+typedef struct { const char *token, *versions, *affected; } win_scope;
+#endif
 
 enum { FX_END_UNWAIT = 0, FX_END_STARTUP = 1, FX_ENDS = 2 };   /* EF_REQUEST_WAITING 0, EF_STARTUP_DONE */
 typedef struct fx {
@@ -45,9 +56,13 @@ typedef struct fx {
     core_job *idle_job;         /* busy(nil)'s EF_IDLE, reserved by fx_busy so it can't be lost (AE3), or NULL */
     core_job *ends[FX_ENDS];    /* end effects reserved up front (FX_END_*), posted where they belong or at the flow's end */
 #ifdef CORE_WIN_POLICY
+    const char *win_rb_open_versions;
+    win_scope win_uninstall_scope;
+    const char *win_removal_partial;
     int win_restart;            /* Windows: an admin run said its last file goes at the next restart (I20) */
     int win_rb_closing;         /* Windows: the last rekordbox check still saw it closing (its window gone) */
     uint64_t win_deadline;      /* Windows: this flow's one deadline for rekordbox's linger (mono ns), 0 none yet */
+    char win_r1_shown[256];     /* Windows: Don't Ask Again's versions as its button showed them ("" none) */
 #endif
 } fx;
 
@@ -59,8 +74,13 @@ static void win_offer_update_first(fx *x);
 static int win_flows_event(struct core *c, const char *id, size_t n);
 static void win_flow_ended(struct core *c);
 static void win_restore_flow(fx *x);
+static void win_r1_dismiss_flow(fx *x);
 static int win_rb_updating(fx *x, int *updating);
 static const char *win_rb_open_text(fx *x, core_text_id id);
+static int win_scope_read(fx *x, const char *verb, core_text_id title, win_scope *scope);
+static const char *win_uninstall_note(fx *x, const win_scope *scope, const char *fallback);
+static int win_read_versions(fx *x, const char *list, const char **joined);
+static int win_rows_at_least(const core_facts *f, int state, int count);
 #endif
 
 /* Windows: the checks that only read "updating" (or only whether rekordbox runs) never wait for a
@@ -250,7 +270,13 @@ static void effect_job(core *c, void *payload) {
     case EF_REFRESH: hook_refresh(c); break;
     case EF_MODEL_NOTICE: fl->model_notice = 1; hook_refresh(c); break;   /* T_NOTICE_NO_SAVED_MODEL in the status line */
     case EF_WATCHER_OFF: view_watcher_off(c, (int)m->n); break;            /* updateWatcherState's main half */
-    case EF_REMEASURE: if (c->v.loc.known) view_location_remeasure(c); break;   /* invalidateSize, update(size: true) */
+    case EF_REMEASURE:
+        if (c->v.loc.known
+#ifdef CORE_WIN_POLICY
+            || (c->os == CORE_OS_WIN && c->v.loc.working)
+#endif
+        ) view_location_remeasure(c);   /* invalidateSize, update(size: true) */
+        break;
     default: break;
     }
     core_mark_changed(c);
@@ -711,7 +737,13 @@ static int32_t cache_why(fx *x, const core_facts *cf, const char **line) {
                      fact_flag(&f, FACT_PROTOTYPE_EXISTS), fact_flag(&f, FACT_LIB_EXISTS), fact_flag(&f, FACT_LIB_SIGNED),
                      fact_str_or_null(&f, FACT_ORT_VERSION), fact_str(&f, FACT_ORT_PREFIX)};
 #ifdef CORE_WIN_POLICY
-    int32_t why = x->os == CORE_OS_WIN ? cache_blocked_win(&k, fact_flag(&f, FACT_ORT_LISTED), 0) : cache_blocked(&k);
+    if (x->os == CORE_OS_WIN) {
+        if (f.set[FACT_REKORDBOX_VERSION]) {
+            k.rekordbox_version = fact_str(&f, FACT_REKORDBOX_VERSION);
+            k.rekordbox_installed = k.rekordbox_supported || k.rekordbox_version[0] != 0;
+        }
+    }
+    int32_t why = x->os == CORE_OS_WIN ? cache_blocked_win(&k, fact_flag(&f, FACT_ORT_LISTED), fact_flag(&f, FACT_LIB_UNCHECKED)) : cache_blocked(&k);
 #else
     int32_t why = cache_blocked(&k);
 #endif
@@ -771,13 +803,15 @@ static int preflight(fx *x) {
     return 1;
 }
 
-/* rekordboxClosed() (Actions.swift:272): asks until rekordbox is closed; 1 closed, 0 the user
- * cancelled, -1 it couldn't be checked */
+/* rekordboxClosed() (Actions.swift:272): asks until rekordbox is closed and its installer or
+ * updater isn't running (preflight's two checks: the gate after the downloads and before every
+ * restore, audit a-a6-F1); 1 closed, 0 the user cancelled, -1 it couldn't be checked */
 static int rekordbox_closed(fx *x) {
-    int open;
-    while ((open = rb_open(x, NULL)) > 0) {
+    int open, updating = 0;
+    while ((open = rb_open(x, &updating)) > 0 || (open == 0 && updating)) {
         fx_effect(x, EF_SPINNER, 0, "");
-        int b = ASK(x, T_RB_OPEN_TITLE, RB_OPEN_TX(x, T_RB_OPEN_TRY_AGAIN), 2, TX(x, T_TRY_AGAIN), TX(x, T_CANCEL));
+        int b = updating ? ASK(x, T_ROOT_UPDATING_TITLE, TX(x, T_ROOT_UPDATING_MSG), 2, TX(x, T_TRY_AGAIN), TX(x, T_CANCEL))
+                         : ASK(x, T_RB_OPEN_TITLE, RB_OPEN_TX(x, T_RB_OPEN_TRY_AGAIN), 2, TX(x, T_TRY_AGAIN), TX(x, T_CANCEL));
         fx_effect(x, EF_SPINNER_IF_BUSY, 0, "");
         if (b != 0) return 0;
     }
@@ -854,7 +888,14 @@ static const char *admin_name(int32_t kind) {
     }
 }
 
-typedef struct { const char *bridge_sha, *ort_sha; int force; } root_args;
+typedef struct {
+    const char *bridge_sha, *ort_sha;
+    int force;
+#ifdef CORE_WIN_POLICY
+    const char *win_scope;
+    int win_first_install;
+#endif
+} root_args;
 
 /* one attempt (admin()): not run for a standard account; else host->admin. code: the script's
  * exit code, RX_NOT_RUN or RX_CANCELLED; not_permitted: App Management refused it (core_admin_note) */
@@ -880,6 +921,12 @@ static int32_t admin_attempt(fx *x, int32_t kind, const root_args *ra, int *not_
         version = fact_str(&f, FACT_REKORDBOX_VERSION);
         bundle = x->os == CORE_OS_MAC ? RB_BUNDLE_ID : NULL;
     } else if (x->os != CORE_OS_MAC) bundle = NULL;
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN) {
+        if (!ra || !ra->win_scope || !ra->win_scope[0]) return RX_NOT_RUN;
+        version = ra->win_scope;
+    }
+#endif
     atomic_store(&x->life->admin_note, 0);   /* the note is cleared before each attempt */
     int32_t r = x->life->host.admin(x->life->host.ctx, kind, version, bundle, ra ? ra->bridge_sha : NULL, ra ? ra->ort_sha : NULL,
                                     ra ? ra->force : 0);
@@ -901,7 +948,7 @@ static root_outcome run_root(fx *x, int32_t kind, const root_args *ra, const cha
     for (int attempt = 1; attempt <= 4; attempt++) {
         int rc = rekordbox_closed(x);
         if (rc <= 0) {
-            if (rc == 0) LOG(x, "  rekordbox is open: stopped");   /* a failed check said so itself (F11) */
+            if (rc == 0) LOG(x, "  rekordbox is open or updating: stopped");   /* a failed check said so itself (F11) */
             return (root_outcome){ROOT_FAILED, RX_CANCELLED};
         }
         LOG(x, "admin run (", admin_name(kind), "), attempt ", num(x, attempt));
@@ -915,7 +962,7 @@ static root_outcome run_root(fx *x, int32_t kind, const root_args *ra, const cha
              * may see rekordbox closed: the user asks for each further elevation (review C2) */
             if (attempt == 4) break;
             fx_effect(x, EF_SPINNER, 0, "");   /* as rekordbox_closed's own ask */
-            int b = ASK(x, T_RB_OPEN_TITLE, TX(x, T_RB_OPEN_TRY_AGAIN), 2, TX(x, T_TRY_AGAIN), TX(x, T_CANCEL));
+            int b = ASK(x, T_RB_OPEN_TITLE, RB_OPEN_TX(x, T_RB_OPEN_TRY_AGAIN), 2, TX(x, T_TRY_AGAIN), TX(x, T_CANCEL));
             fx_effect(x, EF_SPINNER_IF_BUSY, 0, "");
             LOG(x, "  rekordbox open for the worker: user chose ", b == 0 ? TX(x, T_TRY_AGAIN) : b == 1 ? TX(x, T_CANCEL) : "");
             if (b != 0) {
@@ -957,6 +1004,15 @@ static root_outcome run_root(fx *x, int32_t kind, const root_args *ra, const cha
         x->life->host.admin(x->life->host.ctx, CORE_ADMIN_FORGET, NULL, NULL, NULL, NULL, 0);
     if (!have || code == 0) return (root_outcome){ROOT_DONE, 0};
 #ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN && (code == ROOT_WIN_SCOPE_CHANGED || code == ROOT_WIN_PARTIAL))
+        return (root_outcome){ROOT_FAILED, code};   /* the action handles its batch result */
+    if (x->os == CORE_OS_WIN && code == ROOT_WIN_UNDO_INCOMPLETE) {
+        /* refused, and the root not as it was: never "nothing changed" */
+        core_text_id st, ft;
+        root_run_texts(admin_name(kind), &st, &ft);
+        if (failure) alert_ok(x, ft, TX(x, ra && ra->win_first_install ? T_WIN_FIRST_INSTALL_UNDO_INCOMPLETE_MSG : T_WIN_UNDO_INCOMPLETE_MSG));
+        return (root_outcome){ROOT_FAILED, code};
+    }
     if (x->os == CORE_OS_WIN && (code == ROOT_WIN_PROTOCOL || code == ROOT_WIN_OLDER)) {
         win_offer_update_first(x);   /* the offer is the alert: the callers show none (RX_CANCELLED) */
         return (root_outcome){ROOT_FAILED, RX_CANCELLED};
@@ -980,6 +1036,12 @@ static root_outcome run_root(fx *x, int32_t kind, const root_args *ra, const cha
 static int64_t paused_now(fx *x, const char **drive) {
     view_loc_now n;
     fx_loc(x, &n);
+#ifdef CORE_WIN_POLICY
+    if (n.known == VIEW_LOC_STALE) {
+        *drive = NULL;
+        return -1;
+    }
+#endif
     if (n.known) {   /* the snapshot is the core's (M4) */
         *drive = n.drive;   /* in the flow's arena already */
 #ifdef CORE_WIN_POLICY
@@ -1018,12 +1080,22 @@ typedef struct {
     core_text_id status;
     int model, cache, force, again;   /* A_INSTALL */
     gate confirmed;                    /* A_UNINSTALL_ALL */
+#ifdef CORE_WIN_POLICY
+    int win_confirm;                   /* the click's confirmation follows the fresh scope */
+    int64_t win_floor;
+    const char *win_drive;
+#endif
 } action;
 
 static void install_body(fx *x, const action *a);
 static void uninstall_plus_body(fx *x);
 static void uninstall_cache_body(fx *x);
 static void uninstall_all_body(fx *x, gate confirmed);
+#ifdef CORE_WIN_POLICY
+static int win_install_confirm(fx *x, const action *a, const win_scope *scope, int retry);
+static int win_cache_opt_in(fx *x, const core_facts *f, const win_scope *scope);
+static int win_install_root(fx *x, const action *a, root_args *ra);
+#endif
 
 static void action_start(fx *x, const action *a) { fx_start(x, a->id, a->label, a->status); }
 
@@ -1037,6 +1109,9 @@ static void action_body(fx *x, const action *a) {
 }
 
 static void action_run(fx *x, const action *a) {
+#ifdef CORE_WIN_POLICY
+    if (!a->win_confirm)
+#endif
     action_start(x, a);
     action_body(x, a);
 }
@@ -1100,18 +1175,37 @@ void flows_missing_parts(int chosen_model, int chosen_cache, int plus_present, i
     *cache = chosen_cache && !cache_present;
 }
 
-/* reinstallMissing(): what the user chose and went missing; 0 when nothing is */
-static int reinstall_missing(fx *x, action *out) {
+enum { REINSTALL_MODEL = 1, REINSTALL_CACHE = 2, REINSTALL_BOTH = 3 };
+
+static int reinstall_parts(fx *x, int offered) {
     core_facts f;
     if (!fx_facts(x, &f)) return 0;
     int m, k;
-    flows_missing_parts(fact_flag(&f, FACT_CHOSEN_MODEL), fact_flag(&f, FACT_CHOSEN_CACHE), fact_flag(&f, FACT_STEMS_PLUS_PRESENT),
+    flows_missing_parts((offered & REINSTALL_MODEL) && fact_flag(&f, FACT_CHOSEN_MODEL),
+                        (offered & REINSTALL_CACHE) && fact_flag(&f, FACT_CHOSEN_CACHE), fact_flag(&f, FACT_STEMS_PLUS_PRESENT),
                         fact_flag(&f, FACT_STEMS_CACHE_PRESENT), &m, &k);
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN && (offered & REINSTALL_CACHE) && fact_flag(&f, FACT_CHOSEN_CACHE))
+        k |= win_rows_at_least(&f, WIN_ROW_READY, 1);
+#endif
+    return (m ? REINSTALL_MODEL : 0) | (k ? REINSTALL_CACHE : 0);
+}
+
+/* A queued reinstall can only narrow as fresh facts come in, including when it resumes. */
+static int reinstall_missing(fx *x, action *out, const char *id, int offered) {
+    int parts = reinstall_parts(x, offered);
+    int m = (parts & REINSTALL_MODEL) != 0, k = (parts & REINSTALL_CACHE) != 0;
     if (!m && !k) {
         LOG(x, "  nothing is missing: nothing reinstalled");
         return 0;
     }
-    *out = install_action("reinstall-missing", reinstall_label(x, m, k), T_REINSTALLING, m, k, 0, 1);
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN && k) {
+        *out = start_install(id, TX(x, T_BTN_INSTALL_CACHE), m, k);
+        return 1;
+    }
+#endif
+    *out = install_action(id, reinstall_label(x, m, k), T_REINSTALLING, m, k, 0, 1);
     return 1;
 }
 
@@ -1142,6 +1236,38 @@ static void install_body(fx *x, const action *a) {
         fx_idle(x);
         return;
     }
+#ifdef CORE_WIN_POLICY
+    int win_cache = x->os == CORE_OS_WIN && want_cache;
+    int win_cache_done = 0;
+    win_scope scope = {0};
+    int32_t win_why = FEAT_OK;
+    const char *win_why_line = "";
+    if (win_cache) {
+        win_why = cache_why(x, &cf, &win_why_line);
+        if (!win_scope_read(x, force ? "reinstall" : "install", failed_title, &scope) || !fx_facts(x, &cf)) {
+            fx_idle(x);
+            return;
+        }
+        opt_in_only = !force && (win_why == FEAT_OK || win_why == FEAT_NEEDS_ADMIN) &&
+                      win_cache_opt_in(x, &cf, &scope);
+        if (win_why == FEAT_OK && !opt_in_only && !scope.token[0]) {
+            LOG(x, "Stems Cache: no eligible changes");
+            if (!want_model) {
+                alert_ok(x, failed_title, TX(x, T_WIN_CACHE_NO_TARGETS));
+                fx_idle(x);
+                return;
+            }
+            want_cache = 0;
+        }
+        if (a->win_confirm) {
+            action confirmed_action = want_cache ? *a : start_reinstall_one("reinstall-plus", TX(x, T_BTN_REINSTALL_PLUS), 1);
+            int confirmed = want_cache ? win_install_confirm(x, a, &scope, 0) :
+                confirm(x, confirmed_action.label, TX(x, T_REINSTALL), install_note(x, 1, 0, 1, -1, NULL));
+            if (!confirmed) { fx_idle(x); return; }
+            action_start(x, &confirmed_action);
+        }
+    }
+#endif
     int have_age = p.set[FACT_PAYLOAD_AGE];
     int64_t age = fact_i64(&p, FACT_PAYLOAD_AGE, 0);
     if (!fresh && want_cache && !opt_in_only &&
@@ -1163,10 +1289,24 @@ static void install_body(fx *x, const action *a) {
         LOG(x, "Demucs v4 not installed: ", why);
         want_model = 0;
     }
+#ifdef CORE_WIN_POLICY
+    int32_t kw = FEAT_OK;
+    if (pw != FEAT_CHECK_FAILED && want_cache && !opt_in_only) {
+        if (win_cache) { kw = win_why; why = win_why_line; }
+        else kw = cache_why(x, &cf, &why);
+    }
+#else
     int32_t kw = pw != FEAT_CHECK_FAILED && want_cache && !opt_in_only ? cache_why(x, &cf, &why) : FEAT_OK;
+#endif
     if (kw != FEAT_OK && kw != FEAT_CHECK_FAILED) {
         LOG(x, "Stems Cache not installed: ", why);
         want_cache = 0;
+#ifdef CORE_WIN_POLICY
+        if (win_cache) {
+            alert_ok(x, failed_title, why);
+            if (!want_model) { fx_idle(x); return; }
+        }
+#endif
     }
     if (pw == FEAT_CHECK_FAILED || kw == FEAT_CHECK_FAILED) {
         LOG(x, "  feature check failed: stopped");   /* Q3: not safe to go on */
@@ -1227,7 +1367,7 @@ static void install_body(fx *x, const action *a) {
     /* the downloads may have taken minutes: rekordbox may have been opened meanwhile */
     int closed = rekordbox_closed(x);
     if (closed <= 0) {
-        if (closed == 0) LOG(x, "rekordbox is open: nothing changed");
+        if (closed == 0) LOG(x, "rekordbox is open or updating: nothing changed");
         fx_idle(x);
         return;
     }
@@ -1252,24 +1392,46 @@ static void install_body(fx *x, const action *a) {
     if (want_cache && opt_in_only) {
         LOG(x, "Stems Cache: already in rekordbox (installed from another account): turned on for this account");
         ch_cache = 1;
+#ifdef CORE_WIN_POLICY
+        win_cache_done = win_cache;
+#endif
     } else if (want_cache) {
         fx_status(x, TX(x, T_PREPARING_CACHE));
         core_facts pr;
         int32_t rc = fx_step(x, CORE_STEP_CACHE_PREPARE, &pr, 0);
         if (!fx_ok(x)) return;
         if (rc == 0) {
-            root_args ra = {fact_str(&p, FACT_PAYLOAD_BRIDGE_SHA), fact_str(&pr, FACT_STEP_TEXT), force};
+            root_args ra = {.bridge_sha = fact_str(&p, FACT_PAYLOAD_BRIDGE_SHA), .ort_sha = fact_str(&pr, FACT_STEP_TEXT), .force = force,
+            };
+#ifdef CORE_WIN_POLICY
+            if (win_cache) {
+                ra.win_scope = scope.token;
+                ra.win_first_install = !again && !fact_flag(&cf, FACT_CHOSEN_CACHE);
+                win_cache_done = win_install_root(x, a, &ra);
+                if (win_cache_done) ch_cache = 1;
+            } else {
+#endif
             root_outcome o = run_root(x, again ? CORE_ADMIN_CACHE_REINSTALL : CORE_ADMIN_CACHE_INSTALL, &ra,
                                       TX(x, again ? T_CACHE_NOT_REINSTALLED : T_CACHE_NOT_INSTALLED), 1);
             if (o.kind == ROOT_DONE && fx_facts(x, &cf) && fact_flag(&cf, FACT_STEMS_CACHE_PRESENT)) ch_cache = 1;
+#ifdef CORE_WIN_POLICY
+            }
+#endif
         } else {
             LOG(x, "Stems Cache not installed: the downloaded bridge changed after it was checked");
             alert_ok(x, failed_title, TX(x, again ? T_CACHE_NOT_REINSTALLED_LOG : T_CACHE_NOT_INSTALLED_LOG));
         }
     }
     if (!fx_ok(x)) return;
+#ifdef CORE_WIN_POLICY
+    if (!win_cache || want_model || win_cache_done)
+#endif
     fx_do(x, CORE_STEP_SET_CHOSEN, 2, ch_model ? "1" : "0", ch_cache ? "1" : "0");
-    if (want_cache && ch_cache) {
+    if (want_cache && ch_cache
+#ifdef CORE_WIN_POLICY
+        && (!win_cache || win_cache_done)
+#endif
+    ) {
         int ok = fx_do(x, CORE_STEP_CONFIG_WRITE, 2, "rekordbox_model", "1") == 0;
         LOG(x, "Stems Cache: saving rekordbox's own model's stems too (rekordbox_model=1): ", ok ? "ok" : "FAILED");
     }
@@ -1292,7 +1454,7 @@ static void log_state(fx *x, const char *prefix) {
 static void uninstall_plus_body(fx *x) {
     int closed = rekordbox_closed(x);
     if (closed <= 0) {
-        if (closed == 0) LOG(x, "rekordbox is open: Demucs v4 left in place");
+        if (closed == 0) LOG(x, "rekordbox is open or updating: Demucs v4 left in place");
         fx_idle(x);
         return;
     }
@@ -1337,7 +1499,14 @@ static int offer_root_folder_cleanup(fx *x) {
 }
 
 /* removeCache (Actions.swift:755) over runUninstallCache's steps (:560) */
+#ifdef CORE_WIN_POLICY
+static cache_removal win_run_uninstall(fx *x, const char *failure, const char *root_folder_failure);
+#endif
+
 static cache_removal run_uninstall_cache(fx *x, const char *failure, const char *root_folder_failure) {
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN) return win_run_uninstall(x, failure, root_folder_failure);
+#endif
     core_facts f;
     fx_step(x, CORE_STEP_CACHE_FOLDERS, &f, 0);
     if (fact_flag(&f, FACT_STEP_FLAG)) {   /* rekordbox's folder is there */
@@ -1354,10 +1523,31 @@ static cache_removal run_uninstall_cache(fx *x, const char *failure, const char 
     return (cache_removal){CR_FAILED, o.kind == ROOT_MISSING ? ROOT_REKORDBOX_MISSING : o.code};
 }
 
+#ifdef CORE_WIN_POLICY
+static void win_cache_removed(fx *x, const core_facts *f) {
+    fx_do(x, CORE_STEP_SET_CHOSEN, 2, fact_flag(f, FACT_CHOSEN_MODEL) ? "1" : "0", "0");
+    core_facts s;
+    fx_step(x, CORE_STEP_CONFIG_SETS, &s, 1, "rekordbox_model");
+    if (fact_flag(&s, FACT_STEP_FLAG)) fx_do(x, CORE_STEP_CONFIG_WRITE, 2, "rekordbox_model", "0");
+}
+#endif
+
 static void uninstall_cache_body(fx *x) {
-    run_uninstall_cache(x, TX(x, T_CACHE_NOT_REMOVED), TX(x, T_ROOT_FOLDER_FAILURE));
+    cache_removal removal = run_uninstall_cache(x, TX(x, T_CACHE_NOT_REMOVED), TX(x, T_ROOT_FOLDER_FAILURE));
+    if (removal.kind == CR_KEPT_ROOT_FOLDER || (removal.kind == CR_FAILED && removal.code == RX_CANCELLED)) {
+        if (removal.kind == CR_KEPT_ROOT_FOLDER) LOG(x, "the copy of rekordbox's files stays: Stems Cache's choice kept");
+        else LOG(x, "stopped: Stems Cache's choice kept");
+        log_state(x, "state: ");
+        fx_idle(x);
+        return;
+    }
     core_facts f;
     if (!fx_facts(x, &f)) return;
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN) {
+        if (removal.kind == CR_REMOVED && !fact_flag(&f, FACT_CACHE_TRACES)) win_cache_removed(x, &f);
+    } else
+#endif
     if (!fact_flag(&f, FACT_STEMS_CACHE_PRESENT)) {
         fx_do(x, CORE_STEP_SET_CHOSEN, 2, fact_flag(&f, FACT_CHOSEN_MODEL) ? "1" : "0", "0");
         core_facts s;
@@ -1383,7 +1573,13 @@ static int remove_other_accounts_cache(fx *x) {
 }
 
 /* LocationMonitor.current() beside the snapshot */
-typedef struct { const char *dir, *drive, *name, *shown, *size; gate g; } loc_now;
+typedef struct {
+    const char *dir, *drive, *name, *shown, *size;
+    gate g;
+#ifdef CORE_WIN_POLICY
+    int not_measured;
+#endif
+} loc_now;
 static loc_now location_now(fx *x) {
     core_facts f;
     view_loc_now n;
@@ -1399,7 +1595,17 @@ static loc_now location_now(fx *x) {
     int64_t kind = size_kind_of(x, &f, FACT_LOC_SIZE_KIND, FACT_LOC_SIZE, &bytes, n.known ? &n : NULL);   /* the snapshot args[0] came from */
     l.size = stems_size(x, kind, bytes);
     const char *id = fact_str(&f, FACT_LOC_GATE_ID);
-    l.g = id[0] && l.dir[0] ? (gate){l.dir, id} : (gate){NULL, NULL};
+    l.g = id[0] && l.dir[0] ? (gate){.dir = l.dir, .id = id} : (gate){0};
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN) {
+        l.g.identity = fact_str(&f, FACT_STEP_PATH);   /* LOCATION_NOW's opened directory identity */
+        if (!l.g.identity[0]) l.g.dir = NULL;
+    }
+    l.not_measured = x->os == CORE_OS_WIN && fact_i64(&f, FACT_LOC_MEASURED, 1) == 0;
+    if (l.not_measured) {
+        l.g = (gate){.unchecked_dir = l.dir, .unchecked_shown = l.shown, .unchecked_drive = l.name};
+    }
+#endif
     return l;
 }
 
@@ -1416,6 +1622,9 @@ int flows_drive_deletion_allowed(const char *confirmed_dir, const char *confirme
 }
 
 static int drive_deletion_allowed(gate confirmed, gate fresh) {
+#ifdef CORE_WIN_POLICY
+    if (fresh.identity && (!confirmed.identity || strcmp(confirmed.identity, fresh.identity))) return 0;
+#endif
     return flows_drive_deletion_allowed(confirmed.dir, confirmed.id, fresh.dir, fresh.id);
 }
 
@@ -1437,6 +1646,33 @@ static void delete_texts(fx *x, core_text_id first, core_text_id with_n, const c
     fx_status(x, TX1(x, first, SL(drive, drive)));
 }
 
+#ifdef CORE_WIN_POLICY
+/* Show the path for File Explorer, keeping the configured path for the gate (review N3R16). */
+#define LEFT_DIR(x, l) SL(dir, (x)->os == CORE_OS_WIN ? (l).shown : (l).dir)
+#else
+#define LEFT_DIR(x, l) SL(dir, l.dir)
+#endif
+
+#ifdef CORE_WIN_POLICY
+static loc_now uninstall_location(fx *x, gate confirmed) {
+    if (confirmed.unchecked_dir)
+        return (loc_now){.dir = confirmed.unchecked_dir, .shown = confirmed.unchecked_shown,
+                         .drive = confirmed.unchecked_drive, .name = confirmed.unchecked_drive,
+                         .g = confirmed, .not_measured = 1};
+    return location_now(x);
+}
+#endif
+
+#ifdef CORE_WIN_POLICY
+static const char *pc_cache_target(fx *x, int choosing) {
+    core_facts f;
+    int rc = choosing ? fx_step(x, CORE_STEP_THIS_MAC_DELETE, &f, 2, "target", "choice")
+                      : fx_step(x, CORE_STEP_THIS_MAC_DELETE, &f, 1, "target");
+    if (rc) return "";
+    return fact_str(&f, FACT_STEP_PATH);
+}
+#endif
+
 /* removeOwnFiles (Actions.swift:501): this account's own files, then the app once it has quit */
 static void remove_own_files(fx *x, core_text_id title, const char *about, const char *help, int keep_originals, gate confirmed) {
     fx_watcher_step(x, CORE_STEP_LAUNCH_AGENT_UNLOAD);
@@ -1446,37 +1682,70 @@ static void remove_own_files(fx *x, core_text_id title, const char *about, const
     int others_cache = fact_flag(&f, FACT_CACHE_TRACES) && !fact_flag(&f, FACT_CHOSEN_CACHE), cache_link = fact_flag(&f, FACT_CACHE_IS_LINK);
     const char *left[2];
     int nleft = 0;
+#ifdef CORE_WIN_POLICY
+    loc_now l = uninstall_location(x, confirmed);
+#else
     loc_now l = location_now(x);
+#endif
     if (l.dir[0]) {
         const char *drive = l.name;
         if (l.g.dir && drive_deletion_allowed(confirmed, l.g)) {
             delete_texts(x, T_DELETING_DRIVE, T_DELETING_DRIVE_N, drive);
             core_facts r;
-            int32_t rc = fx_step(x, CORE_STEP_REMOVE_LOCATION, &r, 3, l.g.dir, l.g.id, "1");
+            int32_t rc;
+#ifdef CORE_WIN_POLICY
+            if (x->os == CORE_OS_WIN)
+                rc = fx_step(x, CORE_STEP_REMOVE_LOCATION, &r, 4, l.g.dir, l.g.id, "1", confirmed.identity);
+            else
+#endif
+            rc = fx_step(x, CORE_STEP_REMOVE_LOCATION, &r, 3, l.g.dir, l.g.id, "1");
             if (rc == 0) LOG(x, "stems on ", l.shown, " deleted: ok");
             else LOG(x, "stems on ", l.shown, " deleted: FAILED (", removal_why(x, &r), ")");
+            if (rc != 0) {
+                core_text_id tid = T_LEFT_DRIVE_PARTLY;
 #ifdef CORE_WIN_POLICY
-            if (rc != 0 && fx_nameless(x, drive)) left[nleft++] = TX1(x, nameless_text(T_LEFT_DRIVE_PARTLY), SL(dir, l.dir));
+                if (x->os == CORE_OS_WIN) {
+                    int64_t code = fact_i64(&r, FACT_STEP_CODE, 7);
+                    if (code >= 1 && code <= 6) tid = T_LEFT_DRIVE_NOT_CONNECTED;
+                }
+                if (fx_nameless(x, drive)) left[nleft++] = TX1(x, nameless_text(tid), LEFT_DIR(x, l));
+                else
+#endif
+                left[nleft++] = TX2(x, tid, SL(drive, drive), LEFT_DIR(x, l));
+            }
+        } else if (!l.g.dir
+#ifdef CORE_WIN_POLICY
+                   && !l.not_measured
+#endif
+        ) {
+#ifdef CORE_WIN_POLICY
+            if (x->os == CORE_OS_WIN && drive && !drive[0]) left[nleft++] = TX1(x, nameless_text(T_LEFT_DRIVE_NOT_CONNECTED), LEFT_DIR(x, l));
             else
 #endif
-            if (rc != 0) left[nleft++] = TX2(x, T_LEFT_DRIVE_PARTLY, SL(drive, drive), SL(dir, l.dir));
-        } else if (!l.g.dir) {
-#ifdef CORE_WIN_POLICY
-            if (x->os == CORE_OS_WIN && drive && !drive[0]) left[nleft++] = TX1(x, nameless_text(T_LEFT_DRIVE_NOT_CONNECTED), SL(dir, l.dir));
-            else
-#endif
-            left[nleft++] = TX2(x, T_LEFT_DRIVE_NOT_CONNECTED, SL(drive, drive), SL(dir, l.dir));
+            left[nleft++] = TX2(x, T_LEFT_DRIVE_NOT_CONNECTED, SL(drive, drive), LEFT_DIR(x, l));
         } else {
+#ifdef CORE_WIN_POLICY
+            if (!l.not_measured)
+#endif
             LOG(x, "stems on ", l.shown, " kept: the confirmation didn't name them");
 #ifdef CORE_WIN_POLICY
-            if (fx_nameless(x, drive)) left[nleft++] = TX1(x, nameless_text(T_LEFT_DRIVE_NOT_NAMED), SL(dir, l.dir));
+            if (fx_nameless(x, drive)) left[nleft++] = TX1(x, nameless_text(T_LEFT_DRIVE_NOT_NAMED), LEFT_DIR(x, l));
             else
 #endif
-            left[nleft++] = TX2(x, T_LEFT_DRIVE_NOT_NAMED, SL(drive, drive), SL(dir, l.dir));
+            left[nleft++] = TX2(x, T_LEFT_DRIVE_NOT_NAMED, SL(drive, drive), LEFT_DIR(x, l));
         }
     }
     /* nothing is logged after this, but a SELF_DELETE that couldn't start (the app stays open) */
+#ifdef CORE_WIN_POLICY
+    int remove_rc;
+    if (x->os == CORE_OS_WIN && confirmed.pc_identity && confirmed.pc_identity[0])
+        remove_rc = fx_do(x, CORE_STEP_REMOVE_OWN_FOLDERS, 2, keep_originals ? "1" : "0", confirmed.pc_identity);
+    else
+    remove_rc = fx_do(x, CORE_STEP_REMOVE_OWN_FOLDERS, 1, keep_originals ? "1" : "0");
+    if (remove_rc != 0)
+#else
     if (fx_do(x, CORE_STEP_REMOVE_OWN_FOLDERS, 1, keep_originals ? "1" : "0") != 0)
+#endif
         left[nleft++] = TX(x, T_LEFT_LIBRARY);
     if (!fx_ok(x)) return;
     core_facts af;
@@ -1517,10 +1786,20 @@ static void remove_own_files(fx *x, core_text_id title, const char *about, const
         if (me[0]) alert_ok(x, title, TX(x, T_SELF_DELETE_FAILED));   /* only when the app was to go: else the end dialog said what stays */
     }
 }
+#undef LEFT_DIR
 
 /* removeAnywayChoice + offerRemoveAnyway (Actions.swift:479, 803) */
-static void offer_remove_anyway(fx *x, const core_facts *r) {
+static void offer_remove_anyway(fx *x, const core_facts *r
+#ifdef CORE_WIN_POLICY
+                                , gate confirmed
+#endif
+) {
+#ifdef CORE_WIN_POLICY
+    loc_now l = uninstall_location(x, confirmed);
+    l.g.pc_identity = confirmed.pc_identity;
+#else
     loc_now l = location_now(x);
+#endif
     const char *note = "";   /* locationRemovalNote */
     if (l.dir[0]) COMPOSE(x, note, w_location_removal_note(B, l.drive, l.g.dir != NULL, l.size));
     int64_t code = fact_i64(r, FACT_STEP_CODE, CORE_MODEL_NOT_BACK);
@@ -1577,22 +1856,39 @@ static void uninstall_all_body(fx *x, gate confirmed) {
                 return;
             }
             if (!fx_facts(x, &f)) return;
+#ifdef CORE_WIN_POLICY
+            if (x->os != CORE_OS_WIN)
+#endif
             if (!fact_flag(&f, FACT_STEMS_CACHE_PRESENT)) fx_do(x, CORE_STEP_SET_CHOSEN, 2, fact_flag(&f, FACT_CHOSEN_MODEL) ? "1" : "0", "0");
         } else keep_cache = 1;
     }
     if (!fx_facts(x, &f)) return;
-    if (fact_flag(&f, FACT_CACHE_TRACES) && !keep_cache) {
+    if ((fact_flag(&f, FACT_CACHE_TRACES)
+#ifdef CORE_WIN_POLICY
+         || (x->os == CORE_OS_WIN && removal.kind == CR_FAILED)
+#endif
+        ) && !keep_cache) {
         LOG(x, "Stems Cache could not be removed: stopping, nothing else deleted");
         fx_idle(x);
         if (removal.kind == CR_FAILED && removal.code == RX_CANCELLED) return;   /* the user knows: no alert */
         const char *why;
+#ifdef CORE_WIN_POLICY
+        if (x->os == CORE_OS_WIN && x->win_removal_partial) {
+            alert_ok(x, T_UNINSTALL_STOPPED, TX1(x, T_UNINSTALL_STOPPED_CACHE, SL(why, x->win_removal_partial)));
+            return;
+        }
+#endif
         COMPOSE(x, why, w_cache_failure_reason(B, removal.kind == CR_FAILED, removal.code, CORE_PROGRAMS(&x->life->c)));
         alert_ok(x, T_UNINSTALL_STOPPED, TX1(x, T_UNINSTALL_STOPPED_CACHE, SL(why, why)));
         return;
     }
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN && !keep_cache &&
+        (fact_flag(&f, FACT_CHOSEN_CACHE) || fact_flag(&f, FACT_STEMS_CACHE_PRESENT))) win_cache_removed(x, &f);
+#endif
     int closed = rekordbox_closed(x);
     if (closed <= 0) {
-        if (closed == 0) LOG(x, "rekordbox is open: stopping, nothing else deleted");
+        if (closed == 0) LOG(x, "rekordbox is open or updating: stopping, nothing else deleted");
         fx_idle(x);
         return;
     }
@@ -1602,7 +1898,11 @@ static void uninstall_all_body(fx *x, gate confirmed) {
     if (!fx_ok(x)) return;
     if (rc != 0) {
         LOG(x, "rekordbox's own model isn't back: stopping, nothing else deleted");
-        offer_remove_anyway(x, &r);
+        offer_remove_anyway(x, &r
+#ifdef CORE_WIN_POLICY
+                            , confirmed
+#endif
+        );
         return;
     }
     if (!fx_facts(x, &f)) return;
@@ -1617,10 +1917,17 @@ typedef enum {
     F_UNINSTALL_CACHE, F_UNINSTALL_ALL, F_SETTINGS, F_UPDATE, F_REPORT, F_STARTUP, F_REQUEST, F_CACHE_OFFER
 #ifdef CORE_WIN_POLICY
     , F_WIN_RESTORE   /* R1's "Put Back Pioneer's File" (W-core) */
+    , F_WIN_R1_DISMISS   /* R1's "Don't Ask Again for This Version" (N10) */
 #endif
 } flow_kind;
 
-typedef struct { flow_kind kind; char own[32]; } flow_arg;
+typedef struct {
+    flow_kind kind;
+    char own[32];
+#ifdef CORE_WIN_POLICY
+    char win_r1_shown[256];   /* F_WIN_R1_DISMISS: the versions its button showed (flows_state's) */
+#endif
+} flow_arg;
 
 static void settings_flow(fx *x);
 static void update_flow(fx *x);
@@ -1644,6 +1951,16 @@ static void click_flow(fx *x, flow_kind k) {
         const char *label = TX(x, T_BTN_INSTALL_CACHE);
         if (!preflight(x)) return;
         int64_t floor = paused_now(x, &drive);   /* Stems Cache would start paused: said before it is installed */
+#ifdef CORE_WIN_POLICY
+        if (x->os == CORE_OS_WIN) {
+            action a = start_install("install-cache", label, 0, 1);
+            a.win_confirm = 1;
+            a.win_floor = floor;
+            a.win_drive = drive;
+            action_run(x, &a);
+            return;
+        }
+#endif
         if (!confirm(x, label, TX(x, T_INSTALL), install_note(x, 0, 1, 0, floor, drive))) return;
         action a = start_install("install-cache", label, 0, 1);
         action_run(x, &a);
@@ -1655,6 +1972,16 @@ static void click_flow(fx *x, flow_kind k) {
         if (!guard_snap(x, &f)) return;   /* F1: the text, the guard and the action from one snapshot */
         int m = fact_flag(&f, FACT_CHOSEN_MODEL), c = fact_flag(&f, FACT_CHOSEN_CACHE);
         const char *label = reinstall_label(x, m || !c, c);
+#ifdef CORE_WIN_POLICY
+        if (x->os == CORE_OS_WIN && c) {
+            action a = reinstall_chosen_mk(x, m, c);
+            a.win_confirm = 1;
+            a.win_floor = floor;
+            a.win_drive = drive;
+            action_run(x, &a);
+            return;
+        }
+#endif
         if (!confirm(x, label, TX(x, T_REINSTALL), install_note(x, m || !c, c, 1, floor, drive))) return;
         action a = reinstall_chosen_mk(x, m, c);
         action_run(x, &a);
@@ -1671,6 +1998,16 @@ static void click_flow(fx *x, flow_kind k) {
         const char *label = TX(x, T_BTN_REINSTALL_CACHE);
         if (!preflight(x)) return;
         int64_t floor = paused_now(x, &drive);
+#ifdef CORE_WIN_POLICY
+        if (x->os == CORE_OS_WIN) {
+            action a = start_reinstall_one("reinstall-cache", label, 0);
+            a.win_confirm = 1;
+            a.win_floor = floor;
+            a.win_drive = drive;
+            action_run(x, &a);
+            return;
+        }
+#endif
         if (!confirm(x, label, TX(x, T_REINSTALL), install_note(x, 0, 1, 1, floor, drive))) return;
         action a = start_reinstall_one("reinstall-cache", label, 0);
         action_run(x, &a);
@@ -1687,6 +2024,14 @@ static void click_flow(fx *x, flow_kind k) {
     case F_UNINSTALL_CACHE: {
         const char *label = TX(x, T_BTN_UNINSTALL_CACHE), *note;
         COMPOSE(x, note, w_uninstall_note(B, 1));
+#ifdef CORE_WIN_POLICY
+        if (x->os == CORE_OS_WIN) {
+            if (!preflight(x) || !guard_snap(x, NULL) ||
+                !win_scope_read(x, "uninstall", T_UNINSTALL_FAILED, &x->win_uninstall_scope)) return;
+            note = win_uninstall_note(x, &x->win_uninstall_scope, note);
+            if (!confirm(x, label, TX(x, T_UNINSTALL), note)) return;
+        } else
+#endif
         if (!preflight(x) || !confirm(x, label, TX(x, T_UNINSTALL), note)) return;
         action a = simple_action(A_UNINSTALL_CACHE, "uninstall-cache", label, T_RUN_UNINSTALLING_CACHE);
         action_run(x, &a);
@@ -1705,9 +2050,25 @@ static void click_flow(fx *x, flow_kind k) {
         /* where the stems are, checked now: the confirmation names what will be deleted */
         int was = bg_begin(x, T_CHECKING_WHERE);
         loc_now l = location_now(x);
+#ifdef CORE_WIN_POLICY
+        if (x->os == CORE_OS_WIN) l.g.pc_identity = pc_cache_target(x, 0);
+#endif
         bg_end(x, was);
         const char *msg;
+#ifdef CORE_WIN_POLICY
+        if (l.not_measured && l.dir[0])
+            COMPOSE(x, msg, w_win_uninstall_all_unmeasured(B, others_cache, no_saved_model, l.drive, l.shown));   /* File Explorer's form (N3R16) */
+        else
+#endif
         COMPOSE(x, msg, w_uninstall_all_message(B, others_cache, no_saved_model, l.size, l.dir[0] ? l.drive : NULL, l.g.dir != NULL));
+#ifdef CORE_WIN_POLICY
+        if (x->os == CORE_OS_WIN && fact_flag(&f, FACT_CACHE_TRACES) && !others_cache) {
+            if (!win_scope_read(x, "uninstall", T_UNINSTALL_STOPPED, &x->win_uninstall_scope)) return;
+            const char *versions;
+            if (win_read_versions(x, x->win_uninstall_scope.affected, &versions) >= 2)
+                msg = CAT(x, msg, "\n\n", TX1(x, T_WIN_UNINSTALL_ALL_CACHE_VERSIONS, SL(rekordbox, versions)));
+        }
+#endif
         guard_arm(x);
         int b = ASK(x, T_UNINSTALL_ALL_Q, msg, 2, TX(x, T_UNINSTALL), TX(x, T_CANCEL));
         if (disarm_guard(x, b) != 0) return;
@@ -1732,6 +2093,7 @@ static void click_flow(fx *x, flow_kind k) {
     }
 #ifdef CORE_WIN_POLICY
     case F_WIN_RESTORE: win_restore_flow(x); return;
+    case F_WIN_R1_DISMISS: win_r1_dismiss_flow(x); return;
 #endif
     }
 }
@@ -1743,6 +2105,9 @@ static void flow_main(core_life *life, void *arg) {
     x.life = life;
     x.os = life->os;
     memcpy(x.own, fa->own, sizeof x.own);
+#ifdef CORE_WIN_POLICY
+    memcpy(x.win_r1_shown, fa->win_r1_shown, sizeof x.win_r1_shown);
+#endif
     flow_kind k = fa->kind;
     free(fa);   /* Q24: the flow's own copy is taken */
     click_flow(&x, k);
@@ -1757,6 +2122,12 @@ static int start_flow(core *c, flow_kind k) {
     if (!a) return CORE_E_NOMEM;
     a->kind = k;
     snprintf(a->own, sizeof a->own, "%s", c->version ? c->version : "");
+#ifdef CORE_WIN_POLICY
+    if (k == F_WIN_R1_DISMISS) {   /* the versions shown at the click go with this flow only */
+        memcpy(a->win_r1_shown, c->fl.win_r1_shown, sizeof a->win_r1_shown);
+        c->fl.win_r1_shown[0] = 0;
+    }
+#endif
     int r = flow_start_ex(c, CORE_WORK_FLOW, flow_main, a, free_flow_arg, 0);
     if (!r && k == F_STARTUP) c->fl.startup_running = 1;   /* OM1: its end marks the start-up done */
     return r;
@@ -1801,8 +2172,10 @@ static int check_resume(fx *x, action *pending) {
     else if (!strcmp(id, "reinstall")) *pending = reinstall_chosen(x);
     else if (!strcmp(id, "reinstall-plus")) *pending = start_reinstall_one(id, label, 1);
     else if (!strcmp(id, "reinstall-cache")) *pending = start_reinstall_one(id, label, 0);
-    else if (!strcmp(id, "reinstall-missing")) {
-        if (!reinstall_missing(x, pending)) {
+    else if (!strcmp(id, "reinstall-missing") || !strcmp(id, "reinstall-missing-model") || !strcmp(id, "reinstall-missing-cache")) {
+        int offered = !strcmp(id, "reinstall-missing-model") ? REINSTALL_MODEL :
+                      !strcmp(id, "reinstall-missing-cache") ? REINSTALL_CACHE : REINSTALL_BOTH;
+        if (!reinstall_missing(x, pending, id, offered)) {
             fx_do(x, CORE_STEP_BUSY_MARKER, 0);
             return 0;
         }
@@ -1832,11 +2205,25 @@ static int check_request(fx *x, action *pending) {
         LOG(x, "watcher's reinstall request is ", num(x, age / 60), " minutes old: ignored");
         return 0;
     }
-    core_facts cf;
-    if (!fx_facts(x, &cf)) return 0;
-    int m = fact_flag(&cf, FACT_CHOSEN_MODEL) && !fact_flag(&cf, FACT_STEMS_PLUS_PRESENT);
-    int k = fact_flag(&cf, FACT_CHOSEN_CACHE) && !fact_flag(&cf, FACT_STEMS_CACHE_PRESENT);
-    if (!m && !k) {
+    const char *features = fact_str(&f, FACT_STEP_TEXT);
+    int offered;
+    const char *id = "reinstall-missing";
+    if (!strcmp(features, "model\n")) {
+        offered = REINSTALL_MODEL;
+        id = "reinstall-missing-model";
+    } else if (!strcmp(features, "cache\n")) {
+        offered = REINSTALL_CACHE;
+        id = "reinstall-missing-cache";
+    } else if (!features[0] || !strcmp(features, "reinstall\n") || !strcmp(features, "model cache\n")) {
+        offered = REINSTALL_BOTH;
+    } else {
+        fx_do(x, CORE_STEP_REQUEST, 1, "take");
+        LOG(x, "watcher's reinstall request isn't recognized: ignored");
+        return 0;
+    }
+    int parts = reinstall_parts(x, offered);
+    if (!fx_ok(x)) return 0;
+    if (!parts) {
         fx_do(x, CORE_STEP_REQUEST, 1, "take");
         LOG(x, "watcher asked to reinstall, but nothing is missing: ignored");
         return 0;
@@ -1850,7 +2237,7 @@ static int check_request(fx *x, action *pending) {
     if (x->ends[FX_END_UNWAIT]) fx_post_reserved(x, &x->ends[FX_END_UNWAIT], EF_REQUEST_WAITING, 0);
     if (go >= 0) fx_do(x, CORE_STEP_REQUEST, 1, "take");   /* started now, or turned down: handled; a failed check leaves it */
     if (go <= 0) return 0;
-    return reinstall_missing(x, pending);     /* what is missing now (rekordbox may have changed meanwhile) */
+    return reinstall_missing(x, pending, id, offered);   /* what is missing now (rekordbox may have changed meanwhile) */
 }
 
 /* ---------------------------------------------------------------- the Stems Cache update (Actions.swift:635) */
@@ -1861,7 +2248,11 @@ static int offer_cache_update(fx *x, action *pending) {
     core_facts p, cf, b;
     fx_step(x, CORE_STEP_PAYLOAD, &p, 1, "saved");
     if (!fact_flag(&p, FACT_PAYLOAD_FOUND) || !fx_facts(x, &cf)) return 0;
-    fx_step(x, CORE_STEP_BRIDGE_SHA, &b, 0);
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN) fx_step(x, CORE_STEP_BRIDGE_SHA, &b, 2, "outdated", fact_str(&p, FACT_PAYLOAD_BRIDGE_SHA));
+    else
+#endif
+        fx_step(x, CORE_STEP_BRIDGE_SHA, &b, 0);
     const char *installed = fact_str(&b, FACT_STEP_TEXT), *latest = fact_str(&p, FACT_PAYLOAD_BRIDGE_SHA);
     if (!cache_update_due(x, &cf, installed, latest, flows_version_newer(fact_str(&p, FACT_PAYLOAD_APP_VERSION), x->own))) return 0;
     char i12[13], l12[13];
@@ -1889,14 +2280,24 @@ static int q_offer_guards(core *c, void *arg) {
 
 /* ---------------------------------------------------------------- the update check and the update (Update.swift) */
 
-typedef struct { char own[32]; } check_arg;
+typedef struct {
+    char own[32];
+#ifdef CORE_WIN_POLICY
+    int compat_only;
+#endif
+} check_arg;
 
 static void fetched_job(core *c, void *payload);
 
 /* fetched_job's payload, reserved before the fetch (OOM sweep): a payload.json fetched can't be
  * lost on its way to main, with the update notice and the cache offer it brings. m: the notice,
  * NULL when it couldn't be made (the offer is still asked) */
-typedef struct { effect_msg *m; } fetched_msg;
+typedef struct {
+    effect_msg *m;
+#ifdef CORE_WIN_POLICY
+    int compat_only;
+#endif
+} fetched_msg;
 static void fetched_drop(void *payload) { free(((fetched_msg *)payload)->m); }
 
 #ifdef CORE_TEST_HOOKS
@@ -1923,7 +2324,12 @@ static void update_fetch_work(core_life *life, void *payload) {
     arena ar = {0};
     core_facts f;
     facts_init(&f, &ar);
+#ifdef CORE_WIN_POLICY
+    fm->compat_only = a->compat_only;
+    const char *const args[] = {a->compat_only ? "refresh-compat" : "fetch"};
+#else
     static const char *const args[] = {"fetch"};
+#endif
     if (life->host.step(life->host.ctx, CORE_STEP_PAYLOAD, args, 1, &f) == 0 && f.set[FACT_PAYLOAD_FOUND] && f.i[FACT_PAYLOAD_FOUND]) {
         const char *v = f.set[FACT_PAYLOAD_APP_VERSION] && f.s[FACT_PAYLOAD_APP_VERSION] ? f.s[FACT_PAYLOAD_APP_VERSION] : "";
         const char *newer = flows_version_newer(v, a->own) ? v : "";
@@ -1961,8 +2367,25 @@ static void fetched_job(core *c, void *payload) {
         free(fm->m);
         fm->m = NULL;
     }
+#ifdef CORE_WIN_POLICY
+    if (fm->compat_only) return;
+#endif
     offer_cache_update_now(c);
 }
+
+#ifdef CORE_WIN_POLICY
+static void queue_compat_refresh(core_life *life, const char *own) {
+    check_arg *a = calloc(1, sizeof *a);
+    if (!a) return;
+    snprintf(a->own, sizeof a->own, "%s", own);
+    a->compat_only = 1;
+    core_post_work(life, CORE_WORK_BACKGROUND, update_fetch_work, a, NULL);
+}
+
+void flows_win_inventory_changed(core *c) {
+    if (c->os == CORE_OS_WIN && c->fl.startup_done) queue_compat_refresh(c->life, c->version ? c->version : "");
+}
+#endif
 
 static void check_for_update(fx *x) {
     core_facts p;
@@ -1971,6 +2394,9 @@ static void check_for_update(fx *x) {
         const char *v = fact_str(&p, FACT_PAYLOAD_APP_VERSION);
         fx_effect(x, EF_UPDATE_FOUND, 0, flows_version_newer(v, x->own) ? v : "");
     }
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN && !fact_flag(&p, FACT_STEP_FLAG) && fx_ok(x)) queue_compat_refresh(x->life, x->own);
+#endif
     if (!fact_flag(&p, FACT_STEP_FLAG) || !fx_ok(x)) return;   /* manifestDue */
     check_arg *a = calloc(1, sizeof *a);
     if (!a) return;
@@ -2052,6 +2478,9 @@ static report_lights w_report_lights(fx *x, const core_facts *m) {
         COMPOSE(x, t, has_loc = location_light(B, &st, br.state ? &br : NULL, fact_flag(m, FACT_REKORDBOX_RUNNING)));
         if (has_loc) loc = t;
     }
+#ifdef CORE_WIN_POLICY
+    else if (win_location_unchecked(x->os, m)) loc = core_text_template(x->os, T_CHECKING_WHERE);
+#endif
     int cache = fact_flag(m, FACT_STEMS_CACHE_PRESENT);
     const char *models = fact_str_or_null(m, FACT_BRIDGE_MODELS), *list[64];
     int32_t n = 0;
@@ -2069,6 +2498,16 @@ static report_lights w_report_lights(fx *x, const core_facts *m) {
         .n_bridge_models = n, .model = *sha ? sha : NULL, .engine = fact_str(m, FACT_ENGINE),
         .has_paused_floor = cache && fact_flag(m, FACT_CONFIG_ENABLED) && floor >= 0, .paused_floor = floor,
         .location = loc, .drive = fact_str_or_null(m, FACT_LOC_DRIVE)};
+#ifdef CORE_WIN_POLICY
+    /* R1 first (C19), measured now on this thread as r1_work_run does; c->v.win_r1 is main's */
+    if (x->os == CORE_OS_WIN && x->life->host.slow_fact && !(x->life->native & NATIVE_SLOW_FACT)) {
+        core_facts rf;
+        facts_init(&rf, &x->a);
+        if (x->life->host.slow_fact(x->life->host.ctx, CORE_SLOW_R1, "", 0, &rf) == 0 && rf.set[FACT_R1_STATE] &&
+            rf.i[FACT_R1_STATE] >= R1_OK && rf.i[FACT_R1_STATE] <= R1_ORT_MISSING)
+            in.win_r1 = rf.i[FACT_R1_STATE];
+    }
+#endif
     COMPOSE_FIT(x, l.cache_tip, cl = light_cache(B, &in));   /* the engine's text has no bound */
     if (!l.cache_tip) l.cache_tip = "";
     l.plus_look = looks[pl >= 0 && pl <= 2 ? pl : 2];
@@ -2109,6 +2548,9 @@ static void this_mac_retry(fx *x) {
     int flag = fact_flag(&f, FACT_STEP_FLAG), bridge_location = fact_flag(&f, FACT_STEP_FLAG2);
     int available = fact_i64(&f, FACT_STEP_CODE, 0) == 1;
     const char *code = f.set[FACT_STEP_TEXT] ? fact_str(&f, FACT_STEP_TEXT) : "?";
+#ifdef CORE_WIN_POLICY
+    if (x->os != CORE_OS_WIN)
+#endif
     if (!flag && this_mac_needs_cleanup(available, bridge_location, fact_i64(&f, FACT_THIS_MAC_MODEL_FOLDERS, 0) != 0)) {
         fx_do(x, CORE_STEP_THIS_MAC_DELETE, 1, "defer");
         LOG(x, "stems an older Stems Cache saved on this Mac while a drive was chosen: deleting them");
@@ -2120,7 +2562,11 @@ static void this_mac_retry(fx *x) {
         LOG(x, "the stems left on this Mac aren't deleted yet: not now (", code, ")");
         return;
     }
-    int ok = fx_do(x, CORE_STEP_THIS_MAC_DELETE, 1, "delete") == 0;
+    int ok =
+#ifdef CORE_WIN_POLICY
+        x->os == CORE_OS_WIN ? fx_do(x, CORE_STEP_THIS_MAC_DELETE, 2, "delete", fact_str(&f, FACT_STEP_PATH)) == 0 :
+#endif
+        fx_do(x, CORE_STEP_THIS_MAC_DELETE, 1, "delete") == 0;
     if (ok) fx_do(x, CORE_STEP_THIS_MAC_DELETE, 1, "unflag");
     LOG(x, "the stems left on this Mac deleted: ", ok ? "ok" : "FAILED (tried again at the next start)");
 }
@@ -2141,6 +2587,10 @@ static void startup_work(fx *x) {
         LOG(x, "Stems Cache: turned on for rekordbox's own stems model too (rekordbox_model=1): ", ok ? "ok" : "FAILED");
     }
     log_state(x, "state: ");
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN) fx_do(x, CORE_STEP_SETTINGS, 1, "config");   /* review N3R18: config only at launch */
+    else
+#endif
     fx_do(x, CORE_STEP_SETTINGS, 1, "open");   /* readConfig(log): says which config.ini lines are ignored */
 }
 
@@ -2170,13 +2620,19 @@ static void startup_flow(fx *x) {
         have = 1;
         action_start(x, &pending);
     }
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN) check_for_update(x);   /* the Cache update dialog can wait for an answer */
+#endif
     if (!have) {   /* offerCacheUpdate: skipped while an action runs */
         if (fx_ok(x) && flow_query(x->life, q_offer_guards, NULL, 0) && offer_cache_update(x, &pending)) {
             have = 1;
             action_start(x, &pending);
         }
     }
-    check_for_update(x);
+#ifdef CORE_WIN_POLICY
+    if (x->os != CORE_OS_WIN)
+#endif
+        check_for_update(x);
     fx_effect(x, EF_REFRESH, 0, "");   /* the update notice, if any */
     if (have) action_body(x, &pending);   /* the action's body, on the work queue after the start-up block */
 }
@@ -2243,7 +2699,11 @@ static int64_t size_kind_of(fx *x, const core_facts *f, core_fact kind_f, core_f
 }
 
 /* clearLocation (LocationActions.swift:194): in the background, the window showing how far it is */
-static void clear_location(fx *x, const char *dir, const char *id, const char *shown, const char *drive) {
+static void clear_location(fx *x, const char *dir, const char *id, const char *shown, const char *drive
+#ifdef CORE_WIN_POLICY
+                           , const char *identity
+#endif
+) {
 #ifdef CORE_WIN_POLICY
     if (fx_nameless(x, drive)) {   /* the nameless ids are stored: the progress then passes only {n} (review NT1) */
         fx_busy(x, TX(x, nameless_text(T_CLEARING_DRIVE)), 1);
@@ -2256,7 +2716,12 @@ static void clear_location(fx *x, const char *dir, const char *id, const char *s
     }
 #endif
     core_facts r;
-    int32_t rc = fx_step(x, CORE_STEP_REMOVE_LOCATION, &r, 3, dir, id, "0");
+    int32_t rc;
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN) rc = fx_step(x, CORE_STEP_REMOVE_LOCATION, &r, 4, dir, id, "0", identity);
+    else
+#endif
+    rc = fx_step(x, CORE_STEP_REMOVE_LOCATION, &r, 3, dir, id, "0");
     const char *why = rc ? removal_why(x, &r) : "";
     if (rc == 0) LOG(x, "saved stems on ", shown, " cleared: ok");
     else LOG(x, "saved stems on ", shown, " cleared: FAILED (", why, ")");
@@ -2272,14 +2737,51 @@ static void clear_location(fx *x, const char *dir, const char *id, const char *s
 
 static int64_t location_size(fx *x, const char *dir) {
     core_facts f;
-    fx_step(x, CORE_STEP_LOCATION_SIZE, &f, 1, dir);
+    if (fx_step(x, CORE_STEP_LOCATION_SIZE, &f, 1, dir)) return -1;
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN) return fact_i64(&f, FACT_STEP_CODE, -1);
+#endif
     return fact_i64(&f, FACT_STEP_CODE, 0);
 }
 
 /* commitLocation (LocationActions.swift:144) */
-static void commit_location(fx *x, const char *dir, const char *id, const char *mount, int created, int delete_this_mac) {
+#ifdef CORE_WIN_POLICY
+#define COMMIT_GATES(identity, pc) , identity, pc
+
+static int win_location_timed_out(fx *x, const core_facts *f, core_text_id title) {
+    if (x->os != CORE_OS_WIN || fact_i64(f, FACT_STEP_CODE, 0) != WIN_LOCATION_TIMED_OUT) return 0;
+    if (fx_ok(x)) alert_ok(x, title, TX(x, fact_flag(f, FACT_STEP_FLAG) ? T_WIN_LOCATION_TIMEOUT_LEFT : T_WIN_LOCATION_TIMEOUT));
+    return 1;
+}
+
+static int win_settings_read_timed_out(fx *x, const core_facts *f) {
+    if (x->os != CORE_OS_WIN || fact_i64(f, FACT_STEP_CODE, 0) != WIN_LOCATION_TIMED_OUT) return 0;
+    if (fx_ok(x)) alert_ok(x, T_SETTINGS_TITLE, TX(x, T_WIN_SETTINGS_READ_TIMEOUT));
+    return 1;
+}
+#else
+#define COMMIT_GATES(identity, pc)
+#endif
+
+static void commit_location(fx *x, const char *dir, const char *id, const char *mount, int created, int delete_this_mac
+                            COMMIT_GATES(const char *identity, const char *pc_identity)) {
     core_facts w;
+#ifdef CORE_WIN_POLICY
+    int rc;
+    if (x->os == CORE_OS_WIN) {
+        int was = bg_begin(x, T_WIN_LOCATION_SAVING);
+        rc = fx_step(x, CORE_STEP_LOCATION_WRITE, &w, 5, dir, id, mount, created ? "1" : "0", identity);
+        bg_end(x, was);
+    } else rc = fx_step(x, CORE_STEP_LOCATION_WRITE, &w, 4, dir, id, mount, created ? "1" : "0");
+    if (rc != 0) {
+        if (win_location_timed_out(x, &w, T_CANT_SAVE_THERE)) return;
+        if (x->os == CORE_OS_WIN && fact_i64(&w, FACT_STEP_CODE, 0) == 2) {
+            if (fx_ok(x)) alert_ok(x, T_CANT_SAVE_THERE, "");
+            return;
+        }
+#else
     if (fx_step(x, CORE_STEP_LOCATION_WRITE, &w, 4, dir, id, mount, created ? "1" : "0") != 0) {
+#endif
         if (!fx_ok(x)) return;
         LOG(x, "settings: couldn't write ", fact_str(&w, FACT_STEP_PATH));
         alert_ok(x, T_SETTINGS_NOT_SAVED, TX(x, T_SETTINGS_NOT_SAVED_MSG));
@@ -2287,21 +2789,41 @@ static void commit_location(fx *x, const char *dir, const char *id, const char *
     }
     fx_effect(x, EF_PREPARE_CHANGED, 0, "");
     LOG(x, "settings: stems are saved in ", fact_str(&w, FACT_STEP_TEXT), " from rekordbox's next start", created ? " (a new folder)" : "");
+#ifdef CORE_WIN_POLICY
+    int unchecked = x->os == CORE_OS_WIN && fact_i64(&w, FACT_STEP_CODE, 0) == WIN_LOCATION_SAVED_UNCHECKED;
+    int kept_this_pc = unchecked && delete_this_mac && pc_identity[0];
+    if (x->os == CORE_OS_WIN && (!pc_identity[0] || unchecked)) delete_this_mac = 0;
+#endif
     if (delete_this_mac) {
         core_facts c;
         fx_step(x, CORE_STEP_THIS_MAC_DELETE, &c, 1, "check");
         if (fact_flag(&c, FACT_STEP_FLAG)) {
             int was = bg_begin(x, T_DELETING_THIS_MAC);
-            int ok = fx_do(x, CORE_STEP_THIS_MAC_DELETE, 1, "delete") == 0;
+            int ok =
+#ifdef CORE_WIN_POLICY
+                x->os == CORE_OS_WIN ? fx_do(x, CORE_STEP_THIS_MAC_DELETE, 2, "delete", pc_identity) == 0 :
+#endif
+                fx_do(x, CORE_STEP_THIS_MAC_DELETE, 1, "delete") == 0;
             bg_end(x, was);
             LOG(x, "settings: the stems saved on this Mac deleted: ", ok ? "ok" : "FAILED (tried again at the next start)");
         } else {
+#ifdef CORE_WIN_POLICY
+            if (x->os == CORE_OS_WIN) fx_do(x, CORE_STEP_THIS_MAC_DELETE, 2, "defer", pc_identity);
+            else
+#endif
             fx_do(x, CORE_STEP_THIS_MAC_DELETE, 1, "defer");
             LOG(x, "settings: the stems saved on this Mac stay for now: the installed Stems Cache is older and saves there (deleted once it's updated)");
         }
     }
     remeasure(x);
     fx_effect(x, EF_REFRESH, 0, "");
+#ifdef CORE_WIN_POLICY
+    if (unchecked && fx_ok(x)) {
+        const char *message = TX(x, T_WIN_LOCATION_UNCHECKED);
+        if (kept_this_pc) message = CAT(x, message, TX(x, T_WIN_LOCATION_LOCAL_KEPT));
+        alert_ok(x, T_SETTINGS_TITLE, message);
+    }
+#endif
 }
 
 static const char *const refusal_names[] = {"", "internalDisk", "network", "readOnly", "timeMachine", "insideOurFolder", "link", "fileSystem", "path", "unreadable"};
@@ -2324,6 +2846,11 @@ static void change_location(fx *x) {
     const char *drive = fact_str(&pf, FACT_LOC_DRIVE);
     if (!fx_ok(x)) return;
 #ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN && fact_flag(&pf, FACT_STEP_FLAG)) {
+        LOG(x, "settings: ", fact_str(&pf, FACT_STEP_TEXT2), " refused (in or could not exclude the support folder)");
+        alert_ok(x, T_CANT_SAVE_THERE, "");
+        return;
+    }
     /* neither a label nor a letter (owner, 2026-11-15; review NT1): one refusal, also for the
      * probe's refusals that would name the drive (3 read-only, 7 file system; review N21) */
     if ((why == 0 || why == 3 || why == 7) && location_refuse_nameless(x->os, drive)) {
@@ -2343,18 +2870,38 @@ static void change_location(fx *x) {
     const char *real = fact_str(&pf, FACT_STEP_TEXT), *mount = fact_str(&pf, FACT_STEP_PATH);
     core_facts df;
     was = bg_begin_s(x, TX1(x, T_LOOKING_FOR_STEMS, SL(drive, drive)));
+#ifdef CORE_WIN_POLICY
+    int32_t discover_rc =
+#endif
     fx_step(x, CORE_STEP_LOCATION_DISCOVER, &df, 2, real, mount);
     bg_end(x, was);
     if (!fx_ok(x)) return;
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN && discover_rc) {
+        alert_ok(x, T_CANT_SAVE_THERE, TX(x, T_REFUSE_UNREADABLE));
+        return;
+    }
+#endif
     int64_t found = fact_i64(&df, FACT_STEP_CODE, 0);
     const char *dir = fact_str(&df, FACT_LOC_DIR), *id = fact_str(&df, FACT_LOC_GATE_ID);
     const char *current = fact_str(&df, FACT_STEP_TEXT), *current_id = fact_str(&df, FACT_STEP_TEXT2);
     const char *old_drive = current[0] ? fact_str(&df, FACT_LOC_DRIVE) : NULL;
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN && fact_flag(&df, FACT_STEP_FLAG)) {
+        LOG(x, "settings: ", fact_str(&df, FACT_STEP_PATH), " refused (in or could not exclude the support folder)");
+        alert_ok(x, T_CANT_SAVE_THERE, "");
+        return;
+    }
+#endif
     if (found == 1) {
         alert_ok(x, T_CANT_SAVE_THERE, TX(x, T_NOT_OURS_MSG));
         return;
     }
     if (found == 2 && current[0] && !strcmp(dir, current) && same_id(id, current_id)) {
+#ifdef CORE_WIN_POLICY
+        if (x->os == CORE_OS_WIN) LOG(x, "settings: ", dir, " is already where stems are saved");
+        else
+#endif
         LOG(x, "settings: ", fact_str(&df, FACT_STEP_PATH), " is already where stems are saved");
         return;
     }
@@ -2373,16 +2920,28 @@ static void change_location(fx *x) {
         guard_arm(x);
         int b = ASK(x, T_FOUND_TITLE, msg, 2, TX(x, T_USE_THEM), TX(x, T_CANCEL));
         if (disarm_guard(x, b) != 0 || rekordbox_closed(x) <= 0) return;
-        commit_location(x, dir, id, mount, 0, 0);
+        commit_location(x, dir, id, mount, 0, 0 COMMIT_GATES(fact_str(&df, FACT_STEP_PATH), ""));
         return;
     }
+#ifdef CORE_WIN_POLICY
+    const char *pc_identity = x->os == CORE_OS_WIN && !current[0] ? pc_cache_target(x, 1) : "";
+#endif
     const char *use = TX1(x, T_USE_DRIVE, SL(drive, drive)), *use_title = TX1(x, T_USE_DRIVE_Q, SL(drive, drive));
     const char *msg;
     if (found == 2) {
         core_facts wf;
         was = bg_begin(x, T_CHECKING_FOLDER);
+#ifdef CORE_WIN_POLICY
+        int32_t writable_rc =
+#endif
         fx_step(x, CORE_STEP_LOCATION_WRITABLE, &wf, 1, dir);
         bg_end(x, was);
+#ifdef CORE_WIN_POLICY
+        if (x->os == CORE_OS_WIN && writable_rc) {
+            if (fx_ok(x)) alert_ok(x, T_CANT_SAVE_THERE, TX(x, T_REFUSE_UNREADABLE));
+            return;
+        }
+#endif
         if (!fact_flag(&wf, FACT_STEP_FLAG)) {
             if (fx_ok(x)) alert_ok(x, T_CANT_SAVE_THERE, TX(x, T_OTHER_OWNER_MSG));
             return;
@@ -2390,12 +2949,15 @@ static void change_location(fx *x) {
         was = bg_begin(x, T_MEASURING);
         int64_t s0 = location_size(x, dir), s1 = location_size(x, "this_mac");
         bg_end(x, was);
+#ifdef CORE_WIN_POLICY
+        if (x->os == CORE_OS_WIN) s1 = pc_identity[0] ? (s1 ? s1 : -1) : 0;
+#endif
         if (!guard_snap(x, NULL)) return;
         COMPOSE(x, msg, w_switch_message(B, drive, 1, s0, current[0] ? 0 : s1, old_drive));
         guard_arm(x);
         int b = ask_t(x, T_USE_DRIVE_Q, use_title, msg, 2, use, TX(x, T_CANCEL));
         if (disarm_guard(x, b) != 0 || rekordbox_closed(x) <= 0) return;
-        commit_location(x, dir, id, mount, 0, !current[0]);
+        commit_location(x, dir, id, mount, 0, !current[0] COMMIT_GATES(fact_str(&df, FACT_STEP_PATH), pc_identity));
         return;
     }
     int64_t this_mac = 0;
@@ -2404,6 +2966,10 @@ static void change_location(fx *x) {
         this_mac = location_size(x, "this_mac");
         bg_end(x, was);
     }
+#ifdef CORE_WIN_POLICY
+    /* A verified Cache can be absent during the size probe and back by commit. */
+    if (x->os == CORE_OS_WIN) this_mac = pc_identity[0] ? (this_mac ? this_mac : -1) : 0;
+#endif
     if (!guard_snap(x, NULL)) return;
     COMPOSE(x, msg, w_switch_message(B, drive, 0, 0, this_mac, old_drive));
     guard_arm(x);
@@ -2411,22 +2977,55 @@ static void change_location(fx *x) {
     if (disarm_guard(x, b) != 0 || rekordbox_closed(x) <= 0) return;
     /* nothing is created before the user confirms */
     core_facts mf;
+#ifdef CORE_WIN_POLICY
+    int busy = x->os == CORE_OS_WIN ? bg_begin(x, T_WIN_LOCATION_SAVING) : 1;
+    int create_rc = fx_step(x, CORE_STEP_LOCATION_CREATE, &mf, 1, real);
+    if (x->os == CORE_OS_WIN) bg_end(x, busy);
+    if (create_rc != 0) {
+#else
     if (fx_step(x, CORE_STEP_LOCATION_CREATE, &mf, 1, real) != 0) {
+#endif
         if (!fx_ok(x)) return;
         int64_t code = fact_i64(&mf, FACT_STEP_CODE, 2);
+#ifdef CORE_WIN_POLICY
+        if (win_location_timed_out(x, &mf, T_CANT_SAVE_THERE)) return;
+        if (x->os == CORE_OS_WIN && code == 4) {
+            alert_ok(x, T_CANT_SAVE_THERE, "");
+            return;
+        }
+        if (x->os == CORE_OS_WIN && code == 3) {
+            const char *message = TX(x, fact_flag(&mf, FACT_STEP_FLAG) ? T_WIN_CREATE_LEFT_FOLDER : T_WIN_CREATE_FAILED);
+            LOG(x, "settings: couldn't create our folder in ", fact_str(&mf, FACT_STEP_PATH), ": ", message);
+            alert_ok(x, T_CANT_SAVE_THERE, message);
+            return;
+        }
+#endif
         const char *err = fact_str(&mf, FACT_STEP_TEXT);
         const char *e = code == 1 ? "exists" : code == 3 ? TX1(x, T_CREATE_R_MARKER, SL(why, err)) : err[0] ? err : "?";
         LOG(x, "settings: couldn't create our folder in ", fact_str(&mf, FACT_STEP_PATH), ": ", e);
         alert_ok(x, T_CANT_SAVE_THERE, code == 1 ? TX(x, T_APPEARED_MSG) : TX2(x, T_CANT_CREATE_MSG, SL(drive, drive), SL(why, e)));
         return;
     }
-    commit_location(x, dup_s(x, fact_str(&mf, FACT_LOC_DIR)), dup_s(x, fact_str(&mf, FACT_LOC_GATE_ID)), mount, 1, !current[0]);
+    commit_location(x, dup_s(x, fact_str(&mf, FACT_LOC_DIR)), dup_s(x, fact_str(&mf, FACT_LOC_GATE_ID)), mount, 1, !current[0]
+                    COMMIT_GATES(fact_str(&mf, FACT_STEP_TEXT2), pc_identity));
 }
+
+#undef COMMIT_GATES
 
 /* useThisMac (LocationActions.swift:173) */
 static void use_this_mac(fx *x) {
     if (!preflight(x)) return;
     core_facts st;
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN) {   /* review N3R18: only the previous location */
+        if (fx_step(x, CORE_STEP_SETTINGS, &st, 1, "config") != 0) {
+            if (!win_settings_read_timed_out(x, &st) && fx_ok(x))
+                alert_ok(x, T_SETTINGS_TITLE, TX(x, T_SETTINGS_UNREADABLE));
+            return;
+        }
+    }
+    else
+#endif
     fx_step(x, CORE_STEP_SETTINGS, &st, 1, "open");   /* readConfigState(log) */
     const char *old_drive = fact_str(&st, FACT_STEP_TEXT), *msg;
     const char *od = old_drive[0] ? old_drive : NULL;
@@ -2439,7 +3038,15 @@ static void use_this_mac(fx *x) {
     int b = ASK(x, T_USE_THIS_MAC_Q, msg, 2, TX(x, T_SETTINGS_USE_THIS_MAC), TX(x, T_CANCEL));
     if (disarm_guard(x, b) != 0 || rekordbox_closed(x) <= 0) return;
     core_facts w;
+#ifdef CORE_WIN_POLICY
+    int busy = x->os == CORE_OS_WIN ? bg_begin(x, T_WIN_LOCATION_SAVING) : 1;
+    int rc = fx_step(x, CORE_STEP_LOCATION_WRITE, &w, 4, "", "", "", "0");
+    if (x->os == CORE_OS_WIN) bg_end(x, busy);
+    if (rc && win_location_timed_out(x, &w, T_CANT_SAVE_THERE)) return;
+    if (rc != 0) {
+#else
     if (fx_step(x, CORE_STEP_LOCATION_WRITE, &w, 4, "", "", "", "0") != 0) {
+#endif
         if (fx_ok(x)) alert_ok(x, T_SETTINGS_NOT_SAVED, TX(x, T_SETTINGS_NOT_SAVED_MSG));
         return;
     }
@@ -2447,6 +3054,10 @@ static void use_this_mac(fx *x) {
     fx_effect(x, EF_PREPARE_CHANGED, 0, "");
     remeasure(x);
     fx_effect(x, EF_REFRESH, 0, "");
+#ifdef CORE_WIN_POLICY
+    if (x->os == CORE_OS_WIN && fact_i64(&w, FACT_STEP_CODE, 0) == WIN_LOCATION_SAVED_UNCHECKED && fx_ok(x))
+        alert_ok(x, T_SETTINGS_TITLE, TX(x, T_WIN_LOCATION_UNCHECKED));
+#endif
 }
 
 /* locationLabel (LocationActions.swift:16) */
@@ -2478,13 +3089,36 @@ static void settings_flow(fx *x) {
     const char *gb = dup_s(x, fact_str(&s, FACT_SET_GB)), *days = dup_s(x, fact_str(&s, FACT_SET_DAYS));
     for (int round = 0; round < 1000 && fx_ok(x) && !x->changed; round++) {
         if (round) fx_step(x, CORE_STEP_SETTINGS, &s, 1, "again");
+#ifdef CORE_WIN_POLICY
+        if (win_settings_read_timed_out(x, &s)) return;
+#endif
         int unreadable = fact_flag(&s, FACT_SET_UNREADABLE), can_choose = fact_flag(&s, FACT_SET_CAN_CHOOSE);
         int64_t target = fact_i64(&s, FACT_SET_CLEAR, 0);
-        int64_t bytes, kind = size_kind_of(x, &s, FACT_SET_SIZE_KIND, FACT_SET_SIZE, &bytes, NULL);
+        int64_t bytes, kind;
+#ifdef CORE_WIN_POLICY
+        if (x->os == CORE_OS_WIN && fact_i64(&s, FACT_SET_SIZE_KIND, -1) == 4) {
+            view_loc_now memo;
+            fx_loc(x, &memo);
+            const char *folder = fact_str(&s, FACT_LOC_IN_USE);
+            kind = memo.known && memo.known != VIEW_LOC_STALE && folder[0] && !strcmp(folder, memo.in_use) ? memo.size_kind : 0;
+            bytes = memo.size_bytes;
+        } else
+#endif
+        kind = size_kind_of(x, &s, FACT_SET_SIZE_KIND, FACT_SET_SIZE, &bytes, NULL);
         const char *size = stems_size(x, kind, bytes);
         const char *message = TX(x, T_SETTINGS_MSG);
+#ifdef CORE_WIN_POLICY
+        if (x->os == CORE_OS_WIN && !unreadable) {
+            core_facts f;
+            if (fx_facts(x, &f) && win_rows_at_least(&f, WIN_ROW_ON, 2)) message = TX(x, T_WIN_SETTINGS_MSG_VERSIONS);
+        }
+#endif
         if (unreadable) message = TX(x, T_SETTINGS_UNREADABLE);
-        else if (!can_choose) message = CAT(x, message, TX(x, T_SETTINGS_REINSTALL_TO_CHOOSE));
+        else if (!can_choose
+#ifdef CORE_WIN_POLICY
+                 && !(x->os == CORE_OS_WIN && fact_flag(&s, FACT_STEP_FLAG))
+#endif
+                 ) message = CAT(x, message, TX(x, T_SETTINGS_REINSTALL_TO_CHOOSE));
         const char *clear = TX1(x, T_SETTINGS_CLEAR, SL(size, size));
         core_dialog d;
         dlg_init(&d, T_SETTINGS_TITLE, TX(x, T_SETTINGS_TITLE), message, 0);
@@ -2504,6 +3138,9 @@ static void settings_flow(fx *x) {
         dlg_settings_enable(&d, !unreadable, target == 1 || target == 3, can_choose, fact_i64(&s, FACT_SET_LOCATION, 0) == 0);
         const char *gate_dir = dup_s(x, fact_str(&s, FACT_LOC_DIR)), *gate_id = dup_s(x, fact_str(&s, FACT_LOC_GATE_ID));
         const char *clear_drive = dup_s(x, fact_str(&s, FACT_LOC_DRIVE)), *gate_shown = dup_s(x, fact_str(&s, FACT_STEP_PATH));
+#ifdef CORE_WIN_POLICY
+        const char *identity = dup_s(x, fact_str(&s, FACT_STEP_TEXT2));   /* SETTINGS' opened directory identity */
+#endif
         core_reply r;
         if (fx_present(x, &d, &r)) return;
         gb = trim_spaces(x, r.fields[0] ? r.fields[0] : gb);
@@ -2548,16 +3185,27 @@ static void settings_flow(fx *x) {
                     continue;
                 }
                 if (!preflight(x)) continue;   /* the bridge works in that folder while rekordbox runs */
-                clear_location(x, gate_dir, gate_id, gate_shown, clear_drive);
+                clear_location(x, gate_dir, gate_id, gate_shown, clear_drive
+#ifdef CORE_WIN_POLICY
+                               , identity
+#endif
+                );
                 return;                         /* it runs in the background; the window shows it */
             }
+#ifdef CORE_WIN_POLICY
+            if (x->os == CORE_OS_WIN && (target != 1 || !identity[0])) continue;
+#endif
             if (!confirm(x, label, TX(x, T_CLEAR), TX(x, T_CLEAR_THIS_MAC_MSG))) {
                 if (x->changed) return;
                 continue;
             }
             if (!preflight(x)) continue;
             core_facts cr;
-            int ok = fx_step(x, CORE_STEP_CLEAR_THIS_MAC, &cr, 0) == 0;
+            int ok =
+#ifdef CORE_WIN_POLICY
+                x->os == CORE_OS_WIN ? fx_step(x, CORE_STEP_CLEAR_THIS_MAC, &cr, 1, identity) == 0 :
+#endif
+                fx_step(x, CORE_STEP_CLEAR_THIS_MAC, &cr, 0) == 0;
             int link = fact_flag(&cr, FACT_STEP_FLAG);
             LOG(x, "saved stems cleared", size, ": ", ok ? "ok" : link ? "FAILED (the folder is a link)" : "FAILED");
             if (!ok) alert_ok(x, T_NOT_CLEARED, TX(x, link ? T_CACHE_LINK : T_NOT_CLEARED_MSG));
@@ -2599,6 +3247,9 @@ typedef struct {
     fx *x;
     char put_off[2048];   /* the keys answered Remind Me Later in this process: one a line */
     char kept_pid[32];    /* the rekordbox session whose prepared playlists this process checked (keptCheckedPid) */
+#ifdef CORE_WIN_POLICY
+    core *resident;      /* the resident watcher's rounds thread owns this core */
+#endif
 } watch_ctx;
 
 static void w_log(void *p, const char *line) { lg(((watch_ctx *)p)->x, line); }
@@ -2810,6 +3461,10 @@ static void w_kept_check(watch_ctx *w) {
     char *problems = arena_alloc(&x->a, 8192);
     if (!problems) return;
     kept_base kb = {&pf, base, 0, problems, 8192};
+#ifdef CORE_WIN_POLICY
+    if (w->resident) q_kept_base(w->resident, &kb);
+    else
+#endif
     if (!fx_ok(x) || !flow_query(x->life, q_kept_base, &kb, 0)) return;
     if (problems[0]) {   /* prepareProblems joined by " " */
         for (char *q = problems; *q; q++)
@@ -2882,6 +3537,14 @@ static void w_kept_check(watch_ctx *w) {
     COMPOSE_FIT(x, text, w_noticed_text(B, noticing, nc.n));
     if (text) fx_do(x, CORE_STEP_WATCH_KEPT, 2, "notice", text);
 }
+#ifdef CORE_WIN_POLICY
+void core_watch_kept(core *c) {
+    fx x = {.life = c->life, .os = c->os};
+    watch_ctx w = {.x = &x, .resident = c};
+    w_kept_check(&w);
+    arena_free(&x.a);
+}
+#endif
 static void w_session(void *p) { w_kept_check(p); }
 
 /* unsupportedKey(key): key + " unsupported with " + the lists joined by "," */
@@ -2981,7 +3644,7 @@ static int32_t w_check(void *p) {
         /* the app does the reinstall: it reads the request at launch, or on the reopen event macOS
          * sends when it is already open; it is opened once this process has exited (and let go
          * of the lock): its reinstall changes what the watcher watches */
-        fx_do(x, CORE_STEP_WATCH_REINSTALL, 0);
+        fx_do(x, CORE_STEP_WATCH_REINSTALL, 1, wd.reinstall);
         return 0;
     case WANSWER_REMEMBER:
         w_remember(w, &dismissed, kept, nkept);
@@ -3051,6 +3714,7 @@ static const struct { const char *id; flow_kind kind; } click_ids[] = {
     {"update", F_UPDATE},                 {"create_report", F_REPORT},
 #ifdef CORE_WIN_POLICY
     {"restore_pioneer", F_WIN_RESTORE},   /* Windows: R1's button (W-core) */
+    {"r1_dismiss", F_WIN_R1_DISMISS},     /* Windows: R1's Don't Ask Again for This Version (N10) */
 #endif
 };
 
@@ -3061,7 +3725,7 @@ int flows_event(core *c, const char *id, size_t n) {
     for (size_t i = 0; i < sizeof click_ids / sizeof *click_ids; i++) {
         if (strlen(click_ids[i].id) != n || memcmp(click_ids[i].id, id, n)) continue;
 #ifdef CORE_WIN_POLICY
-        if (click_ids[i].kind == F_WIN_RESTORE && c->os != CORE_OS_WIN) return 0;   /* Windows' button only */
+        if ((click_ids[i].kind == F_WIN_RESTORE || click_ids[i].kind == F_WIN_R1_DISMISS) && c->os != CORE_OS_WIN) return 0;   /* Windows' buttons only */
 #endif
         flows_state *fl = &c->fl;
         if (c->action_running) {   /* the buttons are off. M4: the button's own enabled state */

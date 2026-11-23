@@ -7,7 +7,7 @@ int main(int argc, char **argv) {
     (void)argv;
     if (argc != 42) return 0;
     admin_win aw = {0};
-    admin_client c = {"r", "a", "s", "", admin_win_elevate, &aw, NULL, admin_win_random, NULL, NULL};
+    admin_client c = {"r", "a", "s", "", "", admin_win_elevate, &aw, NULL, admin_win_random, NULL, NULL};
     admin_result res;
     helper_proc *p = NULL;
     const char *av[1] = {"x"};
@@ -15,5 +15,5 @@ int main(int argc, char **argv) {
         helper_proc_signal(p, HELPER_SIG_STOP);
         helper_proc_close(p);
     }
-    return admin_client_run(&c, ADMIN_RESTORE, "7.2.19", 0, &res);
+    return admin_client_run(&c, ADMIN_RESTORE, "7.2.19:0123456789abcdef", 0, &res);
 }

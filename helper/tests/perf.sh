@@ -12,6 +12,7 @@
 #   helper/tests/perf.sh record SIDE OUT --corpus DIR [--form full|short] [--set NAME] [--quick]
 #       one run set of SIDE into OUT: samples.tsv (appended), meta-NAME.txt, logs-NAME/
 #   helper/tests/perf.sh gate A B OUT --corpus DIR [--form short|full] [--rounds N] [--idle-wait SECS] [--results FILE]
+#       a new OUT for each session
 #       GP: N alternating pairs (default 2: A B, then B A), then tests/perf/perfstats.py gate (the
 #       owner's rule of 2026-11-12). The bridge's idle guard (tests/perf/idle.sh): the first set
 #       waits until the Mac has had no input for SECS (600; 0: off, the default with --quick); a
@@ -360,6 +361,9 @@ cmd_gate() {
   [ $# -ge 3 ] || die "usage: perf.sh gate A B OUT --corpus DIR [options]"
   local a b; a="$(cd "$1" && pwd -P)" || die "no side $1"; b="$(cd "$2" && pwd -P)" || die "no side $2"
   local out="$3" testmode=; shift 3
+  if [ -e "$out" ] || [ -L "$out" ]; then
+    local l; [ -d "$out" ] && l="$(ls -A "$out" 2> /dev/null)" && [ -z "$l" ] || die "$out exists: a new OUT for each session"
+  fi
   FORM=short ROUNDS=2 RESULTS= IDLE_WAIT= SET="gp-$(date +%Y%m%d-%H%M)"; parse_opts "$@"
   # the selftest's stubs (HELPER_PERF_TEST=1 only): HELPER_PERF_BENCH replaces a run set (called
   # with SIDE_DIR SIDE ROUND SAMPLES META), PERF_IDLE_CMD the idle reader; a real gate refuses them
@@ -432,7 +436,11 @@ cmd_gate() {
   rc=$?
   echo "verdict=$rc" >> "$ss"
   cat "$OUT/gate.txt"
-  if [ -n "$QUICK$testmode" ]; then echo "GP: not a valid gate (${QUICK:+quick}${testmode:+stubs}): tooling check only" | tee -a "$OUT/gate.txt"; [ "$rc" = 0 ] && rc=3; fi
+  if [ -n "$QUICK$testmode" ]; then
+    echo "GP: not a valid gate (${QUICK:+quick}${testmode:+stubs}): tooling check only" | tee -a "$OUT/gate.txt"
+    echo "# compare: information only (${QUICK:+quick}${testmode:+stubs}: not a valid gate)" >> "$OUT/gate.tsv"   # record.py refuses it
+    [ "$rc" = 0 ] && rc=3
+  fi
   [ "$IDLE_WAIT" -gt 0 ] && idle_display end "$ss"
   echo "finished=$(date -u +%FT%TZ) rc=$rc" >> "$ss"
   if [ -n "$RESULTS" ]; then

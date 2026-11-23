@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- rbui (tests/win/uia, the by-hand plan's W1): the VM suites' UI Automation driver, FlaUI 5.0.0
+       over UIA3, a net481 console exe (AnyCPU, native on ARM64). Built on the Mac with the pinned
+       .NET SDK by tests/win/uia/build.sh, which passes RbuiLibs: the folder of FlaUI.Core.dll,
+       FlaUI.UIA3.dll and Interop.UIAutomationClient.dll, taken from the nupkgs deps.lock pins
+       (their SHA-256 checked there, never restored from NuGet). Test only, never shipped. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net481</TargetFramework>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+    <PreferNativeArm64>true</PreferNativeArm64>
+    <AssemblyName>rbui</AssemblyName>
+    <RootNamespace>RbStemsPlus.Rbui</RootNamespace>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <OutputPath>bin/</OutputPath>
+    <IntermediateOutputPath>obj/</IntermediateOutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <PathMap>$(MSBuildProjectDirectory)=.</PathMap>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <EnableSourceLink>false</EnableSourceLink>
+    <EnableSourceControlManagerQueries>false</EnableSourceControlManagerQueries>
+    <DebugType>none</DebugType>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- locked restore (release.md §3.6, §9.1 rule 6): the net481 reference assemblies only -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(RbuiUnlock)' != '1'">true</RestoreLockedMode>
+    <!-- offline: no vulnerability lookup on nuget.org (nothing here ships) -->
+    <NuGetAudit>false</NuGetAudit>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="FlaUI.Core">
+      <HintPath>$(RbuiLibs)/FlaUI.Core.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="FlaUI.UIA3">
+      <HintPath>$(RbuiLibs)/FlaUI.UIA3.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <!-- as the package's own build/Interop.UIAutomationClient.targets says: not embedded -->
+    <Reference Include="Interop.UIAutomationClient">
+      <HintPath>$(RbuiLibs)/Interop.UIAutomationClient.dll</HintPath>
+      <EmbedInteropTypes>false</EmbedInteropTypes>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Management" />
+  </ItemGroup>
+</Project>

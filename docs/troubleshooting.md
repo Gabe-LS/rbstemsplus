@@ -5,6 +5,23 @@ written in the log on the Manage tab (**Manage › Show Log**). In the app, **He
 Troubleshooting** opens this page. Nothing here helped?
 [Make a problem report](#making-a-problem-report).
 
+**Windows**
+
+- [RB Stems Plus wasn't installed on Windows](#rb-stems-plus-wasnt-installed-on-windows)
+- [RB Stems Plus can't open on Windows](#rb-stems-plus-cant-open-on-windows)
+- [Stems Cache on in 1 of 2 versions](#stems-cache-on-in-1-of-2-versions)
+- [Needs repair](#needs-repair)
+- [Couldn't verify](#couldnt-verify)
+- [Close rekordbox X.Y.Z](#close-rekordbox-xyz)
+- [rekordbox is still closing](#rekordbox-is-still-closing)
+- [Administrator step didn't start](#administrator-step-didnt-start)
+- [Put Back Pioneer's File](#put-back-pioneers-file)
+- [Stems Cache couldn't finish undoing its changes](#stems-cache-couldnt-finish-undoing-its-changes)
+- [Update RB Stems Plus first](#update-rb-stems-plus-first)
+- [Prepare skips a track on Windows](#prepare-skips-a-track-on-windows)
+- [Stems Cache location on Windows](#stems-cache-location-on-windows)
+- [RB Stems Plus couldn't be fully uninstalled](#rb-stems-plus-couldnt-be-fully-uninstalled)
+
 **Installing**
 - [RB Stems Plus wasn't installed](#rb-stems-plus-wasnt-installed) (Terminal)
 - [Move RB Stems Plus to the Applications folder](#move-rb-stems-plus-to-the-applications-folder)
@@ -55,6 +72,127 @@ Troubleshooting** opens this page. Nothing here helped?
 
 **Help**
 - [Making a problem report](#making-a-problem-report)
+
+## Windows
+
+### RB Stems Plus wasn't installed on Windows
+
+- **PowerShell window.** Open PowerShell from the Start menu as a normal user. If the same
+  message comes back, your PC may restrict what PowerShell can run.
+- **Windows or .NET Framework version.** You need Windows 11 version 22H2 or later and .NET
+  Framework 4.8.1 or later. Use Windows Update, then try again.
+- **User Account Control is off.** Turn it on and restart Windows before running the command
+  again.
+- **Smart App Control is on.** RB Stems Plus can't be installed with Smart App Control set to
+  **On**. You can check its setting in **Windows Security › App & browser control › Smart App
+  Control**.
+- **RB Stems Plus is open or still being uninstalled.** Close the app or let the uninstall
+  finish, then try again.
+
+Use the [Windows PowerShell install command](../README.md#windows) to try again.
+
+### RB Stems Plus can't open on Windows
+
+Open **RB Stems Plus** from the Start menu as a normal user. The same Windows, .NET Framework
+and User Account Control requirements apply when you open the app. If it's already open,
+switch to its window with Alt+Tab.
+
+### Stems Cache on in 1 of 2 versions
+
+Check the other version's row in **Manage**. If it says **Ready to install**, close rekordbox
+and click **Install Stems Cache**. If it says **Unsupported**, the row tells you why.
+
+### Needs repair
+
+Check the reason in **Manage**. Close rekordbox, then click
+[Put Back Pioneer's File](#put-back-pioneers-file). Once the version is ready, click
+**Install Stems Cache** to turn it back on there.
+
+### Couldn't verify
+
+Follow the reason shown for that version. If RB Stems Plus couldn't verify it, reinstall that
+version using Pioneer's installer. If the app couldn't check it just now, try again in a moment.
+
+### Close rekordbox X.Y.Z
+
+Close the versions named in the message, including in other accounts on this PC. Click
+**Try Again** if offered, or repeat the action in RB Stems Plus.
+
+### rekordbox is still closing
+
+Wait a moment for rekordbox to finish closing, then click **Try Again**. If its installer or
+updater is running, first let that finish too.
+
+### Administrator step didn't start
+
+**“Windows didn't start the administrator step in time. Try again.”** Repeat the action in
+RB Stems Plus and answer the Windows permission prompt if it appears.
+
+### Put Back Pioneer's File
+
+If RB Stems Plus says rekordbox's `onnxruntime.dll` is missing or unrecognised, or that Stems
+Cache's copy of rekordbox's ONNX Runtime is missing, quit rekordbox. Click **Put Back Pioneer's
+File** in RB Stems Plus and confirm. This restores the original file in each version that needs
+it and leaves Stems Cache off there until you reinstall it. If the restore fails,
+[reinstall the affected version of rekordbox](#reinstall-rekordbox).
+
+### Stems Cache couldn't finish undoing its changes
+
+Follow the message. Click **Install Stems Cache** if it asks you to try the install again.
+Otherwise, click **Reinstall Stems Cache** or **Put Back Pioneer's File**.
+
+### Update RB Stems Plus first
+
+A newer RB Stems Plus installed Stems Cache on this PC. Choose **RB Stems Plus › Update RB
+Stems Plus…**, then try the action again. If the app says no newer version can be downloaded,
+try again later.
+
+### Prepare skips a track on Windows
+
+Look at the reason next to the track on the **Prepare** tab. For a missing file, find it again
+in rekordbox, then click **Check Again**. For a file type, sample rate or audio track the app
+can't use, see [Which files can Windows prepare?](../README.md#which-files-can-windows-prepare).
+If the track plays and supports STEMS in rekordbox, load it there and turn on STEMS so Stems
+Cache can save its stems.
+
+Prepare skips 20-bit and 32-bit Apple Lossless (ALAC) on Windows. For files that rekordbox
+resamples, support depends on the file's format, sample rate and channels, and whether RB Stems
+Plus can verify conversion for your rekordbox build.
+
+### Stems Cache location on Windows
+
+Stems Cache defaults to **This PC** (`%LOCALAPPDATA%\rbstemsplus\Cache`). Close rekordbox, then
+open **RB Stems Plus › Settings…** and click **Change…** next to *Stems Cache location*. Choose
+a folder on an external drive formatted as NTFS, exFAT or FAT32.
+
+- When you switch to a drive, Stems Cache can reuse stems already saved there. It normally
+  removes the stems saved on this PC.
+- **Use This PC** switches back and leaves the drive's stems on it.
+- If Settings asks you to reinstall Stems Cache before choosing a location, reinstall it and
+  try again. For problems reading settings, see [config.ini can't be read](#configini-cant-be-read).
+
+If the drive is disconnected, rekordbox separates tracks as usual. Reconnect the drive to use
+its cache again.
+For a read-only drive, use **Properties › Tools › Check** in File Explorer. For a permissions
+message, check the folder's **Properties › Security**. Stems Cache uses drives connected to the
+PC and refuses network drives and folders reached through links.
+
+#### Settings and location timeouts
+
+- **“Windows didn't read the Stems Cache settings in time. Try again.”** Reopen **Settings…**
+  or try **Use This PC** again if that's what you were doing.
+- **“The drive didn't respond in time. Stems are still saved where they were. Try again.”**
+  Check that the drive is connected and responds in File Explorer, then try again.
+- **“The drive didn't respond in time, and RB Stems Plus may have left an unfinished cache
+  folder there. Stems are still saved where they were. Choose another folder.”** Choose a
+  different folder on a drive that responds.
+- **“The new location is saved, but its drive didn't respond in time to be checked.”**
+  Once the drive responds, reopen **Settings…** to check the location.
+
+### RB Stems Plus couldn't be fully uninstalled
+
+Part of the app may still be running in another session of your Windows account. Restart
+Windows, then uninstall RB Stems Plus again in **Settings › Apps › Installed apps**.
 
 ## Installing
 
@@ -165,9 +303,9 @@ can't add it.
 ### My rekordbox version isn't supported
 
 The status line says *"...isn't available for STEMS Engine ... yet"*, *"...doesn't support
-rekordbox ... yet"* or *"...doesn't support ONNX Runtime ... yet"*. RB Stems Plus has a list of the versions
-it was tested with (rekordbox 7.2.17 to 7.2.19 in version 1.0). On anything else it doesn't
-install, because a change inside rekordbox could make it fail.
+rekordbox ... yet"* or *"...doesn't support ONNX Runtime ... yet"*. See
+[Which rekordbox versions work?](../README.md#faq) for the 1.5.0 list. Stems Cache installs
+only on supported versions of rekordbox.
 
 - **rekordbox works normally meanwhile,** with its own model where Demucs v4 can't be used.
 - **Demucs v4 can still work** on a rekordbox version Stems Cache doesn't support, as long as the
@@ -504,7 +642,10 @@ Utility (that erases it).
 
 ### config.ini can't be read
 
-RB Stems Plus keeps its settings in `~/Library/Application Support/rbstemsplus/config.ini`.
+On Windows, quit rekordbox and RB Stems Plus. Open `%LOCALAPPDATA%\rbstemsplus` in File Explorer,
+move `config.ini` out of that folder, then open RB Stems Plus and set **Settings…** again.
+
+On Mac, RB Stems Plus keeps its settings in `~/Library/Application Support/rbstemsplus/config.ini`.
 When that file can't be read (damaged, not text, or edited by hand with a mistake), Stems Cache
 saves no stems at all, rather than saving them somewhere you didn't choose, and **Settings…**
 won't overwrite it.
@@ -528,8 +669,12 @@ Then [make a report](#making-a-problem-report): it includes rekordbox's crash re
 
 ### Stems Cache is off after a rekordbox update
 
-That's expected. A rekordbox update (or reinstalling rekordbox) puts Pioneer's original app back,
-which turns Stems Cache off. Demucs v4 keeps working, and your saved stems are kept.
+On Windows, a new version installs alongside older ones. If you already use Stems Cache, choose
+**Install Now** when RB Stems Plus offers to add it to the new version. You can also
+[check each version in Manage](#stems-cache-on-in-1-of-2-versions).
+
+On Mac, a rekordbox update (or reinstalling rekordbox) puts Pioneer's original app back, which
+turns Stems Cache off. Demucs v4 keeps working, and your saved stems are kept.
 
 When the update is done and rekordbox is closed, RB Stems Plus asks (*"rekordbox was updated"*).
 Click **Reinstall Now**.
@@ -644,9 +789,12 @@ rekordbox downloads its own model again when its model folder is missing, exactl
 ships it:
 
 1. Quit rekordbox.
-2. In Finder, choose Go › Go to Folder, paste
-   `~/Library/Application Support/Pioneer/rekordbox6/models` and press Return. Move the
-   `demucs3_model` folder to the Trash (or rename it).
+2. Open the model folder's parent.
+   - On Windows, paste `%APPDATA%\Pioneer\rekordbox6\models` into File Explorer's address bar
+     and press Enter.
+   - On Mac, in Finder choose Go › Go to Folder, paste
+     `~/Library/Application Support/Pioneer/rekordbox6/models` and press Return.
+   Rename the `demucs3_model` folder or move it out of `models`.
 3. Open rekordbox, load a track and turn on **STEMS**. rekordbox asks *"No data for STEMS
    Engine. Do you want to download it? (File size: 181.9 MB)"*. Click **Yes** and let it finish.
    (**No** turns STEMS off in rekordbox.)
@@ -656,7 +804,12 @@ reinstall Demucs v4 meanwhile, click **Remind Me Later**.
 
 ### Remove RB Stems Plus Anyway
 
-When **Uninstall Demucs v4** (*"Uninstall failed"*) or **Uninstall RB Stems Plus…**
+On Windows, if the complete uninstall offers **Remove RB Stems Plus Anyway**, the app shows
+where it left any saved copy of rekordbox's own model. Keep that folder. To get rekordbox's own
+model back through rekordbox, follow
+[No saved copy of rekordbox's model](#no-saved-copy-of-rekordboxs-model).
+
+On Mac, when **Uninstall Demucs v4** (*"Uninstall failed"*) or **Uninstall RB Stems Plus…**
 (*"Uninstall stopped"*) can't put rekordbox's own stems model back, it says why. Nothing is
 deleted. **Open Help** brings you here, or to
 [No saved copy of rekordbox's model](#no-saved-copy-of-rekordboxs-model) when there's no saved
@@ -755,6 +908,14 @@ install command can't bring it back:
 
 Help happens in this project's [GitHub issues](https://github.com/Gabe-LS/rbstemsplus/issues).
 You need a free GitHub account.
+
+On Windows, choose **Help › Create Report**, then **Open GitHub Issue**. Attach the zip from
+the location shown in **Report saved** and describe what happened. If the app can't make a
+report, open `%LOCALAPPDATA%\rbstemsplus\Logs` in File Explorer and attach the relevant logs
+to a [new issue](https://github.com/Gabe-LS/rbstemsplus/issues/new). Raw logs may show your user
+name in file paths.
+
+On Mac, follow these steps.
 
 1. In RB Stems Plus, choose **Help › Create Report**. It saves a zip on your Desktop (macOS may
    ask once whether RB Stems Plus may use the Desktop; if you say no, the zip goes to

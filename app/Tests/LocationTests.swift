@@ -223,6 +223,22 @@ func locationTests() {
     check(want > 0 && entriesSize(sz) == want, "size: an entry's files and their companions on the disk, nothing else (\(entriesSize(sz) ?? -1) vs \(want))")
     check(entriesSize(base + "/nothing") == 0 && aboutSize(0) == "" && aboutSize(12_400_000_000).hasPrefix(" (about 11.5 GB")
           && aboutSize(35 * 1_048_576) == " (about 35 MB)", "size: as the texts say it")
+    let blockedParent = base + "/blocked-size"
+    let blockedCache = blockedParent + "/" + locationFolderName
+    mk(blockedCache)
+    let parentBlocked = chmod(blockedParent, 0o600) == 0
+    let blockedSize = entriesSize(blockedCache)
+    chmod(blockedParent, 0o700)
+    check(parentBlocked && blockedSize == nil, "size: a cache that can't be looked up is unknown (got \(String(describing: blockedSize)))")
+
+    let sibling = String(repeating: "b", count: 64)
+    put("\(sz)/\(sibling)/ab/\(key).flac", String(repeating: "x", count: 5000))
+    for (dir, level) in [("\(sz)/\(model)", "model"), ("\(sz)/\(model)/ab", "prefix")] {
+        let listingBlocked = chmod(dir, 0o300) == 0
+        let size = entriesSize(sz)
+        chmod(dir, 0o755)
+        check(listingBlocked && size == nil, "size: an unreadable \(level) folder makes the total unknown (got \(String(describing: size)))")
+    }
     check(StemsSize.measuring.text == " (measuring…)" && StemsSize.failed.text == " (couldn't measure)" && StemsSize.notConnected.text == " (not connected)",
           "size: never 0 while unknown")
 

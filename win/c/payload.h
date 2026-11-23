@@ -14,8 +14,8 @@
  *    (has_windows 0: payload_accept saves nothing and the floor stays). When present, every key
  *    there is checked: app {version <= payload_version, x.y.z, zip,
  *    sha256, admin_sha256, stub_sha256 {x64, arm64}}, bridge {file, sha256}, compatible
- *    {rekordbox, ort_sha256, stems_engine}, and resampler_proved (optional) [{product_version,
- *    rekordbox_sha256}].
+ *    {rekordbox, ort_sha256, stems_engine, optional ort and ort_code_sha256}, and
+ *    resampler_proved (optional) [{product_version, rekordbox_sha256}].
  *  - Unknown keys anywhere are ignored, as on the Mac; a key twice, or with an escape or outside
  *    printable ASCII, is refused (plainJSONKeys).
  *
@@ -78,6 +78,17 @@ typedef struct {
     int n_win_stems_engine;
     struct { char product_version[PAYLOAD_NAME_MAX]; payload_sha rekordbox_sha256; } resampler_proved[PAYLOAD_LIST_MAX];
     int n_resampler_proved;
+    /* windows.compatible.ort and ort_code_sha256 (mv-spec §2.3): each listed rekordbox's original
+     * onnxruntime.dll sha256 (one binding per listed version, each sha256 also in ort_sha256), and the PE code digest
+     * (pe_code.h) every bound original shares. Optional for old payloads: none means install and
+     * reinstall are refused by the worker; ort_code_sha256 is required with ort */
+    struct { char rekordbox[PAYLOAD_NAME_MAX]; payload_sha sha256; } win_ort_bind[PAYLOAD_LIST_MAX];
+    int n_win_ort_bind;
+    payload_sha win_ort_code_sha256;
+    /* not in the JSON: the sha256 of the payload.json bytes this manifest was verified from, when
+     * payload_store.c's payload_saved or payload_accept gave it ("" from payload_check alone). The
+     * app's install scope carries it to the worker's --manifest (re-review finding 6) */
+    payload_sha json_sha256;
 } payload_manifest;
 
 /* -- the pure rules */
@@ -94,6 +105,13 @@ int payload_is_release_version(const char *s);
 int payload_version_cmp(const char *a, const char *b);
 /* isSHA256: 64 lowercase hex digits */
 int payload_is_sha256(const char *s);
+
+/* Windows rekordbox compatibility accepts a listed version or its dotted build suffix. */
+int payload_win_rekordbox_supported(const payload_manifest *m, const char *version);
+/* The original onnxruntime.dll sha256 the payload binds to the rekordbox of this ProductVersion,
+ * by payload_win_rekordbox_supported's rule (the longest listed version, optionally followed by
+ * a dotted build suffix), or NULL when none is bound (mv-spec §2.3). */
+const char *payload_win_ort_for(const payload_manifest *m, const char *product_version);
 
 /* decodeManifest with the rules above (no signature): PAYLOAD_OK with *out filled, or
  * PAYLOAD_NOT_VALID (PAYLOAD_TOO_BIG over the cap). out->signed_by is NULL. */

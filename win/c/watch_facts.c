@@ -3,6 +3,7 @@
  * (State.swift's installed, dismissed, busy and request) through common/plat.h. */
 #include "watch.h"
 #include "fs_write.h"
+#include "native_facts.h"
 
 #ifndef RBSP_CORE_PLAT_SHIM_H
 #  define RBSP_CORE_PLAT_SHIM_H   /* common/plat.h (through compat.h) has the shim's names */
@@ -117,14 +118,31 @@ int watch_read_facts(const watch_env *env, watch_reader *r, watch_facts *f) {
     if (saved) memcpy(bridges[nb++], r->saved.win_bridge.sha256, sizeof bridges[0]);
     if (inst) memcpy(bridges[nb++], r->installed.win_bridge.sha256, sizeof bridges[0]);
 
-    /* rekordbox: the current version folder (compat_find_rekordbox's rule) */
-    compat_rekordbox *rb = calloc(COMPAT_ENTRIES_MAX, sizeof *rb);
-    if (!rb) {
-        if (env->log) env->log(env->ctx, "not checking: out of memory");
+    /* One inventory supplies the Cache rows and the current candidate for Demucs v4. */
+    inv_list *inventory = malloc(sizeof *inventory);
+    compat_rekordbox *rb = calloc(INV_MAX, sizeof *rb);
+    inv_assess_row *assessment = calloc(INV_MAX, sizeof *assessment);
+    native_inv_caps *caps = calloc(INV_MAX, sizeof *caps);
+    if (!inventory || !rb || !assessment || !caps || inv_read(env->os, env->rekordbox, 0, inventory)) {
+        free(inventory);
+        free(rb);
+        free(assessment);
+        free(caps);
+        if (env->log) env->log(env->ctx, "not checking: couldn't read rekordbox inventory");
         return -1;
     }
+    native_inventory_assess(env->os, inventory, env->root, f->m, inst ? &r->installed : NULL, assessment, caps);
+    char running[INV_MAX * COMPAT_VERSION_MAX + 1];
+    native_inventory_running(env->os, inventory, assessment, running, sizeof running);
+    f->nrows = inv_rows(inventory, assessment, f->m, f->rows, INV_MAX);
+    f->inv_complete = inventory->complete;
+    for (int i = 0; i < inventory->n; i++)
+        if (inventory->it[i].trust == INV_SETTLING) f->rb_unsettled = 1;
     int cur, state;
-    int nrb = compat_find_rekordbox(env->os, env->rekordbox, rb, COMPAT_ENTRIES_MAX, &cur, &state);
+    int nrb = inv_current(inventory, rb, INV_MAX, &cur, &state);
+    free(caps);
+    free(assessment);
+    free(inventory);
     f->rb_state = state;
     for (int i = 0; i < nrb; i++)
         if (rb[i].candidate) {

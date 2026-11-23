@@ -2,6 +2,7 @@
  * UTF-8, converted strictly (win_rules.h), and handed to Win32 as "\\?\" paths, so long paths need
  * no LongPathsEnabled. */
 #include "plat_helper.h"
+#include "path_rules.h"
 #include "win_rules.h"
 
 #include <shlobj.h>
@@ -24,6 +25,55 @@ static wchar_t *ph_wide(const char *path) {
     if (n < 4) { free(w); return NULL; }
     w[1] = L'\\';                                           /* "\??\" -> "\\?\" */
     return w;
+}
+
+/* a track's "\\?\..." wide form (wr_track_nt_path's: also "\\?\UNC\server\share\..."), for
+ * the track-only calls below; malloc'd, NULL when it isn't a track path it takes. *unc: a UNC path */
+static wchar_t *ph_wide_track(const char *path, int *unc) {
+    wchar_t *w = malloc(sizeof(wchar_t) * (WR_NT_MAX + 1));
+    if (!w) return NULL;
+    long n = wr_track_nt_path(path, (uint16_t *)w, WR_NT_MAX + 1);
+    if (n < 4) { free(w); return NULL; }
+    w[1] = L'\\';                                           /* "\??\" -> "\\?\" */
+    if (unc) *unc = n >= 8 && !wcsncmp(w, L"\\\\?\\UNC\\", 8);
+    return w;
+}
+
+/* a track call's Win32 error as an errno: the network's errors (a share or its server that doesn't
+ * answer, a dropped connection) as ENETUNREACH, so readable.c remembers the drive; the rest as
+ * wr_errno_win32 maps them (the helper's map only: the bridge's and the core's stay as they are) */
+static int ph_track_errno(DWORD le) {
+    switch (le) {
+    case 51:    /* ERROR_REM_NOT_LIST */
+    case 53:    /* ERROR_BAD_NETPATH */
+    case 59:    /* ERROR_UNEXP_NET_ERR */
+    case 64:    /* ERROR_NETNAME_DELETED */
+    case 67:    /* ERROR_BAD_NET_NAME */
+    case 121:   /* ERROR_SEM_TIMEOUT */
+    case 1222:  /* ERROR_NO_NETWORK */
+    case 1231:  /* ERROR_NETWORK_UNREACHABLE */
+    case 1232:  /* ERROR_HOST_UNREACHABLE */
+        return ENETUNREACH;
+    default: return wr_errno_win32((uint32_t)le, WR_OP_OPEN);
+    }
+}
+
+COMMON_API int plat_track_open(const char *path, plat_file *out) {
+    int unc = 0;
+    out->h = NULL;
+    wchar_t *p = ph_wide_track(path, &unc);
+    if (!p) return EINVAL;
+    /* read only, sharing everything (rekordbox may have it open), links followed as Win32 opens a
+     * track; synchronous, so a stalled read can be cancelled (readable_watch_start) */
+    /* SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION: whatever answers can't act as this account */
+    HANDLE h = CreateFileW(p, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_ATTRIBUTE_NORMAL | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, NULL);
+    DWORD le = GetLastError();
+    free(p);
+    if (h == INVALID_HANDLE_VALUE) return ph_track_errno(le);
+    if (GetFileType(h) != FILE_TYPE_DISK) { CloseHandle(h); return EINVAL; }
+    out->h = h;
+    return 0;
 }
 
 COMMON_API int plat_known_folder(int which, char *out, size_t n) {
@@ -90,8 +140,10 @@ COMMON_API int plat_temp_file(plat_file *out) {
 
 COMMON_API int plat_path_where(const char *path, plat_where *w) {
     memset(w, 0, sizeof *w);
-    wchar_t *p = ph_wide(path);
+    int unc = 0;
+    wchar_t *p = ph_wide_track(path, &unc);
     if (!p) return EINVAL;
+    w->remote = unc;                                        /* a share, whatever its root says below */
     /* attributes only: no handle to the data, so no placeholder is hydrated */
     WIN32_FILE_ATTRIBUTE_DATA a;
     int e = 0;
@@ -105,7 +157,7 @@ COMMON_API int plat_path_where(const char *path, plat_where *w) {
         w->pinned = (x & FILE_ATTRIBUTE_PINNED) != 0;
         w->unpinned = (x & FILE_ATTRIBUTE_UNPINNED) != 0;
     } else {
-        e = wr_errno_win32((uint32_t)GetLastError(), WR_OP_OPEN);
+        e = ph_track_errno(GetLastError());
     }
     /* the drive, also for a name that isn't there (the drive may be what is missing) */
     wchar_t root[MAX_PATH + 1];
@@ -113,11 +165,25 @@ COMMON_API int plat_path_where(const char *path, plat_where *w) {
         /* "\\?\X:\" as "X:\", the form GetDriveTypeW documents; a volume GUID root as it is */
         const wchar_t *r = !wcsncmp(root, L"\\\\?\\", 4) && root[4] && root[5] == L':' ? root + 4 : root;
         UINT t = GetDriveTypeW(r);
-        w->remote = t == DRIVE_REMOTE;
+        w->remote |= t == DRIVE_REMOTE;
         w->removable = t == DRIVE_REMOVABLE || t == DRIVE_CDROM;
     }
     free(p);
     return e;
+}
+
+/* the system volume's drive letter (GetSystemWindowsDirectoryW: never %SystemRoot%), 0 if none */
+static char ph_sys;
+static void ph_sys_load(void) {
+    wchar_t w[MAX_PATH + 1];
+    UINT n = GetSystemWindowsDirectoryW(w, MAX_PATH + 1);
+    if (n >= 3 && n <= MAX_PATH && w[1] == L':' && ((w[0] >= L'A' && w[0] <= L'Z') || (w[0] >= L'a' && w[0] <= L'z'))) ph_sys = (char)w[0];
+}
+
+COMMON_API size_t paths_other_drive(const char *p) {
+    static plat_once_t o = PLAT_ONCE_INIT;
+    plat_once(&o, ph_sys_load);
+    return paths_other_drive_win(p, ph_sys);
 }
 
 COMMON_API int plat_stdio_sync(FILE *s) {
@@ -128,23 +194,55 @@ COMMON_API int plat_stdio_sync(FILE *s) {
     return FlushFileBuffers(h) ? 0 : wr_errno_win32((uint32_t)GetLastError(), WR_OP_OPEN);   /* as plat_fsync */
 }
 
-COMMON_API int plat_finfo_path(const char *path, plat_finfo *fi) {
-    wchar_t *p = ph_wide(path);
-    if (!p) return EINVAL;
-    WIN32_FILE_ATTRIBUTE_DATA a;                            /* attributes only: nothing hydrated */
-    BOOL ok = GetFileAttributesExW(p, GetFileExInfoStandard, &a);
-    DWORD le = GetLastError();
-    free(p);
-    if (!ok) return wr_errno_win32((uint32_t)le, WR_OP_OPEN);
-    fi->kind = a.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY ? PLAT_DIR : a.dwFileAttributes & FILE_ATTRIBUTE_DEVICE ? PLAT_OTHER : PLAT_FILE;
-    fi->size = (int64_t)((uint64_t)a.nFileSizeHigh << 32 | a.nFileSizeLow);
+COMMON_API int plat_model_stat_file(plat_file f, plat_model_info *info) {
+    plat_stat st;
+    int e = plat_file_stat(f, &st);
+    if (e) return e;
+    FILETIME mtime;
+    if (!GetFileTime(f.h, NULL, NULL, &mtime)) return wr_errno_win32(GetLastError(), WR_OP_OPEN);
+    uint64_t ticks = (uint64_t)mtime.dwHighDateTime << 32 | mtime.dwLowDateTime;
+    *info = (plat_model_info){.id = st.id, .size = st.size,
+                              .mtime = (int64_t)(ticks / 10000000) - WR_FILETIME_1970 / 10000000,
+                              .mtime_nsec = (long)(ticks % 10000000) * 100};
+    return 0;
+}
+
+COMMON_API int plat_model_stat_path(const char *path, plat_model_info *info) {
+    plat_file f;
+    int e = plat_file_open_path(path, &f);
+    if (e) return e;
+    e = plat_model_stat_file(f, info);
+    plat_file_close(f);
+    return e;
+}
+
+static int ph_finfo(DWORD attr, DWORD size_high, DWORD size_low, FILETIME mtime, plat_finfo *fi) {
+    fi->kind = attr & FILE_ATTRIBUTE_DIRECTORY ? PLAT_DIR : attr & FILE_ATTRIBUTE_DEVICE ? PLAT_OTHER : PLAT_FILE;
+    fi->size = (int64_t)((uint64_t)size_high << 32 | size_low);
     /* 100 ns since 1601 to ns since 1970, as manifest.c records the Mac's st_mtimespec */
-    uint64_t u = (uint64_t)a.ftLastWriteTime.dwHighDateTime << 32 | a.ftLastWriteTime.dwLowDateTime;
+    uint64_t u = (uint64_t)mtime.dwHighDateTime << 32 | mtime.dwLowDateTime;
     if (u > (uint64_t)INT64_MAX) return EOVERFLOW;
     int64_t t = (int64_t)u - 116444736000000000LL;
     if (t > INT64_MAX / 100 || t < INT64_MIN / 100) return EOVERFLOW;
     fi->mtime_ns = t * 100;
     return 0;
+}
+
+COMMON_API int plat_finfo_path(const char *path, plat_finfo *fi) {
+    wchar_t *p = ph_wide_track(path, NULL);
+    if (!p) return EINVAL;
+    WIN32_FILE_ATTRIBUTE_DATA a;                            /* attributes only: nothing hydrated */
+    BOOL ok = GetFileAttributesExW(p, GetFileExInfoStandard, &a);
+    DWORD le = GetLastError();
+    free(p);
+    if (!ok) return ph_track_errno(le);
+    return ph_finfo(a.dwFileAttributes, a.nFileSizeHigh, a.nFileSizeLow, a.ftLastWriteTime, fi);
+}
+
+COMMON_API int plat_finfo_file(plat_file f, plat_finfo *fi) {
+    BY_HANDLE_FILE_INFORMATION a;
+    if (!GetFileInformationByHandle(f.h, &a)) return ph_track_errno(GetLastError());
+    return ph_finfo(a.dwFileAttributes, a.nFileSizeHigh, a.nFileSizeLow, a.ftLastWriteTime, fi);
 }
 
 COMMON_API int plat_exe_start(void) {

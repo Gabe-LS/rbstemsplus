@@ -9,7 +9,7 @@
 # The harness steps run unelevated, as the user (I89); vhd runs as SYSTEM. From the snapshot with rekordbox installed, after the share holds
 # the files:
 #   bridge/win/tests/stage.sh --build       # the TEST bridge, harness.exe, the fake, the test model and run.ps1
-#   tests/win/vm-run.sh run "rekordbox 7.2.19 logged in" bridge
+#   tests/win/vm-run.sh run "rekordbox 7.2.19 installed" bridge
 include lib/vmlib.ps1
 need file bridge-win/run.ps1
 need file bridge-win/onnxruntime.dll

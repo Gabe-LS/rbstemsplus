@@ -87,6 +87,14 @@ typedef struct view_state {
     view_buttons shown;
     view_sha_memo sha;
     view_loc_memo loc;
+#ifdef CORE_WIN_POLICY
+    int64_t win_r1;              /* Windows: R1's state (FACT_R1_STATE), R1_OK until an answer says otherwise */
+    uint64_t r1_gen;             /* the latest R1 ask: an older answer is stale */
+    int r1_after_action;         /* an action ended and its R1 answer hasn't come: Put Back stays off (CW3) */
+    int win_r1_dismissed;        /* Windows: R1's answer says this version is dismissed (FACT_R1_DISMISSED, N10) */
+    win_row win_r1_bridge_repair; /* the repair row identifying our bridge, for the cache light */
+    char win_r1_dismiss_versions[256];   /* F_WIN_R1_DISMISS_VERSIONS as last set: what Don't Ask Again covers now */
+#endif
 } view_state;
 
 /* main */
@@ -132,8 +140,8 @@ const char *view_model_sha(struct core *c, const struct core_facts *f, int waite
 /* the menus' facts (validateMenuItem) */
 void view_menu_facts(struct core *c, void *menu_facts_out);
 #ifdef CORE_WIN_POLICY
-/* the first Windows release (no "prepare_tabs"): no Status or Prepare tab, so no menu row, click,
- * {"ev":"tab"} or start tab reaches them (I10, I86) */
+/* A Windows host without "prepare_tabs":true has only Manage. The start tab, menu rows, clicks
+ * and {"ev":"tab"} cannot reach Status or Prepare. */
 int view_tabs_hidden(const struct core *c);
 #endif
 /* a track line's strings: their size (each with its NUL), and dst made from src with its strings
@@ -157,6 +165,10 @@ void view_tab_shown(struct core *c, int tab);
 void view_show_tab(struct core *c, int tab);
 /* an action's click (by its button as shown) or menu choice (validateMenuItem): 1 it may start */
 int view_click_enabled(struct core *c, const char *id, size_t n, int menu);
+#ifdef CORE_WIN_POLICY
+/* Windows: R1's check (CORE_SLOW_R1) asked on a worker; its answer refreshes only when it changed */
+void view_r1_check(struct core *c);
+#endif
 /* a click or menu choice that isn't an action flow's */
 void view_event(struct core *c, const char *id, size_t n, int menu);
 

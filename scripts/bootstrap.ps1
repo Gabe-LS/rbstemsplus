@@ -12,9 +12,11 @@
 #      public keys below (ECDSA P-256), no key in it is given twice, its version has the right
 #      shape (x.y.z, no suffix) and isn't older than PAYLOAD_MINIMUM, and it
 #      has the windows block;
-#   3. downloads the zip the windows block names, checks its SHA-256, unpacks it into a staging
-#      folder and checks it: no link or reparse point, the files the app needs, the worker's and
-#      both stubs' SHA-256;
+#   3. downloads the zip the windows block names, checks its SHA-256, checks its entry names
+#      (unzip.c's rules: no rooted name, '..', '\', ':', link entry), unpacks it entry by entry
+#      into a staging folder with the sizes capped on the bytes written, and checks it: no link or
+#      reparse point, the files the app needs, the worker's and both stubs' SHA-256, the app's
+#      ProductVersion and ProductName (as the updater does);
 #   4. stops a running background watcher (by its stop event), refuses while the app itself is
 #      open, and moves the new version into its folder <version>\;
 #   5. writes the start stub of this PC's architecture (checked against the payload), `current`
@@ -24,6 +26,12 @@
 #      at logon, and the Apps & features entry;
 #   6. removes older version folders and opens the app through the stub.
 # No UAC: everything goes into this account's own folders and HKCU.
+#
+# -Restore, the recovery that needs none of our binaries (release.md section 4): in an elevated
+# powershell.exe, `$env:RBSTEMSPLUS_RESTORE='1'; irm <url> | iex` puts Pioneer's onnxruntime.dll
+# back into rekordbox's folder from the copy the worker saved (Invoke-RbspRestore). It skips the
+# Smart App Control and language stops and requires elevation; cmdlets only, so it runs in
+# ConstrainedLanguage and with Smart App Control On.
 #
 # Rules: the whole script runs inside & { } and leaves by return or throw, never exit (under iex,
 # exit would close the window). Pure ASCII, no BOM (tests/win/bootstrap checks it). Everything
@@ -55,6 +63,9 @@ $Publisher = 'Gabe-LS'
 $UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\RBStemsPlus'
 $RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run'
 $RunValue = 'RB Stems Plus Watcher'
+# The install lock (win/c/afterexit.h's AX_INSTALL_LOCK): an uninstall's after-exit deletes nothing
+# while this run holds it, and holds it itself while it deletes (audit b-a2b-F2)
+$InstallLock = 'Local\io.github.rbstemsplus.install'
 
 # The lines this script can say (app.md W14a's table of Windows texts). The Smart App Control and
 # old-Windows ones are the core's T_WIN_SAC_ON and T_WIN_START_OLD_WINDOWS (texts.def); U+203A
@@ -68,8 +79,20 @@ $Texts = @{
     Elevated     = 'Run the install command in a normal PowerShell window, not as administrator.'
     UacOff       = "RB Stems Plus can't be installed while User Account Control is off. Turn it on, restart Windows, then run the install command again."
     AppOpen      = 'RB Stems Plus is open. Quit it, then run the install command again.'
+    Waiting      = "Waiting for RB Stems Plus's uninstall to finish..."
+    Uninstalling = 'RB Stems Plus is still being uninstalled. Try again in a minute.'
     NotWindows   = 'This release has no Windows version yet.'
     Failed       = "RB Stems Plus wasn't installed: "
+    RestoreElevated = 'Run the restore command in PowerShell as administrator.'
+    RestoreOpen     = 'rekordbox is open. Quit it, then run the restore command again.'
+    RestoreBusy     = 'Finish updating or uninstalling rekordbox, or wait for RB Stems Plus to finish, then run the restore command again.'
+    RestoreNone     = "There is no saved copy of rekordbox's file to put back. Reinstall rekordbox with Pioneer's installer."
+    RestoreFailed   = "rekordbox's file wasn't put back: "
+    # -Restore's reasons with a folder, a file or a version in them ({0}, {1}: -f)
+    RestoreLinked   = '{0} is reached through a link'
+    RestoreOthers   = '{0} can be changed by other accounts'
+    RestoreNotFile  = "rekordbox {0}'s ONNX Runtime isn't a file"
+    RestoreGone     = 'rekordbox {0} has no ONNX Runtime file now: run the restore command again ({1})'
 }
 
 # ------------------------------------------------------------------ versions
@@ -368,11 +391,132 @@ function Test-RbspUnpacked([string]$dir, $p) {
     }
 }
 
+# A zip entry's name as unzip.c's unzip_name_ok takes it: relative, '/'-separated, printable
+# ASCII without \ : * ? " < > |, no empty, '.' or '..' part, no part ending in a space or a dot,
+# no Windows device name (CON, PRN, AUX, NUL, COM0-9, LPT0-9, CONIN$, CONOUT$, any extension), at
+# most 255 bytes and 8 parts; a folder's entry ends in '/'
+function Test-RbspZipName([string]$n) {
+    if ($n.Length -eq 0 -or $n.Length -gt 255 -or $n[0] -eq '/') { return $false }
+    if ($n -cmatch '[^\x20-\x7e]' -or $n.IndexOfAny([char[]]'\:*?"<>|') -ge 0) { return $false }
+    $end = if ($n.EndsWith('/')) { $n.Substring(0, $n.Length - 1) } else { $n }
+    if ($end.Length -eq 0) { return $false }
+    $parts = $end.Split('/')
+    if ($parts.Count -gt 8) { return $false }
+    foreach ($c in $parts) {
+        if ($c.Length -eq 0 -or $c -eq '.' -or $c -eq '..' -or $c.EndsWith(' ') -or $c.EndsWith('.')) { return $false }
+        $base = $c
+        $dot = $c.IndexOf([char]'.')
+        if ($dot -ge 0) { $base = $c.Substring(0, $dot) }
+        # upper-cased invariantly, then matched case-sensitively: a case-insensitive match folds by the
+        # culture (under tr-TR 'i' isn't 'I', so 'conin$' would pass)
+        if ($base.TrimEnd(' ').ToUpperInvariant() -cmatch '^(CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[0-9]|LPT[0-9])\z') { return $false }
+    }
+    return $true
+}
+
+# The downloaded zip's entries, read before Expand-RbspZip unpacks anything (defence in depth: the
+# zip's SHA-256 comes from the signed payload). unzip.c's rules, the ones the app's updater reads
+# the same zip with: every name per Test-RbspZipName, no symbolic link (a Unix mode of 0xA000 in
+# the external attributes' high half), no name twice or a file that is also a folder of another
+# name (ignoring case), no folder entry with data, at most 4096 entries, and 128 MiB a file and
+# 512 MiB in all by the sizes the zip declares. Expand-RbspZip then holds every entry to its
+# declared size and the total to 512 MiB on the bytes it writes (BS2), which covers what unzip.c's
+# inflated-size and overlap checks guard against; method, encryption and ZIP64 are left to .NET's
+# reader. Throws with the reason.
+function Test-RbspZip([string]$zip) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $z = [IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        $entries = @($z.Entries)
+        if ($entries.Count -gt 4096) { throw 'the download holds too many files' }
+        $names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        $files = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+        $total = [long]0
+        foreach ($e in $entries) {
+            $n = $e.FullName
+            if (-not (Test-RbspZipName $n)) { throw "the download holds a name that isn't plain: $n" }
+            if ((($e.ExternalAttributes -shr 16) -band 0xF000) -eq 0xA000) { throw "the download holds a link: $n" }
+            $isDir = $n.EndsWith('/')
+            if ($isDir -and $e.Length -ne 0) { throw "the download holds a folder with data: $n" }
+            if ($e.Length -gt 128MB) { throw "the download holds a file too large: $n" }
+            $total += $e.Length
+            if ($total -gt 512MB) { throw 'the download unpacks too large' }
+            $bare = $n.TrimEnd('/')
+            if (-not $names.Add($bare)) { throw "the download holds a name twice: $n" }
+            if (-not $isDir) { [void]$files.Add($bare) }
+        }
+        # a file that is also a folder of another name ("a" and "a/b")
+        foreach ($bare in $names) {
+            $at = $bare.IndexOf([char]'/')
+            while ($at -gt 0) {
+                if ($files.Contains($bare.Substring(0, $at))) { throw "the download holds a file and a folder of the same name: $bare" }
+                $at = $bare.IndexOf([char]'/', $at + 1)
+            }
+        }
+    } finally { $z.Dispose() }
+}
+
+# The zip unpacked into $dest (a new folder) entry by entry, after Test-RbspZip (BS2, in place of
+# Expand-Archive): each name checked again and joined under $dest by its '/' parts, each file
+# created new (never over another) and copied with a cap of its declared size plus one byte, so no
+# entry writes more than the zip declares (one whose data reads longer or shorter is refused;
+# .NET's reader may itself stop a deflated entry at its declared size), and the bytes written in
+# all kept under $maxTotal (512 MiB; overlapping entries count each time they are read). Throws
+# with the reason; the caller removes the staging folder.
+function Expand-RbspZip([string]$zip, [string]$dest, [long]$maxTotal = 512MB) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [void][IO.Directory]::CreateDirectory($dest)
+    $z = [IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        $buf = New-Object byte[] 65536
+        $total = [long]0
+        foreach ($e in @($z.Entries)) {
+            $n = $e.FullName
+            if (-not (Test-RbspZipName $n)) { throw "the download holds a name that isn't plain: $n" }
+            $target = Join-RbspPath $dest $n.TrimEnd('/')
+            if ($n.EndsWith('/')) { [void][IO.Directory]::CreateDirectory($target); continue }
+            [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($target))
+            $want = [long]$e.Length
+            $got = [long]0
+            $in = $e.Open()
+            try {
+                $out = New-Object IO.FileStream($target, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+                try {
+                    while ($got -le $want) {
+                        $k = $in.Read($buf, 0, [int][Math]::Min([long]$buf.Length, $want + 1 - $got))
+                        if ($k -le 0) { break }
+                        $got += $k
+                        if ($got -gt $want) { break }
+                        $total += $k
+                        if ($total -gt $maxTotal) { throw 'the download unpacks too large' }
+                        $out.Write($buf, 0, $k)
+                    }
+                } finally { $out.Dispose() }
+            } finally { $in.Dispose() }
+            if ($got -ne $want) { throw "the download's $n isn't the size the zip declares" }
+        }
+    } finally { $z.Dispose() }
+}
+
+# The unpacked app's version resource names the app the payload does (update.c's check_app): its
+# ProductVersion is windows.app.version (a "+build" suffix allowed), its ProductName RB Stems
+# Plus. Read through $sys.ProductInfo (only Windows reads a PE's version resource). Throws.
+function Test-RbspAppVersion([string]$dir, $p, $sys) {
+    $info = & $sys.ProductInfo ([IO.Path]::Combine($dir, $AppExe))
+    $v = ([string]$info.Version).Trim()
+    $n = ([string]$info.Name).Trim()
+    if (-not ($v -ceq $p.AppVersion -or $v.StartsWith($p.AppVersion + '+', [StringComparison]::Ordinal))) {
+        throw "the app's version ($v) isn't the one the payload names ($($p.AppVersion))"
+    }
+    if ($n -cne $AppName) { throw "the app's ProductName isn't $AppName" }
+}
+
 # ------------------------------------------------------------------ the install
 
 # Everything after the checked download, with what only Windows does in $sys (scriptblocks the
 # tests replace): AppRunning(apps) -> bool, StopWatchers(apps), SetRegistry(key, name, kind, data),
-# NewShortcut(lnk, target, aumid), Start(exe, args). $unpacked: the checked, unpacked app (moved
+# NewShortcut(lnk, target, aumid), Start(exe, args); and ProductInfo(exe) -> @{Version; Name},
+# which Test-RbspAppVersion uses. $unpacked: the checked, unpacked app (moved
 # into its version folder; its parent is this run's .bootstrap-<pid>\); $arch: 'x64' or 'arm64';
 # $keys: the signing keys (installed-release\'s pair is kept in prev\ when it verifies).
 # Once the watchers are stopped, a watcher is started again whatever happens, when a stub and
@@ -420,6 +564,12 @@ function Install-RbspApp($layout, $p, [byte[]]$json, [byte[]]$sig, [string]$unpa
                 # this script's next run removes a .bootstrap-* that stays; the app's next start sweeps old version folders
                 try { [IO.Directory]::Delete($d.FullName, $true) } catch { }
             }
+        }
+        # This install has superseded the updater's attempt. Clear its records before either start.
+        $update = [IO.Path]::Combine($layout.Support, 'update')
+        # each on its own: a record that can't go now doesn't turn a finished install into a failure
+        foreach ($name in @('pending', 'started', 'payload.json', 'payload.json.sig', 'watcher', 'result')) {
+            try { [IO.File]::Delete([IO.Path]::Combine($update, $name)) } catch { }
         }
         $done = $true
     } finally {
@@ -535,6 +685,11 @@ function Get-RbspWindowsSys {
                 $k.SetValue($name, $data, $rk)
             } finally { $k.Dispose() }
         }
+        ProductInfo = {
+            param($exe)
+            $vi = [Diagnostics.FileVersionInfo]::GetVersionInfo($exe)
+            return @{ Version = [string]$vi.ProductVersion; Name = [string]$vi.ProductName }
+        }
         NewShortcut = {
             param($lnk, $target, $aumid)
             if (-not ('RbspShortcut' -as [type])) { Add-Type -TypeDefinition $ShortcutCode -Language CSharp }
@@ -610,6 +765,35 @@ function Get-RbspZipUrl([string]$base, $p) {
     return $base + $p.Zip
 }
 
+# The install lock taken (a [Threading.Mutex]; FullLanguage only, after the refusals): waits at
+# most $ms while an uninstall's after-exit holds it (its 60 s wait for other programs and the
+# deletes after it; 200 s), then refuses with nothing made. An abandoned one (a run that was
+# killed) is ours.
+function Open-RbspInstallLock([string]$name, [int]$ms) {
+    $m = New-Object Threading.Mutex($false, $name)
+    $got = $false
+    try {
+        $got = $m.WaitOne(0)
+        if (-not $got) {
+            $clock = [Diagnostics.Stopwatch]::StartNew()
+            Write-Host $Texts.Waiting
+            while (-not $got) {
+                $left = $ms - $clock.ElapsedMilliseconds
+                if ($left -le 0) { break }
+                $got = $m.WaitOne([int][Math]::Min(500, $left))
+            }
+        }
+    } catch [Threading.AbandonedMutexException] { $got = $true }
+    finally { if (-not $got) { $m.Dispose() } }
+    if (-not $got) { throw $Texts.Uninstalling }
+    return $m
+}
+
+function Close-RbspInstallLock($m) {
+    try { $m.ReleaseMutex() } catch { }
+    $m.Dispose()
+}
+
 function Invoke-RbspMain {
     Test-RbspCanInstall (Get-RbspFacts)
     if (-not $SigningKeys -or -not $PayloadMinimum) { throw 'this copy of the script has no keys: run the one a release published' }
@@ -619,31 +803,40 @@ function Invoke-RbspMain {
     if (-not $base.EndsWith('/')) { $base += '/' }
     $keys = $SigningKeys -split ' '
     $layout = Get-RbspLayout ([Environment]::GetFolderPath('LocalApplicationData')) ([Environment]::GetFolderPath('Programs'))
-    $created = -not [IO.Directory]::Exists($layout.Apps)
-    [void][IO.Directory]::CreateDirectory($layout.Apps)
-    $tmp = [IO.Path]::Combine($layout.Apps, ".bootstrap-$PID")
-    [void][IO.Directory]::CreateDirectory($tmp)
+    # held until the app is started (Install-RbspApp's last step) and this run's temp folder removed
+    $lock = Open-RbspInstallLock $InstallLock 200000
     try {
-        Write-Host 'Downloading RB Stems Plus...'
-        Get-RbspDownload "${base}payload.json" ([IO.Path]::Combine($tmp, 'payload.json'))
-        Get-RbspDownload "${base}payload.json.sig" ([IO.Path]::Combine($tmp, 'payload.json.sig'))
-        $json = [IO.File]::ReadAllBytes([IO.Path]::Combine($tmp, 'payload.json'))
-        $sig = [IO.File]::ReadAllBytes([IO.Path]::Combine($tmp, 'payload.json.sig'))
-        if ((Test-RbspPayloadSignature $json $sig $keys) -lt 0) { throw "payload.json's signature doesn't verify" }
-        $p = Read-RbspPayload $json
-        if ($null -eq $p) { throw $Texts.NotWindows }
-        $c = Compare-RbspVersion $p.PayloadVersion $PayloadMinimum
-        if ($c -eq 2 -or $c -lt 0) { throw "payload $($p.PayloadVersion) is older than $PayloadMinimum" }
-        $zip = [IO.Path]::Combine($tmp, $p.Zip)
-        Get-RbspDownload (Get-RbspZipUrl $base $p) $zip
-        if ((Get-RbspSha256 $zip) -ne $p.ZipSha256) { throw 'the download is damaged (its SHA-256 differs)' }
-        $unpacked = [IO.Path]::Combine($tmp, 'app')
-        Expand-Archive -LiteralPath $zip -DestinationPath $unpacked
-        Test-RbspUnpacked $unpacked $p
-        Install-RbspApp $layout $p $json $sig $unpacked (Get-RbspNativeArch) (Get-RbspWindowsSys) $keys
-        Write-Host "RB Stems Plus $($p.PayloadVersion) is installed."
+        $created = -not [IO.Directory]::Exists($layout.Apps)
+        [void][IO.Directory]::CreateDirectory($layout.Apps)
+        $tmp = [IO.Path]::Combine($layout.Apps, ".bootstrap-$PID")
+        [void][IO.Directory]::CreateDirectory($tmp)
+        try {
+            Write-Host 'Downloading RB Stems Plus...'
+            Get-RbspDownload "${base}payload.json" ([IO.Path]::Combine($tmp, 'payload.json'))
+            Get-RbspDownload "${base}payload.json.sig" ([IO.Path]::Combine($tmp, 'payload.json.sig'))
+            $json = [IO.File]::ReadAllBytes([IO.Path]::Combine($tmp, 'payload.json'))
+            $sig = [IO.File]::ReadAllBytes([IO.Path]::Combine($tmp, 'payload.json.sig'))
+            if ((Test-RbspPayloadSignature $json $sig $keys) -lt 0) { throw "payload.json's signature doesn't verify" }
+            $p = Read-RbspPayload $json
+            if ($null -eq $p) { throw $Texts.NotWindows }
+            $c = Compare-RbspVersion $p.PayloadVersion $PayloadMinimum
+            if ($c -eq 2 -or $c -lt 0) { throw "payload $($p.PayloadVersion) is older than $PayloadMinimum" }
+            $zip = [IO.Path]::Combine($tmp, $p.Zip)
+            Get-RbspDownload (Get-RbspZipUrl $base $p) $zip
+            if ((Get-RbspSha256 $zip) -ne $p.ZipSha256) { throw 'the download is damaged (its SHA-256 differs)' }
+            $unpacked = [IO.Path]::Combine($tmp, 'app')
+            Test-RbspZip $zip
+            Expand-RbspZip $zip $unpacked
+            Test-RbspUnpacked $unpacked $p
+            $sys = Get-RbspWindowsSys
+            Test-RbspAppVersion $unpacked $p $sys
+            Install-RbspApp $layout $p $json $sig $unpacked (Get-RbspNativeArch) $sys $keys
+            Write-Host "RB Stems Plus $($p.PayloadVersion) is installed."
+        } finally {
+            Remove-RbspTemp $layout $tmp $created
+        }
     } finally {
-        Remove-RbspTemp $layout $tmp $created
+        Close-RbspInstallLock $lock
     }
 }
 
@@ -654,12 +847,267 @@ function Remove-RbspTemp($layout, [string]$tmp, [bool]$created) {
     if ($created -and -not [IO.File]::Exists($layout.Stub)) { try { [IO.Directory]::Delete($layout.Apps, $true) } catch { } }
 }
 
+# ------------------------------------------------------------------ -Restore
+# Everything from here to the end runs in ConstrainedLanguage too (R4.I69, J22): cmdlets, property
+# reads and casts to core types only; no [ref], no static or instance method call, no New-Object or
+# Add-Type, no property set (tests/win/bootstrap checks the text).
+
+# The worker's temporary name for the copy (win/admin/worker.c's NEW): a leftover is removed first
+$RestoreTemp = 'onnxruntime.dll.rbsp-new'
+# The SIDs trusted to change rekordbox's folder (plat_win.c pw_trusted): Administrators, SYSTEM,
+# TrustedInstaller, as SDDL writes them
+$TrustedSids = @('BA', 'SY', 'S-1-5-32-544', 'S-1-5-18', 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464')
+# SDDL's access-right letters and what they grant (a right not listed counts as a write)
+$SddlRights = @{
+    GA = [long]0x10000000; GX = [long]0x20000000; GW = [long]0x40000000; GR = [long]2147483648
+    SD = [long]0x10000; RC = [long]0x20000; WD = [long]0x40000; WO = [long]0x80000
+    FA = [long]0x1F01FF; FR = [long]0x120089; FW = [long]0x120116; FX = [long]0x1200A0
+    CC = [long]0x1; DC = [long]0x2; LC = [long]0x4; SW = [long]0x8; RP = [long]0x10; WP = [long]0x20
+    DT = [long]0x40; LO = [long]0x80; CR = [long]0x100
+}
+# The rights that change a folder or its protection (win_rules.h WR_WRITE_RIGHTS)
+$WriteRights = [long]0x500D0046
+
+# Whether this window runs with the High mandatory level (an elevated token): S-1-16-12288 in
+# whoami /groups (J22; WindowsPrincipal.IsInRole is a .NET call)
+function Test-RbspHighToken {
+    $g = @()
+    try { $g = @(whoami /groups 2>$null) } catch { $g = @() }
+    return [bool](@($g | Where-Object { [string]$_ -match 'S-1-16-12288' }).Count)
+}
+
+# Program Files, the 64-bit one the worker reads (plat_win.c), a local path: HKLM's
+# ProgramW6432Dir first, which 64-bit Windows keeps in both registry views, so an x86
+# powershell.exe reads the same folder (BS14); else ProgramFilesDir, except in a 32-bit process on
+# 64-bit Windows (PROCESSOR_ARCHITEW6432 set), where that is Program Files (x86)
+function Get-RbspProgramFiles {
+    $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion'
+    $pf = ''
+    $v = Get-ItemProperty -LiteralPath $key -Name ProgramW6432Dir -ErrorAction SilentlyContinue
+    if ($null -ne $v) { $pf = [string]$v.ProgramW6432Dir }
+    if (-not $pf -and -not $env:PROCESSOR_ARCHITEW6432) {
+        $v = Get-ItemProperty -LiteralPath $key -Name ProgramFilesDir -ErrorAction SilentlyContinue
+        if ($null -ne $v) { $pf = [string]$v.ProgramFilesDir }
+    }
+    if ($pf -notmatch '^[A-Za-z]:\\[^\\]') { throw "couldn't read Windows' Program Files folder" }
+    return $pf
+}
+
+# Whether $path or a folder above it is a reparse point (a junction or a link), up to the drive's
+# root. What isn't there (PathNotFound) is passed over; any other error (access denied) counts as
+# a link, so the check fails closed (BS1)
+function Test-RbspReparse([string]$path) {
+    $p = $path
+    while ($p) {
+        $i = $null
+        try { $i = Get-Item -LiteralPath $p -Force -ErrorAction Stop }
+        catch { if (-not ([string]$_.FullyQualifiedErrorId -like 'PathNotFound,*')) { return $true } }
+        if ($null -ne $i -and [string]$i.Attributes -match 'ReparsePoint') { return $true }
+        $up = Split-Path -Path $p -Parent
+        if ($up -eq $p) { break }
+        $p = $up
+    }
+    return $false
+}
+
+# An SDDL access mask as a number: hex, or SDDL's two-letter rights; -1 when unread
+function Get-RbspSddlMask([string]$r) {
+    if ($r -cmatch '^0x[0-9a-fA-F]{1,8}\z') { return [long]$r }
+    if ($r -cnotmatch '^(?:[A-Z]{2})+\z') { return [long]-1 }
+    $m = [long]0
+    foreach ($t in (($r -creplace '([A-Z]{2})', '$1 ') -split ' ')) {
+        if (-not $t) { continue }
+        if ($SddlRights.Keys -cnotcontains $t) { return [long]-1 }
+        $m = $m -bor $SddlRights[$t]
+    }
+    return $m
+}
+
+# Whether an SDDL descriptor lets only administrators change the object (win_rules.h wr_acl_ok):
+# the owner trusted; a DACL (not NO_ACCESS_CONTROL); allow and deny ACEs only; every allow ACE
+# that isn't inherit-only (IO) and grants a write right is a trusted SID's. Fails closed on what
+# it can't read (a conditional ACE, an unknown right).
+function Test-RbspSddlAdminOnly([string]$sddl) {
+    if ($sddl -cnotmatch '^O:([A-Z0-9-]+?)(?:G:[A-Z0-9-]+?)?D:([A-Z]*)((?:\([^()]*\))*)\z') { return $false }
+    $owner = $Matches[1]
+    $aces = $Matches[3]
+    if ($TrustedSids -cnotcontains $owner) { return $false }
+    foreach ($a in ($aces -split '\)')) {
+        if (-not $a) { continue }
+        $f = @(($a -creplace '^\(', '') -split ';')
+        if ($f.Count -ne 6) { return $false }
+        if ($f[0] -ceq 'D') { continue }
+        if ($f[0] -cne 'A') { return $false }
+        if ($f[1] -cmatch '^(?:[A-Z]{2})*?IO') { continue }
+        $m = Get-RbspSddlMask $f[2]
+        if (($m -lt 0 -or ($m -band $WriteRights)) -and $TrustedSids -cnotcontains $f[5]) { return $false }
+    }
+    return $true
+}
+
+# Whether only administrators can change $dir: its owner and DACL, through Get-Acl's SDDL
+function Test-RbspAdminOnly([string]$dir) {
+    $sddl = ''
+    try { $sddl = [string](Get-Acl -LiteralPath $dir).Sddl } catch { return $false }
+    return Test-RbspSddlAdminOnly $sddl
+}
+
+function Test-RbspRekordboxOpen { return [bool](@(Get-Process -Name rekordbox -ErrorAction SilentlyContinue).Count) }
+
+function Test-RbspRestoreBusy([string]$ours) {
+    foreach ($pr in Get-Process -Name 'Upmgr rekordbox', 'Uninstall rekordbox', $AppName -ErrorAction SilentlyContinue) {
+        if ($pr.ProcessName -ne $AppName) { return $true }
+        $path = $null
+        try { $path = $pr.Path } catch { }
+        # A literal, case-insensitive split at the start tests the folder prefix in ConstrainedLanguage.
+        if ($path -and ($path -split "$ours\", 2, 'SimpleMatch')[0] -eq '') { return $true }
+    }
+    return $false
+}
+
+# A file's SHA-256 in hex (compared without case)
+function Get-RbspFileSha([string]$file) { return [string](Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash }
+
+# Whether $file is AlphaTheta's (compat.c's pin): a valid Authenticode signature whose signer's
+# organization is AlphaTheta Corporation and serial number 0104-01-151827. The subject is read
+# field by field: a quote or a '+' (a value that could hold ", O=...", a multi-valued name) is
+# refused, and O= and SERIALNUMBER= must each appear once, with exactly that value (BS5; win_pin
+# reads them by OID)
+function Test-RbspAlphaTheta([string]$file) {
+    $s = Get-AuthenticodeSignature -LiteralPath $file
+    if ($null -eq $s -or [string]$s.Status -cne 'Valid' -or $null -eq $s.SignerCertificate) { return $false }
+    $subject = [string]$s.SignerCertificate.Subject
+    if ($subject -match '["+]') { return $false }
+    $f = @($subject -split ', ')
+    $o = @($f | Where-Object { $_ -cmatch '^O=' })
+    $n = @($f | Where-Object { $_ -cmatch '^SERIALNUMBER=' })
+    return $o.Count -eq 1 -and $o[0] -ceq 'O=AlphaTheta Corporation' -and $n.Count -eq 1 -and $n[0] -ceq 'SERIALNUMBER=0104-01-151827'
+}
+
+# The saved set in $set complete (worker.c set_complete): SHA256SUMS is exactly
+# "<sha256>  onnxruntime.dll" and a line end, 82 bytes (so no BOM, no other encoding), and
+# onnxruntime.dll's SHA-256 is that one. The sha, or '' when it isn't
+function Get-RbspSavedSha([string]$set) {
+    $sums = Join-Path $set 'SHA256SUMS'
+    $lib = Join-Path $set 'onnxruntime.dll'
+    if (-not (Test-Path -LiteralPath $sums -PathType Leaf) -or -not (Test-Path -LiteralPath $lib -PathType Leaf)) { return '' }
+    if ((Get-Item -LiteralPath $sums -Force).Length -ne 82) { return '' }
+    $t = [string](Get-Content -LiteralPath $sums -Raw)
+    if ($t -cnotmatch '^([0-9a-f]{64})  onnxruntime\.dll\n\z') { return '' }
+    $sha = $Matches[1]
+    if ((Get-RbspFileSha $lib) -ne $sha) { return '' }
+    return $sha
+}
+
+# Pioneer's file of rekordbox $v put back into its folder $dst from the saved set $set (worker.c
+# put_back, I49, I71): no reparse point in any of the paths, both folders and the live file the
+# administrators' alone. The live file is classified first (worker.c admin_classify): one that
+# isn't a file is refused, one that is AlphaTheta's is left. Then the saved copy must be complete
+# and AlphaTheta's; it is copied to the temporary name in $dst, verified (admin-only, SHA-256 and
+# signature), then moved over the live file (-Force), or, when that is missing (Defender, R4.I71),
+# into its place without -Force, which fails if a file appeared meanwhile; verified again. A forced
+# move that fails with the live file gone (5.1's -Force deletes it first) is retried once without
+# -Force (BS3). Throws the reason.
+function Restore-RbspVersion([string]$v, [string]$set, [string]$dst) {
+    $saved = Join-Path $set 'onnxruntime.dll'
+    $sums = Join-Path $set 'SHA256SUMS'
+    $live = Join-Path $dst 'onnxruntime.dll'
+    $tmp = Join-Path $dst $RestoreTemp
+    if ((Test-RbspReparse $saved) -or (Test-RbspReparse $sums) -or (Test-RbspReparse $live) -or (Test-RbspReparse $tmp)) {
+        throw "rekordbox $v's folder or its saved copy is reached through a link"
+    }
+    if (-not (Test-RbspAdminOnly $dst)) { throw "rekordbox $v's folder can be changed by other accounts" }
+    if (-not (Test-RbspAdminOnly $set)) { throw "the folder of rekordbox $v's saved copy can be changed by other accounts" }
+    $present = Test-Path -LiteralPath $live
+    if ($present) {
+        if (-not (Test-Path -LiteralPath $live -PathType Leaf)) { throw ($Texts.RestoreNotFile -f $v) }
+        if (-not (Test-RbspAdminOnly $live)) { throw ($Texts.RestoreOthers -f "rekordbox $v's ONNX Runtime") }
+        # The bridge is never AlphaTheta-signed (Windows releases are unsigned), so a live file that
+        # is AlphaTheta's is Pioneer's: this stands in for the worker's marker check (worker.c:103)
+        if (Test-RbspAlphaTheta $live) {
+            Write-Host "rekordbox $v has Pioneer's file already."
+            return
+        }
+    }
+    $sha = Get-RbspSavedSha $set
+    if (-not $sha) { throw "the saved copy of rekordbox $v's file isn't complete" }
+    if (-not (Test-RbspAlphaTheta $saved)) { throw "the saved copy of rekordbox $v's file isn't AlphaTheta's" }
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force }
+    try {
+        Copy-Item -LiteralPath $saved -Destination $tmp
+        if (-not (Test-RbspAdminOnly $tmp)) { throw ($Texts.RestoreOthers -f "the copy of Pioneer's file in rekordbox $v") }
+        if ((Get-RbspFileSha $tmp) -ne $sha -or -not (Test-RbspAlphaTheta $tmp)) { throw "the copy of Pioneer's file in rekordbox $v doesn't verify" }
+        try {
+            if ($present) { Move-Item -LiteralPath $tmp -Destination $live -Force }
+            else { Move-Item -LiteralPath $tmp -Destination $live }
+        } catch {
+            $why = $_.Exception.Message
+            if (-not $present) { throw "couldn't put Pioneer's file into rekordbox $v, where a file may have appeared meanwhile ($why)" }
+            if (Test-Path -LiteralPath $live) { throw "couldn't put Pioneer's file into rekordbox $v ($why)" }
+            if (Test-Path -LiteralPath $tmp -PathType Leaf) {
+                try { Move-Item -LiteralPath $tmp -Destination $live } catch { $why = "$why; $($_.Exception.Message)" }
+            }
+            if (-not (Test-Path -LiteralPath $live -PathType Leaf)) { throw ($Texts.RestoreGone -f $v, $why) }
+        }
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+    if (-not (Test-Path -LiteralPath $live -PathType Leaf) -or (Get-RbspFileSha $live) -ne $sha -or -not (Test-RbspAlphaTheta $live)) {
+        throw "rekordbox $v's file doesn't verify as Pioneer's after putting it back"
+    }
+    Write-Host "Pioneer's file is back in rekordbox $v."
+}
+
+# -Restore (release.md section 4): every saved set <Program Files>\RB Stems Plus\pioneer\<v>\
+# whose rekordbox folder <Program Files>\rekordbox\rekordbox <v>\ is there, put back. Elevated
+# only; none of our binaries. Refused while rekordbox, its updater or uninstaller, or our worker
+# is running. Our folder, pioneer\ and rekordbox\ (the folders the worker holds) must be no link
+# and the administrators' alone, when there; never a folder above Program Files, whose default
+# ACL isn't (BS1). A version that fails doesn't stop the others (BS7). $pf: Program Files (the
+# tests' temp folder), read from the registry when empty.
+# Throws the reason, or every version's.
+function Invoke-RbspRestore([string]$pf = '') {
+    if (-not (Test-RbspHighToken)) { throw $Texts.RestoreElevated }
+    if (-not $pf) { $pf = Get-RbspProgramFiles }
+    $ours = Join-Path $pf $AppName
+    $pioneer = Join-Path $ours 'pioneer'
+    $rb = Join-Path $pf 'rekordbox'
+    foreach ($d in @($ours, $pioneer, $rb)) {
+        if (Test-RbspReparse $d) { throw ($Texts.RestoreLinked -f $d) }
+        if ((Test-Path -LiteralPath $d) -and -not (Test-RbspAdminOnly $d)) { throw ($Texts.RestoreOthers -f $d) }
+    }
+    $todo = @()
+    if (Test-Path -LiteralPath $pioneer -PathType Container) {
+        foreach ($s in @(Get-ChildItem -LiteralPath $pioneer -Force -Directory)) {
+            $v = [string]$s.Name
+            if ($v -cnotmatch '^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}\z') { continue }
+            $dst = Join-Path $rb "rekordbox $v"
+            if (Test-Path -LiteralPath $dst) { $todo += ,@($v, (Join-Path $pioneer $v), $dst) }
+        }
+    }
+    if ($todo.Count -eq 0) { throw $Texts.RestoreNone }
+    if (Test-RbspRekordboxOpen) { throw $Texts.RestoreOpen }
+    if (Test-RbspRestoreBusy $ours) { throw $Texts.RestoreBusy }
+    $failed = @()
+    foreach ($t in $todo) {
+        try { Restore-RbspVersion $t[0] $t[1] $t[2] } catch { $failed += "rekordbox $($t[0]): $($_.Exception.Message)" }
+    }
+    if ($failed.Count) { throw ($failed -join '; ') }
+}
+
 # tests/win/bootstrap dot-sources this block for its functions, with $RbspTestMode set; under iex
 # nothing sets it, and StrictMode refuses reading a variable that was never set
 if ((Test-Path variable:RbspTestMode) -and $RbspTestMode) { return }
-try { Invoke-RbspMain }
-catch {
+# -Restore is selected by the environment ('1'): irm | iex can't pass a parameter
+$restore = $env:RBSTEMSPLUS_RESTORE -eq '1'
+# read once: a later install command pasted into the same window installs (BS15)
+if (Test-Path -LiteralPath Env:RBSTEMSPLUS_RESTORE) { Remove-Item -LiteralPath Env:RBSTEMSPLUS_RESTORE }
+try {
+    if ($restore) { Invoke-RbspRestore } else { Invoke-RbspMain }
+} catch {
     $m = $_.Exception.Message
-    if ($Texts.Values -contains $m) { Write-Host $m -ForegroundColor Red } else { Write-Host ($Texts.Failed + $m) -ForegroundColor Red }
+    $lead = $Texts.Failed
+    if ($restore) { $lead = $Texts.RestoreFailed }
+    if ($Texts.Values -contains $m) { Write-Host $m -ForegroundColor Red } else { Write-Host ($lead + $m) -ForegroundColor Red }
 }
 }

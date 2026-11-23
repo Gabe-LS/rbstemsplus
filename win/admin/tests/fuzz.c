@@ -22,8 +22,10 @@ static uint32_t next(void) {
 }
 
 static const char *const seeds[] = {
-    "install", "uninstall", "restore", "install-worker", "remove-root-folder", "--proto", "--version", "--source", "--force", "--pipe",
-    "1", "2", "0", "7.2.19", "7.2", "/src", "/a b/c", "\\\\.\\pipe\\rbstemsplus-admin-0123456789abcdef0123456789abcdef", "", "\"", "\\",
+    "install", "uninstall", "restore", "install-worker", "remove-root-folder", "--proto", "--targets", "--manifest", "--source", "--force", "--pipe",
+    "--version", "1", "2", "0", "7.2.19", "7.2", "*", "-", "7.2.19:0123456789abcdef", "7.2.9:0123456789abcdef,7.2.19:fedcba9876543210",
+    "7.2.19:0123456789abcdef,7.2.9:0123456789abcdef", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "/src", "/a b/c",
+    "\\\\.\\pipe\\rbstemsplus-admin-0123456789abcdef0123456789abcdef", "", "\"", "\\", ",", ":",
 };
 
 static void mutate(char *s, size_t cap) {
@@ -92,31 +94,43 @@ int main(int argc, char **argv) {
     long parsed = 0, round = 0, markers = 0;
     for (long it = 0; it < iters; it++) {
         /* the command line */
-        static char vals[12][ADMIN_PATH_MAX + 8];
-        const char *av[12];
-        int ac = 12;
+        static char vals[ADMIN_ARGC][ADMIN_PATH_MAX + 8];
+        const char *av[ADMIN_ARGC];
+        int ac = ADMIN_ARGC;
         snprintf(vals[0], sizeof vals[0], "x");
-        snprintf(vals[1], sizeof vals[1], "%s", seeds[next() % 5]);
-        static const char *const opts[5] = {"--proto", "--version", "--source", "--force", "--pipe"};
-        static const char *const good[5] = {"1", "7.2.19", "/src/a b", "0", "\\\\.\\pipe\\rbstemsplus-admin-0123456789abcdef0123456789abcdef"};
-        for (int i = 0; i < 5; i++) {
+        int vb = (int)(next() % 5);
+        snprintf(vals[1], sizeof vals[1], "%s", seeds[vb]);
+        /* this verb's well-formed values (protocol 2), each replaced now and then */
+        int names = vb == ADMIN_INSTALL || vb == ADMIN_RESTORE, sourced = vb == ADMIN_INSTALL || vb == ADMIN_INSTALL_WORKER;
+        static const char *const opts[6] = {"--proto", "--targets", "--manifest", "--source", "--force", "--pipe"};
+        const char *good[6] = {next() % 4 ? "2" : "1", names ? (next() % 2 ? "7.2.19:0123456789abcdef" : "7.2.9:0123456789abcdef,7.2.19:fedcba9876543210") : "*",
+                               sourced ? "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" : "-", sourced ? "/src/a b" : "", "0",
+                               "\\\\.\\pipe\\rbstemsplus-admin-0123456789abcdef0123456789abcdef"};
+        for (int i = 0; i < 6; i++) {
             snprintf(vals[2 + 2 * i], sizeof vals[0], "%s", next() % 16 ? opts[i] : seeds[next() % (sizeof seeds / sizeof seeds[0])]);
             snprintf(vals[3 + 2 * i], sizeof vals[0], "%s", next() % 8 ? good[i] : seeds[next() % (sizeof seeds / sizeof seeds[0])]);
         }
-        for (int i = 0; i < 12; i++) {
+        for (int i = 0; i < ADMIN_ARGC; i++) {
             if (next() % 24 == 0) mutate(vals[i], 200);
             av[i] = vals[i];
         }
-        if (next() % 10 == 0) ac = (int)(next() % 13);
+        if (next() % 10 == 0) ac = (int)(next() % (ADMIN_ARGC + 1));
         admin_args a;
         char why[160];
         int r = admin_parse_args(ac, av, &a, why, sizeof why);
-        if (r == ADMIN_EXIT_OK || r == ADMIN_EXIT_PROTOCOL) {
-            parsed++;
+        if (r == ADMIN_EXIT_OK || r == ADMIN_EXIT_PROTOCOL) parsed++;
+        if (r == ADMIN_EXIT_OK) {
+            /* a parsed line builds back, and that parses as the same */
             char params[4096];
             long pl = admin_build_params(&a, params, sizeof params);
             if (pl < 0) {
                 fprintf(stderr, "a parsed line doesn't build back\n");
+                return 1;
+            }
+            char tg[ADMIN_TARGETS_ARG_MAX];
+            admin_args b;
+            if (!a.all && (admin_targets_format(a.t, a.nt, tg, sizeof tg) < 0 || admin_targets_parse(tg, &b) || b.nt != a.nt || memcmp(b.t, a.t, sizeof a.t))) {
+                fprintf(stderr, "parsed targets don't read back the same\n");
                 return 1;
             }
             round++;

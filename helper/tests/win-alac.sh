@@ -20,12 +20,13 @@ out="$(cd "$out" && pwd)"
 alac="$out/alac"
 mkdir -p "$alac"
 sh "$root/scripts/deps.sh" group alac "$alac"
+temporary="$(mktemp -d "${TMPDIR:-/tmp}/rbsp-win-alac.XXXXXX")"
+trap 'rm -rf "${temporary:?}"' EXIT
 if [ -n "${WIN_ALAC_FIXTURES:-}" ]; then
   scratch="$WIN_ALAC_FIXTURES"
   mkdir -p "$scratch"
 else
-  scratch="$(mktemp -d "${TMPDIR:-/tmp}/rbsp-win-alac.XXXXXX")"
-  trap 'rm -rf "${scratch:?}"' EXIT
+  scratch="$temporary"
 fi
 fails=0
 
@@ -35,6 +36,11 @@ if [ ! -s "$scratch/manifest.txt" ]; then
   mv "$scratch/manifest.tmp" "$scratch/manifest.txt"
 fi
 echo "$(wc -l < "$scratch/manifest.txt" | tr -d ' ') fixtures"
+reference="$temporary/alac20"
+mkdir "$reference"
+python3 -I "$here/alac20-fixture.py" "$reference/s20.m4a"
+ffmpeg -v error -xerror -c:a alac -i "$reference/s20.m4a" -c:a pcm_f32le "$reference/ffmpeg.wav"
+printf 'same\t%s\t%s\n' "$reference/s20.m4a" "$reference/ffmpeg.wav" > "$reference/manifest.txt"
 
 # ours with the helper's Windows warnings; Apple's files as they are; the test unit (decode.c
 # inside) with build.sh's
@@ -64,7 +70,7 @@ for v in plain asan; do
     helper/tests/win-alac.c helper/big.c common/plat_mac.c "$obj"/*.o \
     -framework AudioToolbox -framework CoreFoundation -framework Accelerate -o "$out/win-alac-$v")
   echo "== win-alac ($v)"
-  if "$out/win-alac-$v" < "$scratch/manifest.txt" > "$out/win-alac-$v.txt" 2>&1; then r=ok; else r=FAIL; fails=$((fails + 1)); fi
+  if cat "$scratch/manifest.txt" "$reference/manifest.txt" | "$out/win-alac-$v" > "$out/win-alac-$v.txt" 2>&1; then r=ok; else r=FAIL; fails=$((fails + 1)); fi
   grep -v '^ok  ' "$out/win-alac-$v.txt" || true
   echo "$r   win-alac ($v): $(tail -1 "$out/win-alac-$v.txt") (every line: $out/win-alac-$v.txt)"
 done

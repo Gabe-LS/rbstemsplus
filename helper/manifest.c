@@ -2,6 +2,9 @@
 #include "manifest.h"
 #include "path_rules.h"
 #include <errno.h>
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+#include <limits.h>
+#endif
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -121,15 +124,41 @@ int manifest_read(const char *dir, const char *name, manifest *m) {
             if (!hex64(line)) { bad = 1; break; }
             mfile_key(f, line);
             want--;
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+        } else if (!strncmp(line, "decoder ", 8)) {
+            const char *version = line + 8;
+            size_t len = strlen(version);
+            if (!f || f->decoder[0] || !len || len >= sizeof f->decoder ||
+                strspn(version, "0123456789.") != len) { bad = 1; break; }
+            memcpy(f->decoder, version, len + 1);
+#endif
         } else {
             long long size, t;
             int complete, off = 0;
             size_t k;
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+            if (sscanf(line, "file %lld %lld %d %zu %n", &size, &t, &complete, &k, &off) != 4 || !off) { bad = 1; break; }
+            const char *path = line + off;
+            int source_rate = 0;
+            if (!strncmp(path, "hz=", 3)) {
+                char *end;
+                long hz = strtol(path + 3, &end, 10);
+                if (hz <= 0 || hz > INT_MAX || *end != ' ') { bad = 1; break; }
+                source_rate = (int)hz;
+                path = end + 1;
+            }
+            if (!*path || !(f = add(m, path))) { bad = 1; break; }
+#else
             if (sscanf(line, "file %lld %lld %d %zu %n", &size, &t, &complete, &k, &off) != 4 || !off || !line[off]
                 || !(f = add(m, line + off))) { bad = 1; break; }
+#endif
             f->size = size;
             f->mtime_ns = t;
             f->complete = complete == 1;
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+            if (complete == MFILE_COMPLETE_AAC) f->complete = MFILE_COMPLETE_AAC;
+            f->source_rate = source_rate;
+#endif
             want = k;
         }
     }
@@ -141,8 +170,16 @@ int manifest_read(const char *dir, const char *name, manifest *m) {
 }
 
 static void put(FILE *o, const mfile *f) {
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+    if (f->source_rate > 0)
+        fprintf(o, "file %lld %lld %d %zu hz=%d %s\n", f->size, f->mtime_ns, f->complete, f->nkeys, f->source_rate, f->path);
+    else
+#endif
     fprintf(o, "file %lld %lld %d %zu %s\n", f->size, f->mtime_ns, f->complete, f->nkeys, f->path);
     for (size_t k = 0; k < f->nkeys; k++) fprintf(o, "%s\n", f->keys[k]);
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+    if (f->decoder[0]) fprintf(o, "decoder %s\n", f->decoder);
+#endif
 }
 
 int manifest_write(const char *dir, const char *name, const manifest *m, const manifest *earlier, char *why, size_t n) {

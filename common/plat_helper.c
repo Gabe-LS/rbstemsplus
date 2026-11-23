@@ -93,22 +93,62 @@ static int ph_each(void *c, const char *name, const plat_stat *st) {
     return w->stop;
 }
 
+#if defined(_WIN32) || defined(RBSP_TEST_PREPARE_CACHE_AT)
+COMMON_API int plat_walk_at(plat_dir top, plat_walk_fn fn, void *ctx) {
+    if (!plat_dir_ok(top)) return -1;
+#else
 COMMON_API int plat_walk(const char *path, plat_walk_fn fn, void *ctx) {
     plat_dir top;
+#endif
     char *rel = malloc(PH_REL_CAP);
     if (!rel) return -1;
     rel[0] = 0;
+#if !defined(_WIN32) && !defined(RBSP_TEST_PREPARE_CACHE_AT)
     if (plat_dir_open(path, &top)) { free(rel); return -1; }
+#endif
     ph_walk w = {fn, ctx, top, rel, 0, 0, 0, 0};
     if (plat_dir_each(top, ph_each, &w) && !w.stop) w.bad = 1;
+#if !defined(_WIN32) && !defined(RBSP_TEST_PREPARE_CACHE_AT)
     plat_dir_close(top);
+#endif
     free(rel);
     return w.bad || w.stop ? -1 : 0;
 }
 
-/* ---------------------------------------------------------------- the Mac's track files */
+#if defined(_WIN32) || defined(RBSP_TEST_PREPARE_CACHE_AT)
+COMMON_API int plat_walk(const char *path, plat_walk_fn fn, void *ctx) {
+    plat_dir top;
+    if (plat_dir_open(path, &top)) return -1;
+    int r = plat_walk_at(top, fn, ctx);
+    plat_dir_close(top);
+    return r;
+}
+#endif
+
+/* ---------------------------------------------------------------- the Mac's model and track files */
 
 #if defined(__APPLE__)
+static int ph_model_stat(const struct stat *s, plat_model_info *info) {
+    if (!S_ISREG(s->st_mode)) return EINVAL;
+    *info = (plat_model_info){
+        .id = {.vol = (uint64_t)s->st_dev, .file = {(uint64_t)s->st_ino, 0}},
+        .size = s->st_size, .mtime = s->st_mtimespec.tv_sec, .mtime_nsec = s->st_mtimespec.tv_nsec,
+    };
+    return 0;
+}
+
+COMMON_API int plat_model_stat_file(plat_file f, plat_model_info *info) {
+    struct stat s;
+    if (fstat(f.fd, &s)) return errno ? errno : EIO;
+    return ph_model_stat(&s, info);
+}
+
+COMMON_API int plat_model_stat_path(const char *path, plat_model_info *info) {
+    struct stat s;
+    if (stat(path, &s)) return errno ? errno : EIO;
+    return ph_model_stat(&s, info);
+}
+
 COMMON_API int plat_stdio_sync(FILE *s) {
     if (fflush(s)) return errno ? errno : EIO;
     int fd = fileno(s);

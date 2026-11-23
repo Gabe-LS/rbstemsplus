@@ -34,6 +34,8 @@
 # (g0-aa-20261111-1948), as it is: no re-run, no noise decision, its noisy rows noted. Its export
 # is build/perf/g0-A-baselines.tsv (a copy in tests/perf/mac-A-g0-20261111.tsv). It is a record:
 # every gate runs mac-A again, interleaved with B, in its own session.
+# VMs headless since 2026-11-17 (vm.sh up's default); mac-A's 2026-11-11 reference ran with tart's
+# window: absolute numbers across that date aren't like for like.
 set -uo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$root"
@@ -133,7 +135,7 @@ case "${1:-}" in
     fi
     vm_up=1; trap '[ "${vm_up:-0}" = 1 ] && "$vm" delete >> "$log" 2>&1' EXIT
     trap 'say "STOP: interrupted"; exit 2' INT TERM HUP
-    "$vm" up "g0-$day" >> "$log" 2>&1 || die "the VM didn't come up (or DJ isn't logged in: the owner's login, never worked around)"
+    "$vm" up "g0-$day" >> "$log" 2>&1 || die "the VM didn't come up (or DJ isn't logged in: vm.sh down, then vm.sh up g0-$day --vnc (or --window) for the owner's login, never worked around)"
     "$vm" push "$zip" >> "$log" 2>&1 || die "the harness or mac-A couldn't be pushed"
     if [ "$quick" = 1 ]; then lab="$(label rh "rehearsal-$stamp")"
     elif [ -n "$zb" ]; then lab="$(label ab "gate-$stamp")"; else lab="$(label aa "g0-aa-$stamp")"; fi

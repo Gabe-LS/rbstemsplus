@@ -1,0 +1,15 @@
+# WC8 needs a real model destination. Use the rekordbox 7.2.19 installed + stems model
+# snapshot and the served TEST candidate (the native model copy hold). Demucs v4 needs
+# no elevation. The suite drives only RB Stems Plus's own confirmation.
+include lib/vmlib.ps1
+include uninstall/cases/unlib.ps1
+include shell-ui/shelllib.ps1
+include worker/rblib.ps1
+need http
+need vm
+need file repo/core/texts.def
+need file vm/uia/rbui/rbui.exe
+need file dist-test/bootstrap.ps1
+need candidate dist-test/payload.json
+user         600  install       bootstrap/install.ps1
+user         600  copy-close    shell-ui/copy-close.ps1

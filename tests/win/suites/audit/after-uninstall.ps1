@@ -3,7 +3,8 @@
 # list included. The one
 # disclosed exception: when cmd.exe couldn't delete an after-exit temp folder, its RunOnce value
 # ("RB Stems Plus cleanup <16 hex>", one per folder) and that folder stay until the next logon
-# (afterexit.h), and the audit says so, each value found.
+# (afterexit.h), and the audit says so, each value found; and Stems Cache's root when it holds only
+# boot-time deletes (removed at the next restart, I20/J7), said too.
 $before = Read-Snapshot 'before'
 if (-not $before) { Skip 'no "before" snapshot: run audit-before first in this run' }
 $now = Get-Snapshot
@@ -16,6 +17,13 @@ foreach ($k in $before.Keys) {
         continue
     }
     if ($k -eq $CleanupKey -and $n -ne '-') { continue }   # said above
+    # the other disclosed exception (bridge.md's Uninstall row, I20/J7): Stems Cache's root, there
+    # now, holding only boot-time deletes (the bin\ worker's reboot branch): removed at the next restart
+    $root = Join-Path $env:ProgramFiles 'RB Stems Plus'
+    if ($k -eq "path $root" -and $b -eq '-' -and $n -ne '-' -and (Test-PendingOnly $root)) {
+        "DISCLOSED: $root is removed at the next restart (it and everything in it are boot-time deletes)"
+        continue
+    }
     Check ($n -ceq $b) "$k as before ($b)$(if ($n -cne $b) { ", now $n" })"
 }
 Done

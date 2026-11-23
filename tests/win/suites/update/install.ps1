@@ -1,13 +1,16 @@
-# The first release installed by the one-liner from dist-test/current/ (switch-a), then the app
-# closed again
+# Install a/ via current/, or install carried/ directly after the sticky uninstall lap.
 $l = Get-Layout
-$out = Invoke-OneLiner ($VmRun.Url + 'current/')
+$name = if ($VmRun.Step -eq 'install-carried') { 'carried' } else { 'a' }
+$dir = if ($name -eq 'carried') { 'carried' } else { 'current' }
+$p = Get-UpdateRelease $name
+$out = Invoke-OneLiner ($VmRun.Url + "$dir/")
 "one-liner: $out"
-$p = Get-Content -Raw -LiteralPath (Share 'dist-test/a/payload.json') | ConvertFrom-Json
-Check ($out -match "RB Stems Plus $([regex]::Escape($p.payload_version)) is installed\.") "release a ($($p.payload_version)) installed"
-Check ((Get-Content -Raw -LiteralPath $l.Current).Trim() -eq $p.windows.app.version) "current names its app ($($p.windows.app.version))"
-# the welcome first (startup_flow asks it before check_for_update): answered, so carried.ps1 and
-# update.ps1 see the start's update check
-Complete-Welcome 90
+Expect ($out -match "RB Stems Plus $([regex]::Escape($p.payload_version)) is installed\.") "release $name ($($p.payload_version)) installed"
+Expect ((Get-Content -Raw -LiteralPath $l.Current).Trim() -eq $p.windows.app.version) "current names its app ($($p.windows.app.version))"
+# The welcome precedes the update check. It is an owned window, a child of the main window in the
+# UIA tree, so rbui's --title (top-level windows only) can't name it: the app's pid does.
+Wait-UpdateApp
+Use-UpdateUi invoke --pid $UpdateApp.Id (Get-CoreText 'T_CONTINUE') --type Button --timeout 60
+Check (Wait-Until { Test-Path -LiteralPath (Join-Path $l.Support 'welcomed') } 30) 'the welcome was recorded'
 Stop-App
 Done

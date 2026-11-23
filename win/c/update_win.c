@@ -13,6 +13,7 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <tlhelp32.h>
+#include <winternl.h>
 
 #include "aumid.h"
 #include "plat_win.h"
@@ -341,12 +342,175 @@ static int watcher_in(const wchar_t *path, const wchar_t *dir) {
  * update_open_skips): 1 when it may be one of ours by its snapshot name (update_image_kind;
  * watcher_only: an rbsp-watch exe only), so the scan is unknown (-1) unless one is found (review
  * UQ's GPT re-run, G2, GH1). A name that isn't UTF-16 can't be ours. */
+static int image_kind(const PROCESSENTRY32W *pe) {
+    char name[MAX_PATH * 3];
+    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, pe->szExeFile, -1, name, (int)sizeof name, NULL, NULL) <= 0) return UPDATE_IMAGE_OTHER;
+    return update_image_kind(name);
+}
 static int scan_unknown(const PROCESSENTRY32W *pe, int skip, int watcher_only) {
     if (skip) return 0;
-    char name[MAX_PATH * 3];
-    if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, pe->szExeFile, -1, name, (int)sizeof name, NULL, NULL) <= 0) return 0;
-    int k = update_image_kind(name);
+    int k = image_kind(pe);
     return watcher_only ? k == UPDATE_IMAGE_WATCHER : k != UPDATE_IMAGE_OTHER;
+}
+
+static int scan_opened_unknown(HANDLE h, const PROCESSENTRY32W *pe, int watcher_only) {
+    DWORD code;
+    if (GetExitCodeProcess(h, &code) && code != STILL_ACTIVE) return 0;
+    return scan_unknown(pe, 0, watcher_only);
+}
+
+/* ------------------------------------------------------------------ a refused process's path (review K2) */
+
+enum { NT_MAX = 32768 };
+/* a scan's NT paths: the folder's two forms, a listed process's image and its alias (an 8.3-spelled
+ * image's \\?\GLOBALROOT name, then its final path); absent: the folder doesn't exist (nothing
+ * runs from it) */
+typedef struct {
+    wchar_t form[2][NT_MAX];
+    wchar_t image[NT_MAX];
+    wchar_t alias[NT_MAX + 16];
+    int absent;
+} nt_scan;
+
+/* SystemProcessIdInformation (88): a process's image path, NT form (\Device\HarddiskVolumeN\...),
+ * from the system's process list: no access to the process needed, any session, any account */
+#define SYSTEM_PROCESS_ID_INFORMATION_ ((SYSTEM_INFORMATION_CLASS)88)
+#define STATUS_INVALID_CID_ ((LONG)0xC000000B)
+typedef struct {
+    HANDLE ProcessId;
+    UNICODE_STRING ImageName;
+} sys_pid_image;
+
+/* pid's image path into out (NT_MAX): 1 read, 0 the process is gone, -1 it couldn't be read */
+static int listed_image(DWORD pid, wchar_t *out) {
+    sys_pid_image i;
+    memset(&i, 0, sizeof i);
+    i.ProcessId = (HANDLE)(ULONG_PTR)pid;
+    i.ImageName.MaximumLength = (USHORT)((NT_MAX - 1) * sizeof(wchar_t) > 0xfffe ? 0xfffe : (NT_MAX - 1) * sizeof(wchar_t));
+    i.ImageName.Buffer = out;
+    LONG s = NtQuerySystemInformation(SYSTEM_PROCESS_ID_INFORMATION_, &i, sizeof i, NULL);
+    if (s == STATUS_INVALID_CID_) return 0;
+    size_t n = i.ImageName.Length / sizeof(wchar_t);
+    if (s < 0 || i.ImageName.Buffer != out || n == 0 || n >= NT_MAX) return -1;
+    out[n] = 0;
+    return 1;
+}
+
+/* dir's NT forms, to compare listed_image's paths with: [0] dir itself, its drive (or UNC share)
+ * mapped to its device (QueryDosDeviceW; \Device\Mup for a share), [1] the folder's final path by
+ * handle (GetFinalPathNameByHandleW, VOLUME_NAME_NT: links resolved, long names). A form that
+ * can't be had is empty. A mismatch counts as elsewhere only against form[1] (or when the folder
+ * doesn't exist): form[0] keeps the junctions and subst drives of dir's spelling, which an image
+ * path has resolved (update_nt_path, review K2's undefined1). A junction removed from dir's
+ * spelling while a process runs below its target is elsewhere too: it no longer runs from dir
+ * (review K2F2) */
+static void nt_forms(const wchar_t *dir, nt_scan *s) {
+    s->form[0][0] = s->form[1][0] = 0;
+    s->absent = 0;
+    const wchar_t *p = dir;
+    if (!wcsncmp(p, L"\\\\?\\", 4)) {
+        p += 4;
+        if (!_wcsnicmp(p, L"UNC\\", 4)) {
+            if (_snwprintf(s->form[0], NT_MAX, L"\\Device\\Mup\\%ls", p + 4) < 0) s->form[0][0] = 0;
+            p = NULL;
+        }
+    }
+    if (p && p[0] == L'\\' && p[1] == L'\\') {
+        if (_snwprintf(s->form[0], NT_MAX, L"\\Device\\Mup\\%ls", p + 2) < 0) s->form[0][0] = 0;
+    } else if (p && ((p[0] >= L'A' && p[0] <= L'Z') || (p[0] >= L'a' && p[0] <= L'z')) && p[1] == L':' && p[2] == L'\\') {
+        wchar_t drive[3] = {p[0], L':', 0}, dev[MAX_PATH];
+        DWORD n = QueryDosDeviceW(drive, dev, MAX_PATH);
+        /* a device, not a subst drive's "\??\..." (the final path covers that) */
+        if (n > 0 && n < MAX_PATH && !wcsncmp(dev, L"\\Device\\", 8) && _snwprintf(s->form[0], NT_MAX, L"%ls%ls", dev, p + 2) < 0) s->form[0][0] = 0;
+    }
+    s->form[0][NT_MAX - 1] = 0;
+    HANDLE h = CreateFileW(dir, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD n = GetFinalPathNameByHandleW(h, s->form[1], NT_MAX, VOLUME_NAME_NT | FILE_NAME_NORMALIZED);
+        if (n == 0 || n >= NT_MAX) s->form[1][0] = 0;
+        CloseHandle(h);
+    } else {
+        DWORD e = GetLastError();
+        s->absent = e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND;
+    }
+    for (int i = 0; i < 2; i++) {
+        size_t l = wcslen(s->form[i]);
+        while (l && s->form[i][l - 1] == L'\\') s->form[i][--l] = 0;
+    }
+}
+
+/* whether path is under dir, at any depth (case-blind) */
+static int path_under(const wchar_t *path, const wchar_t *dir) {
+    size_t d = wcslen(dir);
+    return wcslen(path) > d + 1 && path[d] == L'\\' && CompareStringOrdinal(path, (int)d, dir, (int)d, TRUE) == CSTR_EQUAL;
+}
+
+/* whether image (NT form) matches one of the folder's NT forms: under it (running_under's) or,
+ * watcher_only, a watcher directly in it (stop_watchers' and watchers_in's) */
+static int nt_form_match(const wchar_t *image, const nt_scan *nt, int watcher_only) {
+    for (int i = 0; i < 2; i++)
+        if (nt->form[i][0] && (watcher_only ? watcher_in(image, nt->form[i]) : path_under(image, nt->form[i]))) return 1;
+    return 0;
+}
+
+/* an image spelled with an 8.3 component: the NT image name keeps the launcher's spelling
+ * (reparse points are resolved, short names aren't expanded), while both folder forms are long
+ * names (review K2's undefined2). Its final path by handle (\\?\GLOBALROOT + the image, long
+ * names), matched against the folder's forms: 1 it matches, 0 it is elsewhere, -1 it couldn't be
+ * resolved (ERROR_ACCESS_DENIED on another account's included: unknown by our names) */
+static int nt_alias_match(const wchar_t *image, nt_scan *nt, int watcher_only) {
+    size_t cap = sizeof nt->alias / sizeof nt->alias[0];
+    if (_snwprintf(nt->alias, cap, L"\\\\?\\GLOBALROOT%ls", image) < 0) return -1;
+    nt->alias[cap - 1] = 0;
+    HANDLE h = CreateFileW(nt->alias, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                           FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    DWORD n = GetFinalPathNameByHandleW(h, nt->alias, NT_MAX, VOLUME_NAME_NT | FILE_NAME_NORMALIZED);
+    CloseHandle(h);
+    if (n == 0 || n >= NT_MAX) return -1;
+    return nt_form_match(nt->alias, nt, watcher_only);
+}
+
+/* image (NT form) against the folder, the one match of the opened and the refused processes
+ * (review K2's undefined3): form[0], form[1], then the alias step for an image with a '~'
+ * component. 1 the folder's, 0 elsewhere, -1 can't be told (update_nt_path: no canonical form, or
+ * an alias that couldn't be resolved) */
+static int nt_matches(const wchar_t *image, nt_scan *nt, int watcher_only) {
+    int matched = nt_form_match(image, nt, watcher_only), alias = 0;
+    if (!matched && wcschr(image, L'~')) {
+        int a = nt_alias_match(image, nt, watcher_only);
+        matched = a == 1;
+        alias = a < 0 ? -1 : 1;
+    }
+    return update_nt_path(1, matched, nt->form[1][0] || nt->absent, alias);
+}
+
+/* an opened process against the folder: its Win32 path against dir as spelled (as before), else
+ * its NT path (PROCESS_NAME_NATIVE) through nt_matches, so a junction above the folder, a subst
+ * drive or an 8.3 spelling matches as for a refused one (review K2's undefined3). path holds
+ * NT_MAX. 1 the folder's, 0 elsewhere, -1 can't be told (unknown by our names) */
+static int opened_match(HANDLE h, const wchar_t *wdir, nt_scan *nt, wchar_t *path, int watcher_only) {
+    DWORD len = NT_MAX;
+    if (QueryFullProcessImageNameW(h, 0, path, &len) && (watcher_only ? watcher_in(path, wdir) : path_under(path, wdir))) return 1;
+    len = NT_MAX;
+    if (!QueryFullProcessImageNameW(h, PROCESS_NAME_NATIVE, nt->image, &len)) return -1;
+    return nt_matches(nt->image, nt, watcher_only);
+}
+
+/* a listed process OpenProcess refused with err: update_listed_verdict on its path from the
+ * system's list, matched by nt_matches as running_under's (under the folder) or, watcher_only, as
+ * stop_watchers' (a watcher in it) */
+static int refused_verdict(const PROCESSENTRY32W *pe, DWORD err, nt_scan *nt, int watcher_only) {
+    int path = 0, match = 0;
+    if (err != ERROR_INVALID_PARAMETER) {
+        path = listed_image(pe->th32ProcessID, nt->image);
+        if (path == 1) {
+            int m = nt_matches(nt->image, nt, watcher_only);
+            match = m == 1;
+            if (m < 0) path = -1;
+        }
+    }
+    return update_listed_verdict(0, err, path, match, image_kind(pe), watcher_only);
 }
 
 /* The session decision and the result are update_rules.c's (update_watcher_action,
@@ -360,15 +524,25 @@ static int scan_unknown(const PROCESSENTRY32W *pe, int skip, int watcher_only) {
  *   - ProcessIdToSessionId succeeds on our own pid and on a same-account watcher's (no access
  *     beyond what the token gives), and a failure on either leaves the watcher (never ends it);
  *   - another account's watcher (its own install, its own folder) isn't matched by path, and an
- *     OpenProcess that fails for it skips it without a stop or an end. */
+ *     OpenProcess that fails for it skips it without a stop or an end;
+ *   - review K2: this account's watcher in session 0 (a password-logon task) refuses OpenProcess
+ *     (ERROR_ACCESS_DENIED) from session 1; SystemProcessIdInformation still gives its NT path,
+ *     which matches one of the folder's NT forms (nt_forms): left running and reported (-1),
+ *     and running_under counts it, so the uninstall keeps the app;
+ *   - the same when its task started it through the 8.3 path (C:\Users\GABRIE~1\...): its NT
+ *     image keeps that spelling, and nt_alias_match's final path by handle matches the folder
+ *     (tests/gate_update.c's winc-update-wintest.exe checks the match itself). */
 static int win_stop_watchers(void *ctx, const char *dir) {
     (void)ctx;
     wchar_t *wdir = wide(dir);
     if (!wdir) return -1;
     size_t dl = wcslen(wdir);
     if (dl && wdir[dl - 1] == L'\\') wdir[--dl] = 0;
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    nt_scan *nt = malloc(sizeof *nt);
+    if (nt) nt_forms(wdir, nt);
+    HANDLE snap = nt ? CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) : INVALID_HANDLE_VALUE;
     if (snap == INVALID_HANDLE_VALUE) {
+        free(nt);
         free(wdir);
         return -1;
     }
@@ -377,6 +551,7 @@ static int win_stop_watchers(void *ctx, const char *dir) {
     pe.dwSize = sizeof pe;
     DWORD self = GetCurrentProcessId(), my_session = 0;
     int my_known = ProcessIdToSessionId(self, &my_session) != 0;
+    wchar_t path[NT_MAX];
     BOOL more;
     for (more = Process32FirstW(snap, &pe); more; more = Process32NextW(snap, &pe)) {
         if (pe.th32ProcessID == self || pe.th32ProcessID == 0) continue;
@@ -385,15 +560,31 @@ static int win_stop_watchers(void *ctx, const char *dir) {
          * (review GH4, GH1's skip) */
         HANDLE h = OpenProcess(SYNCHRONIZE | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
         if (!h) {
-            DWORD oe = GetLastError();   /* gone, or another account's or the system's: never ours */
-            if (scan_unknown(&pe, update_open_skips(oe), 1)) unknown = 1;
+            DWORD err = GetLastError();
+            /* An elevated watcher may permit a query but refuse termination (review UF2). */
+            if (err == ERROR_ACCESS_DENIED) {
+                HANDLE query = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+                if (query) {
+                    int m = opened_match(query, wdir, nt, path, 1);
+                    CloseHandle(query);
+                    if (m == 1) elsewhere = 1;
+                    else if (m < 0 && scan_unknown(&pe, 0, 1)) unknown = 1;
+                    if (m >= 0) continue;
+                }
+            }
+            /* gone, another account's or the system's, or one of this account's in another logon
+             * session (review K2): its path from the system's list. A watcher of ours there can't
+             * be asked to stop or ended without a handle: left running and reported (-1), so its
+             * files are kept, as UN7's */
+            int v = refused_verdict(&pe, err, nt, 1);
+            if (v == UPDATE_LISTED_FOUND) elsewhere = 1;
+            else if (v == UPDATE_LISTED_UNKNOWN) unknown = 1;
             continue;
         }
-        wchar_t path[32768];
-        DWORD len = sizeof path / sizeof path[0];
-        if (!QueryFullProcessImageNameW(h, 0, path, &len)) {
+        int m = opened_match(h, wdir, nt, path, 1);
+        if (m < 0) {
             if (scan_unknown(&pe, 0, 1)) unknown = 1;
-        } else if (watcher_in(path, wdir)) {
+        } else if (m == 1) {
             /* its stop event is Local\ to its own session: one in another session (the same
              * account logged on twice) can't be asked to stop from here, and ending it would skip
              * its act_lock. It is left running and reported (-1), so its files are kept as for
@@ -426,6 +617,7 @@ static int win_stop_watchers(void *ctx, const char *dir) {
     }
     int ended = !more && GetLastError() == ERROR_NO_MORE_FILES;   /* else the list cut short */
     CloseHandle(snap);
+    free(nt);
     free(wdir);
     return update_stop_result(ended && !unknown, found, elsewhere);
 }
@@ -436,12 +628,16 @@ static int win_watchers_in(void *ctx, const char *dir) {
     if (!wdir) return -1;
     size_t dl = wcslen(wdir);
     if (dl && wdir[dl - 1] == L'\\') wdir[--dl] = 0;
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    nt_scan *nt = malloc(sizeof *nt);
+    wchar_t *path = malloc(NT_MAX * sizeof *path);
+    if (nt && path) nt_forms(wdir, nt);
+    HANDLE snap = nt && path ? CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) : INVALID_HANDLE_VALUE;
     if (snap == INVALID_HANDLE_VALUE) {
+        free(path);
+        free(nt);
         free(wdir);
         return -1;
     }
-    static wchar_t path[32768];   /* the commit runs on one thread at a time */
     int found = 0, unknown = 0, ended = 1;
     PROCESSENTRY32W pe;
     pe.dwSize = sizeof pe;
@@ -457,10 +653,10 @@ static int win_watchers_in(void *ctx, const char *dir) {
             if (scan_unknown(&pe, update_open_skips(oe), 1)) unknown = 1;
             continue;
         }
-        DWORD len = sizeof path / sizeof path[0];
-        if (!QueryFullProcessImageNameW(h, 0, path, &len)) {
-            if (scan_unknown(&pe, 0, 1)) unknown = 1;
-        } else if (watcher_in(path, wdir)) {
+        int m = opened_match(h, wdir, nt, path, 1);
+        if (m < 0) {
+            if (scan_opened_unknown(h, &pe, 1)) unknown = 1;
+        } else if (m == 1) {
             /* only one win_stop_watchers would stop: another session's is neither noted nor taken
              * for this session's new one (review GR1); a session that can't be read is unknown */
             DWORD session = 0;
@@ -472,14 +668,10 @@ static int win_watchers_in(void *ctx, const char *dir) {
     }
     if (!more && GetLastError() != ERROR_NO_MORE_FILES) ended = 0;   /* the list cut short */
     CloseHandle(snap);
+    free(path);
+    free(nt);
     free(wdir);
     return update_scan_result(found, unknown, ended);
-}
-
-/* whether path is under dir, at any depth (case-blind) */
-static int path_under(const wchar_t *path, const wchar_t *dir) {
-    size_t d = wcslen(dir);
-    return wcslen(path) > d + 1 && path[d] == L'\\' && CompareStringOrdinal(path, (int)d, dir, (int)d, TRUE) == CSTR_EQUAL;
 }
 
 static int win_running_under(void *ctx, const char *dir) {
@@ -488,12 +680,15 @@ static int win_running_under(void *ctx, const char *dir) {
     if (!wdir) return -1;
     size_t dl = wcslen(wdir);
     if (dl && wdir[dl - 1] == L'\\') wdir[--dl] = 0;
-    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    nt_scan *nt = malloc(sizeof *nt);
+    if (nt) nt_forms(wdir, nt);
+    HANDLE snap = nt ? CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) : INVALID_HANDLE_VALUE;
     if (snap == INVALID_HANDLE_VALUE) {
+        free(nt);
         free(wdir);
         return -1;
     }
-    static wchar_t path[32768];   /* update_at_start runs on one thread at a time */
+    static wchar_t path[NT_MAX];   /* update_at_start runs on one thread at a time */
     int found = 0, unknown = 0, ended = 1;
     PROCESSENTRY32W pe;
     pe.dwSize = sizeof pe;
@@ -504,23 +699,41 @@ static int win_running_under(void *ctx, const char *dir) {
         /* by full path, as win_stop_watchers; nothing is stopped */
         HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
         if (!h) {
-            DWORD oe = GetLastError();   /* gone, or another account's or the system's: never ours */
-            if (scan_unknown(&pe, update_open_skips(oe), 0)) unknown = 1;
+            /* gone, another account's or the system's, or one of this account's in another logon
+             * session (a password-logon task in session 0, a second logon: review K2), which
+             * counts: its path from the system's list */
+            int v = refused_verdict(&pe, GetLastError(), nt, 0);
+            if (v == UPDATE_LISTED_FOUND) found = 1;
+            else if (v == UPDATE_LISTED_UNKNOWN) unknown = 1;
             continue;
         }
-        DWORD len = sizeof path / sizeof path[0];
-        if (!QueryFullProcessImageNameW(h, 0, path, &len)) {
-            if (scan_unknown(&pe, 0, 0)) unknown = 1;
-        } else if (path_under(path, wdir)) {
-            found = 1;
-        }
+        int m = opened_match(h, wdir, nt, path, 0);
+        if (m == 1) found = 1;
+        else if (m < 0 && scan_opened_unknown(h, &pe, 0)) unknown = 1;
         CloseHandle(h);
     }
     if (!more && GetLastError() != ERROR_NO_MORE_FILES) ended = 0;   /* the list cut short */
     CloseHandle(snap);
+    free(nt);
     free(wdir);
     return update_scan_result(found, unknown, ended);
 }
+
+#ifdef UPDATE_WIN_TEST_HOOKS
+/* tests/gate_update.c's Windows checks (review K2's undefined4) */
+_Static_assert(UPDATE_WIN_NT_MAX == NT_MAX, "the test's buffers are NT_MAX");
+int update_win_test_listed_image(unsigned long pid, wchar_t *out) { return listed_image((DWORD)pid, out); }
+int update_win_test_nt_matches(const wchar_t *dir, const wchar_t *image, int watcher_only, int by_form[2]) {
+    nt_scan *nt = malloc(sizeof *nt);
+    if (!nt) return -2;
+    nt_forms(dir, nt);
+    for (int i = 0; i < 2; i++)
+        by_form[i] = nt->form[i][0] && (watcher_only ? watcher_in(image, nt->form[i]) : path_under(image, nt->form[i]));
+    int r = nt_matches(image, nt, watcher_only);
+    free(nt);
+    return r;
+}
+#endif
 
 /* ------------------------------------------------------------------ files, the registry */
 
@@ -561,6 +774,7 @@ const update_os *update_os_windows(void) { return &windows_os; }
 #include "core_native_admin.h"   /* native_key_texts: the compiled-in keys */
 #include "lifecycle.h"           /* LIFE_MIN_BUILD, LIFE_MIN_NET_RELEASE, LIFE_OS_* */
 #include "update_shell.h"
+#include "core_native_steps.h"
 #include "volumes.h"
 
 enum { SHELL_KEYS_MAX = 4 };
@@ -640,7 +854,9 @@ CORE_API int32_t CORE_CALL core_win_update_after_render(const char *support, con
                                                         void *ctx) {
     shell_env s;
     if (shell_env_init(&s, support, app, own, log, ctx)) return -1;
-    return update_after_render(&s.e);
+    int r = update_after_render(&s.e);
+    nw_steps_installed_changed(support, own);
+    return r;
 }
 
 typedef LONG(WINAPI *shell_rtl_version_fn)(OSVERSIONINFOW *);

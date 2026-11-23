@@ -143,17 +143,61 @@ int update_stop_result(int listed, int stopped, int left);
 /* running_under's and watchers_in's scan, its pure parts (review UQ's GPT re-run, G2, GH1). A
  * listed process whose path can't be read is unknown only when its image name (the snapshot's,
  * UTF-8) is one an apps folder runs: UPDATE_IMAGE_APP "RB Stems Plus.exe" (the stub, the shell,
- * the admin helper) or UPDATE_IMAGE_WATCHER an rbsp-watch exe, ASCII case ignored; else
- * UPDATE_IMAGE_OTHER. Its path can't be read when QueryFullProcessImageNameW fails on the opened
+ * the admin helper) or UPDATE_IMAGE_WATCHER an rbsp-watch exe, ASCII case ignored, their 8.3 forms
+ * too (a ShortPath launch shortens the name: RBSTEM~ and RBSP-W~ followed by anything, review
+ * K2F3; the hashed form after four collisions isn't covered); else UPDATE_IMAGE_OTHER. Its path can't be read when QueryFullProcessImageNameW fails on the opened
  * handle, or when OpenProcess is refused with an error update_open_skips doesn't skip. */
 enum { UPDATE_IMAGE_OTHER = 0, UPDATE_IMAGE_APP = 1, UPDATE_IMAGE_WATCHER = 2 };
 int update_image_kind(const char *name);
-/* a refused OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) that is never ours, whatever its name:
+/* a refused OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) that isn't unknown by its name alone:
  * 1 for ERROR_INVALID_PARAMETER (the pid gone) and ERROR_ACCESS_DENIED (another account's or the
- * system's; one of this account's in this logon session always opens, elevated too: other
- * accounts' copies never count, app.md 5.9), else 0 (Win32's codes; update_win.c asserts them) */
+ * system's, or this account's in another logon session: one in this logon session always opens,
+ * elevated too; other accounts' copies never count, app.md 5.9), else 0 (Win32's codes;
+ * update_win.c asserts them). watchers_in's rule (this session's watchers only, GR1);
+ * running_under and stop_watchers read a refused one's path too (update_listed_verdict, K2) */
 enum { UPDATE_ERR_ACCESS_DENIED = 5, UPDATE_ERR_INVALID_PARAMETER = 87 };
 int update_open_skips(unsigned long err);
+/* One listed process in running_under's and stop_watchers' scans (review K2). One of this account's
+ * in another logon session (a password-logon task in session 0, a second logon) refuses
+ * OpenProcess with ERROR_ACCESS_DENIED as another account's does, so a refused one's image path is
+ * read from the system's process list instead (SystemProcessIdInformation: no access to the
+ * process needed, any session, any account) and matched against the folder's NT forms.
+ *   opened: OpenProcess gave a handle; err: its error when not;
+ *   path: 1 the image path was read (QueryFullProcessImageNameW on the handle; the system's list
+ *     when refused), 0 the process is gone, -1 it couldn't be read or compared;
+ *   match: the path is the folder's (running_under: under it; stop_watchers: a watcher in it);
+ *   kind: update_image_kind of its snapshot name; watcher_only: only UPDATE_IMAGE_WATCHER is ours.
+ * UPDATE_LISTED_FOUND when the path was read and matches, whichever session and account (it runs
+ * from the folder, which is in this account's own profile); UPDATE_LISTED_UNKNOWN when that can't
+ * be told and its name is ours: a path that can't be read (opened or refused), or a refusal other
+ * than ERROR_ACCESS_DENIED whose path isn't the folder's (as before); else UPDATE_LISTED_SKIP:
+ * gone (ERROR_INVALID_PARAMETER, path 0), opened and not from the folder, or ERROR_ACCESS_DENIED
+ * with its path elsewhere (another account's own copy or the system's: GH1 holds). */
+enum { UPDATE_LISTED_SKIP = 0, UPDATE_LISTED_FOUND = 1, UPDATE_LISTED_UNKNOWN = 2 };
+int update_listed_verdict(int opened, unsigned long err, int path, int match, int kind, int watcher_only);
+/* whether a process's NT image path is the folder's (review K2's undefined1, undefined2), for
+ * update_listed_verdict's path and match: 1 it is, 0 it is elsewhere, -1 that can't be told.
+ *   read: the image path was read; matched: it matched one of the folder's NT forms, or its
+ *     alias did (below);
+ *   canonical: the folder's final path by handle was had (links resolved), or the folder doesn't
+ *     exist (nothing runs from it). Without either, the folder's only form keeps the junctions and
+ *     subst drives of its spelling while an image path has them resolved: a mismatch proves
+ *     nothing;
+ *   alias_resolved: 0 the image has no 8.3 component ('~'), 1 it had one and its final path by
+ *     handle was compared too, -1 it had one that couldn't be resolved (the image keeps the
+ *     launcher's 8.3 spelling: a mismatch proves nothing).
+ * -1 without a read; else 1 on a match; else 0 only with a canonical form (or a missing folder)
+ * and no unresolved alias, -1 otherwise */
+int update_nt_path(int read, int matched, int canonical, int alias_resolved);
+#if defined(_WIN32) && defined(UPDATE_WIN_TEST_HOOKS)
+/* update_win.c's NT path match for its Windows test (tests/gate_update.c, review K2's undefined4):
+ * pid's image path from the system's list into out (UPDATE_WIN_NT_MAX): 1, 0 gone, -1 unreadable;
+ * image (NT form) against dir's NT forms: nt_matches' 1, 0 or -1 (-2 no memory), by_form[i] whether
+ * form i alone matches it */
+enum { UPDATE_WIN_NT_MAX = 32768 };
+int update_win_test_listed_image(unsigned long pid, wchar_t *out);
+int update_win_test_nt_matches(const wchar_t *dir, const wchar_t *image, int watcher_only, int by_form[2]);
+#endif
 /* the scan's result: 1 when one was found, else -1 when one was unknown or the list didn't end
  * with ERROR_NO_MORE_FILES (ended 0), else 0. Its callers wait on -1 as on a program that runs. */
 int update_scan_result(int found, int unknown, int ended);
@@ -228,13 +272,17 @@ typedef struct {
      * terminates one still running after that. 1 when one was running, 0 none, -1 when the
      * process list couldn't be read or was cut short, one that may be a watcher couldn't be
      * inspected (watchers_in's rule, review GH4), or a watcher runs in another session (its stop
-     * event is session-local: it is left running, never ended, and its files stay; review UN7).
+     * event is session-local: it is left running, never ended, and its files stay; review UN7),
+     * also one OpenProcess refuses but whose path from the system's list is a watcher in `dir`
+     * (this account's in another logon session; update_listed_verdict, review K2).
      * On -1, or while running_under(old) isn't 0, the commit keeps the old folder; the sweep
      * takes it once nothing runs from it */
     int (*stop_watchers)(void *ctx, const char *dir);
     /* whether a process runs from an exe under the folder `dir` (any depth; by full path, as
      * stop_watchers finds them), stopping nothing: 1 yes, 0 no, -1 the list couldn't be read or
-     * one that may be ours couldn't be inspected (update_scan_result) */
+     * one that may be ours couldn't be inspected (update_scan_result). Any session: one
+     * OpenProcess refuses counts by its path from the system's list (this account's in another
+     * logon session; another account's own copy never matches; update_listed_verdict, K2) */
     int (*running_under)(void *ctx, const char *dir);
     /* whether a watcher of this session (one stop_watchers would stop: an rbsp-watch exe directly
      * in `dir`, by full path) runs, stopping nothing: 1 yes, 0 no, -1 the list couldn't be read, a
@@ -389,8 +437,8 @@ int update_at_start(const update_env *e);
  * old stub kept by the last stub swap and leftover version or staging folders (neither own nor
  * current) are removed, and a stub that isn't the one installed-release names is swapped again
  * (a swap that failed in the commit, as a stub image running at that instant). 0, or an errno when
- * the commit couldn't finish (installed-release not written): the records stay, and the next start
- * finishes it (every step is idempotent). */
+ * the commit couldn't finish, for example when the replacement watcher isn't confirmed running.
+ * The records stay, and the next start finishes it. */
 int update_after_render(const update_env *e);
 
 /* -------------------------------------------------------------- the steps that need the shell (W3b)

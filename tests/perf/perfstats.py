@@ -12,8 +12,10 @@ Stdlib only; run with python3 -I.
         floor, 20 ms or 20 MB); every other metric is printed for information and never blocks;
         a row within 25% of its allowance is printed BORDERLINE for a human to judge. Exit 0 pass;
         1 a regression (each regressed row named); 3 the measurement failed: a gating or
-        --require metric missing on a side, a sample that isn't a finite number, a rules file
-        that can't be read. 2: usage.
+        --require metric missing on a side, a bad sample line or a sample that isn't a finite
+        number, a rules file that can't be read. 2: usage. REPORT.tsv (removed first) starts
+        with the summary line tests/perf/record.py reads: "# compare: pass", "# compare: REGRESSION: ..." or
+        "# compare: MEASUREMENT FAILED: ..." (the only line when the samples or rules are bad).
     perfstats.py selftest
         the rule on made-up samples
 
@@ -29,6 +31,12 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)            # python3 -I drops the script's folder from the path
 import rules as rulesmod              # noqa: E402  the one parser of thresholds.txt and the one rule
+
+
+class SampleError(SystemExit):
+    def __init__(self, msg):
+        super().__init__(msg)
+        self.code = 3
 
 
 def percentile(xs, p):
@@ -54,8 +62,9 @@ def read_samples(path):
         except ValueError:
             x = float("nan")
         if not math.isfinite(x):       # nan or inf would compare as a pass: the measurement failed
-            print("FAIL measurement: %s: a non-finite sample: %r" % (path, line.rstrip("\n")))
-            sys.exit(3)
+            msg = "%s: a non-finite sample: %r" % (path, line.rstrip("\n"))
+            print("FAIL measurement: %s" % msg)
+            raise SampleError(msg)
         data.setdefault((parts[0], parts[1]), []).append(x)
     return data
 
@@ -88,7 +97,8 @@ def parse_opts(args, opts):
     i = 0
     while i < len(args):
         if args[i] not in opts or i + 1 >= len(args):
-            sys.exit(__doc__)
+            print(__doc__, file=sys.stderr)
+            sys.exit(2)
         opts[args[i]] = args[i + 1]
         i += 2
     return opts
@@ -96,16 +106,36 @@ def parse_opts(args, opts):
 
 def gate(args):
     path = args[0]
+    out = None
+    for opt, value in zip(args[1::2], args[2::2]):
+        if opt == "--out":
+            out = value
+    if out and os.path.lexists(out):
+        os.remove(out)                 # a gate that stops early never leaves an earlier table behind
     opts = parse_opts(args[1:], {"--a": None, "--b": None, "--rules": None, "--baseline": "B0", "--prefix": "",
                                  "--out": None, "--require": ""})
     a, b = opts["--a"], opts["--b"]
     if not a or not b or not opts["--rules"]:
-        sys.exit(__doc__)
-    data = read_samples(path)
+        print(__doc__, file=sys.stderr)
+        sys.exit(2)
+
+    def fail_out(msg):
+        if out:
+            with open(out, "w", encoding="utf-8") as o:
+                o.write("# compare: MEASUREMENT FAILED: %s\n" % str(msg).replace("\n", " "))
+
+    try:
+        data = read_samples(path)
+    except (SystemExit, OSError, UnicodeDecodeError) as e:
+        fail_out(e)
+        if not isinstance(e, SystemExit) or e.code != 3:
+            print(e, file=sys.stderr)
+        return 3
     try:
         rules = rulesmod.load(opts["--rules"], opts["--baseline"])[0]
     except rulesmod.RuleError as e:
         print("FAIL measurement: %s" % e)
+        fail_out(e)
         return 3
     required = {m for m in opts["--require"].split(",") if m}
     metrics = sorted({m for (m, s) in data if s in (a, b) and m.startswith(opts["--prefix"])} | required)
@@ -134,8 +164,12 @@ def gate(args):
     print(fmt % ("metric", a, b, "change", "allowed", "result"))
     for r in rows:
         print(fmt % r)
-    if opts["--out"]:
-        with open(opts["--out"], "w", encoding="utf-8") as o:
+    if out:
+        # the summary line first (record.py reads it): the gate's own verdict
+        verdict = "MEASUREMENT FAILED: %s" % ", ".join(failed) if failed else \
+            "REGRESSION: %s" % ", ".join(regressed) if regressed else "pass"
+        with open(out, "w", encoding="utf-8") as o:
+            o.write("# compare: %s\n" % verdict)
             o.write("metric\t%s\t%s\tchange\tallowed\tresult\n" % (a, b))
             for r in rows:
                 o.write("\t".join(r) + "\n")

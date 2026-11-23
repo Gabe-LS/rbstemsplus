@@ -168,6 +168,8 @@ DESIGNATED = {
 NEW = {
     # a SELF_DELETE that couldn't start leaves the app open: one line instead of silence (2026-11-12)
     "T_SELF_DELETE_FAILED": "owner decided 2026-11-12",
+    "T_SWITCH_FOUND_UNSIZED": "owner 2026-11-21: 1.5.1 register item 36, 'take your recommendations'",
+    "T_SWITCH_LOCAL_DELETED_UNSIZED": "owner 2026-11-21: 1.5.1 register item 36, 'take your recommendations'",
 }
 
 

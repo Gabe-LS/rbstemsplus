@@ -9,19 +9,26 @@
 # Windows zip: scripts/build.sh --test http://10.211.55.2:8766/ ..., copied in), and stage makes
 # from it dist-test/fault-{zip,json,sig}/ and dist-test/bad-version/ (a payload whose
 # windows.app.version isn't the zip's app, signed with the test key that signed the TEST build,
-# never a release key). Steps that lack theirs SKIP; version-refused also needs a bootstrap with
-# Test-RbspAppVersion (w6/win-bootstrap-app).
+# never a release key). A run that serves another TEST build (run ... --serve DIR) fetches them
+# from DIR: stage --serve DIR makes them there too. Steps that lack theirs SKIP; version-refused
+# also needs a bootstrap with Test-RbspAppVersion. The host fixture builder in update.suite
+# can prepare the whole dist-test tree, including these bootstrap inputs.
+# The published step fetches the one-liner from the release URL path on the Mac's HTTPS TEST
+# server. The staged TEST server must be reachable and trusted in the VM.
 include lib/vmlib.ps1
+include bootstrap/published.ps1
 need http
 need file repo/tests/win/bootstrap/bootstrap.tests.ps1
+need file repo/core/texts.def
 need file dist-test/bootstrap.ps1
 # MODE       SECS NAME              SCRIPT
 user         600  unit-51           bootstrap/unit.ps1
 user         180  cl-refusal        bootstrap/cl.ps1
 user-high    180  elevated-refusal  bootstrap/elevated.ps1
 user         120  audit-before      audit/snapshot.ps1
-user         600  install           bootstrap/install.ps1
+user         600  published         bootstrap/install.ps1
 user         300  version-refused   bootstrap/version-refused.ps1
 user         600  faults            bootstrap/faults.ps1
 sys          180  expand-archive    bootstrap/expand-archive.ps1
 user         120  audit-installed   audit/snapshot.ps1
+user         300  zip-start         bootstrap/zip-start.ps1

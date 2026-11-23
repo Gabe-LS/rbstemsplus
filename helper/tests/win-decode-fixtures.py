@@ -74,12 +74,13 @@ def ff(name, args, expectation="same", why="", seconds=6.0, rate=44100, ch=2):
 
 
 # WAV: every PCM width, float, mono, more channels, other rates
+f64_refusal = "PC session 1: rekordbox for Windows refuses 64-bit float WAV"
 ff("pcm-u8.wav", ["-c:a", "pcm_u8"])
 ff("pcm-s16.wav", ["-c:a", "pcm_s16le"])
 ff("pcm-s24.wav", ["-c:a", "pcm_s24le"])
 ff("pcm-s32.wav", ["-c:a", "pcm_s32le"])
 ff("pcm-f32.wav", ["-c:a", "pcm_f32le"])
-ff("pcm-f64.wav", ["-c:a", "pcm_f64le"])
+ff("pcm-f64.wav", ["-c:a", "pcm_f64le"], "win-refuses", f64_refusal)
 ff("pcm-mono.wav", ["-c:a", "pcm_s16le"], ch=1)
 ff("pcm-5.1.wav", ["-c:a", "pcm_s24le", "-channel_layout", "5.1"], ch=6)
 ff("pcm-48k.wav", ["-c:a", "pcm_s16le"], rate=48000)
@@ -94,7 +95,7 @@ seed[0] += 1
 x = list(music(4, 44100, 2, seed[0]) * 2.5) + [1e-30, -1e-30, -0.0, 0.0, 1e-45, 3.0e38, -3.0e38, 1.0, -1.0, 0.5]
 wav(os.path.join(d, "float-loud.wav"), x, 44100, 2, "f32")
 wav(os.path.join(d, "float64-loud.wav"), x + [1e-300, 1 + 2 ** -30, 1 + 2 ** -25, 5e38, -1e-40], 44100, 1, "f64")
-expect += [("float-loud.wav", "same", ""), ("float64-loud.wav", "same", "")]
+expect += [("float-loud.wav", "same", ""), ("float64-loud.wav", "win-refuses", f64_refusal)]
 
 # WAV structure: an extensible 24-in-32 container, a chunk of odd size before data, a cut file
 seed[0] += 1
@@ -217,6 +218,9 @@ def fmt(tag, ch, bits, align, rate=44100):
     return struct.pack("<HHIIHH", tag, ch, rate, rate * max(align, 1), align, bits)
 
 
+riff("empty-data.wav", [(b"fmt ", fmt(1, 1, 16, 2)), (b"data", b"")], "both-refuse", "zero WAV frames")
+
+
 seed[0] += 1
 st16 = np.round(music(2, 44100, 2, seed[0]) * 32767).astype("<i2").tobytes()
 mo16 = np.round(music(2, 44100, 1, seed[0] + 1) * 32767).astype("<i2").tobytes()
@@ -259,6 +263,7 @@ def aiff_raw(name, ch, frames, ssnd_extra=0, expectation="same", why=""):
     expect.append((name, expectation, why))
 
 
+aiff_raw("empty-ssnd.aiff", 1, 0, expectation="both-refuse", why="zero AIFF frames")
 aiff_raw("i5-aiff16-1025ch.aiff", 1025, 100, 0, "run-refuses", "AIFF with 1025 channels")
 # I7: SSND claiming more than the file: less than one frame decodes, a frame or more is refused
 aiff_raw("i7-ssnd-plus2.aiff", 2, 44100, 2)
@@ -292,7 +297,7 @@ expect.append(("flac-huge-claim.flac", "both-refuse", "STREAMINFO claims 2^36 - 
 s = src(5)
 try:   # Apple's encoder: not reachable inside a sandbox
     run("afconvert", "-f", "m4af", "-d", "alac", s, os.path.join(d, "alac-apple.m4a"))
-    expect.append(("alac-apple.m4a", "same", ""))
+    expect.append(("alac-apple.m4a", "win-refuses", "32-bit ALAC: rekordbox 7.2.20 for Windows reads it differently (2026-11-22, 0/3); Windows Prepare skips it"))
 except subprocess.CalledProcessError:
     print("note: afconvert has no ALAC encoder here (a sandbox?): alac-apple.m4a left out")
 ff("alac-ffmpeg-24.m4a", ["-c:a", "alac", "-sample_fmt", "s32p"], seconds=5)
@@ -304,13 +309,18 @@ s = src(8, rate=48000, fmt="s16")
 run("lame", "--quiet", "-V", "2", s, os.path.join(d, "mp3-vbr-48k.mp3"))
 expect.append(("mp3-vbr-48k.mp3", "same", ""))
 rates["mp3-vbr-48k.mp3"] = 48000
-ff("aac.m4a", ["-c:a", "aac", "-b:a", "192k"], "win-refuses", "AAC: Media Foundation's decoder is T10")
+# AAC: the Mac path of the Windows decoders has no Media Foundation (refuses); the real Windows build
+# decodes it with Microsoft's decoder (aac_mf.c, T10), not bit for bit Apple's: "decodes" there
+ff("aac.m4a", ["-c:a", "aac", "-b:a", "192k"], "win-refuses", "AAC: Media Foundation's decoder is Windows' only")
+win_decodes = {"aac.m4a"}
 for f in os.listdir(d):
     if f.startswith(".src"):
         os.remove(os.path.join(d, f))
 with open(os.path.join(d, "expect.txt"), "w") as f:
     for n, e, w in expect:
         win = "refuses" if e in ("win-refuses", "both-refuse", "run-refuses") or n in rates else "decodes" if e == "mac-refuses" else "same"
+        if n in win_decodes:
+            win = "decodes"
         if win == "same" and n in win_within_1:
             win = "within-1"
         f.write("%s\t%s\t%s\t%s\n" % (n, e, w, win))

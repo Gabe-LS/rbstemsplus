@@ -31,7 +31,7 @@ static void rnd(void *ctx, unsigned char out[16]) {
 }
 
 int main(int argc, char **argv) {
-    static const char w[] = "MZ one rbsp-admin worker: proto=1 minimum=1.5.0\n";
+    static const char w[] = "MZ one rbsp-admin worker: proto=2 minimum=1.5.0\n";
     char scratch[1024], root[1100], dir[1200], exe[1300], sha[65];
     unsigned char h[32];
     if (argc != 2 || !realpath(argv[1], scratch)) return 2;

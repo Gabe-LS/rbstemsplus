@@ -83,6 +83,10 @@ namespace RbStemsPlus.Shell
         /// post_main's entry, for that test.
         internal void Post(IntPtr job) => PostMain(job);
 
+        /// TEST builds: the UI thread's watch (UiWatch.cs), told of each core call the UI thread
+        /// makes; null (a release, and the Mac tests but their own): nothing told.
+        internal UiWatch Watch { get; set; }
+
         private readonly object qlock = new object();
         private readonly Queue<IntPtr> mainQueue = new Queue<IntPtr>();
         private bool drainPending;
@@ -117,27 +121,25 @@ namespace RbStemsPlus.Shell
             renderFn = (ctx, snap, delta) =>
             {
                 if (!OnMain("render")) { Core.core_snap_release(snap); reloadNext = true; RenderOk = false; return; }   // as a failed one: not applied, the next reloads
+                Watch?.Enter("render");
                 try { Render(snap, delta); } catch (Exception e) { RenderFailed(snap, e); }
+                finally { Watch?.Leave(); }
             };
             frontFactsFn = ctx => { if (!OnMain("front_facts")) return 0; try { return ui.FrontFacts(); } catch (Exception e) { Fail("front_facts", e); return 0; } };
             modalOpenFn = ctx => { if (!OnMain("modal_open")) return 1; try { return ui.ModalOpen() ? 1 : 0; } catch (Exception e) { Fail("modal_open", e); return 1; } };
-            factsFn = (ctx, sheet) => { if (!OnMain("facts")) return; try { Facts(sheet); TestFacts(sheet); } catch (Exception e) { Fail("facts", e); } };
+            factsFn = (ctx, sheet) =>
+            {
+                if (!OnMain("facts")) return;
+                Watch?.Enter("facts");
+                try { Facts(sheet); TestFacts(sheet); } catch (Exception e) { Fail("facts", e); }
+                finally { Watch?.Leave(); }
+            };
             postMainFn = (ctx, job) => { try { PostMain(job); } catch (Exception e) { Fail("post_main", e); Environment.FailFast("post_main: " + e.Message); } };
             postWorkFn = (ctx, kind, job) => { try { PostWork(kind, job); } catch (Exception e) { Fail("post_work", e); Environment.FailFast("post_work: " + e.Message); } };
             dialogFn = (ctx, d, r) => { try { return Dialog(d, r); } catch (Exception e) { Fail("dialog", e); return 1; } };
             pickFolderFn = (ctx, start, len, r) => { try { return PickFolder(start, len, r); } catch (Exception e) { Fail("pick_folder", e); return -1; } };
             closeReplyFn = (ctx, what, proceed) => { if (!OnMain("close_reply")) return; try { ui.CloseReply(what, proceed != 0); } catch (Exception e) { Fail("close_reply", e); } };
             logFn = (ctx, line, len) => { try { ui.Log(Core.Utf8(line, len)); } catch (Exception) { } };
-        }
-
-        /// The start config with "prepare_tabs":true when the window shows the Status and Prepare
-        /// tabs (Shell.PrepareShown: the Prepare release, a TEST build's prepare scenarios); without
-        /// it the core hides View > Status, View > Prepare and the Prepare menu (I10, I86).
-        internal static string WithPrepareTabs(string config, bool shown)
-        {
-            if (!shown) return config;
-            int end = config.LastIndexOf('}');
-            return end < 0 ? config : config.Substring(0, end) + ",\"prepare_tabs\":true" + config.Substring(end);
         }
 
         /// The start config's "native" list: the entries the core DLL runs itself.
@@ -189,7 +191,9 @@ namespace RbStemsPlus.Shell
         {
             WaitWarm();
             Send("{\"ev\":\"start\"}");
-            Core.core_commit(C);
+            Watch?.Enter("commit");
+            try { Core.core_commit(C); }
+            finally { Watch?.Leave(); }
         }
 
         /// The window is on screen (ContentRendered): welcome, the update result, resume, ...
@@ -198,13 +202,22 @@ namespace RbStemsPlus.Shell
         /// One event to the core (main, outside callbacks). A refusal is logged.
         public int Send(string json)
         {
+            int r = SendEvent(json);
+            if (json == Activation.Activated) WarmOnActivation();
+            return r;
+        }
+
+        private int SendEvent(string json)
+        {
             if (C == IntPtr.Zero) return CoreApi.CORE_E_STATE;
 #if SHELL_TEST
             ShellProbe.Sent(json);   // the trigger's timing point (TEST builds only)
 #endif
-            int r = Core.core_event(C, json, CoreApi.Nts);
+            int r;
+            Watch?.Enter(UiWatch.EventOp(json));
+            try { r = Core.core_event(C, json, CoreApi.Nts); }
+            finally { Watch?.Leave(); }
             if (r != CoreApi.CORE_OK) ui.Log("core: event refused (" + r + "): " + json);
-            if (json == Activation.Activated) WarmOnActivation();   // after its refresh: that sheet decides
             return r;
         }
 
@@ -234,6 +247,13 @@ namespace RbStemsPlus.Shell
         public void Drain()
         {
             if (Stopped) { DropAll(); return; }
+            Watch?.Enter("drain");
+            try { DrainJobs(); }
+            finally { Watch?.Leave(); }
+        }
+
+        private void DrainJobs()
+        {
             long limit = Stopwatch.GetTimestamp() + DrainTicks;
             while (true)
             {
@@ -335,9 +355,11 @@ namespace RbStemsPlus.Shell
 
         // ------------------------------------------------------------------ facts
 
-        // The cheap facts (core.h facts, facts.def): the core DLL's reads (core_win_cheap_facts,
-        // win/c/host_facts.c), the one call the app sets; the Mac tests' host leaves the sheet empty.
-        // Its answer: 1 the sheet carries FACT_LIB_UNCHECKED, 0 it doesn't, -1 nothing read (kept).
+        // core_win_cheap_facts (win/c/host_facts.c) writes FACT_KEPT_SETS when CORE_FACTS_KEPT is
+        // asked, CORE_FACTS_REFRESH's cheap rows when REFRESH is asked, and CORE_FACTS_PREPARE's
+        // rows only together with REFRESH. Returns 1 if FACT_LIB_UNCHECKED is set and 0 if it isn't.
+        // On -1 no REFRESH part was read. Keep the previous LibUnchecked even if the sheet now
+        // holds the kept rows.
         internal Func<IntPtr, IntPtr, int> CheapFacts { get; set; }
         internal bool LibUnchecked { get; private set; }   // main: the last sheet's FACT_LIB_UNCHECKED
         private void Facts(IntPtr sheet)
@@ -386,10 +408,72 @@ namespace RbStemsPlus.Shell
         // main that finds the files memoised. A sheet that says checked starts nothing. Pins stay
         // off the UI thread (HF2).
         public const string FactsWarm = "{\"ev\":\"facts_warm\"}";
+        public const string RekordboxChanged = "{\"ev\":\"rekordbox_changed\"}";
+        private bool rekordboxRefreshRunning, rekordboxRefreshPending;
+        private bool activationPending, requestPending, repairPending;
+        internal event Action RekordboxRefreshed;
+
+        // The real window's activation and the watcher can arrive during a warm-up. Hold the
+        // activation and its request check until the latest inventory is ready.
+        internal int SendActivation(string json)
+        {
+            if (json == Activation.Activated)
+            {
+                activationPending = true;
+                RefreshRekordbox();
+                return CoreApi.CORE_OK;
+            }
+            if (json == Activation.CheckRequest && activationPending)
+            {
+                requestPending = true;
+                return CoreApi.CORE_OK;
+            }
+            if (json == Activation.Deactivated) activationPending = false;
+            return Send(json);
+        }
+
+        internal void RefreshRekordbox(bool showManage = false)
+        {
+            if (Stopped || C == IntPtr.Zero) return;
+            repairPending |= showManage;
+            rekordboxRefreshPending = true;
+            if (rekordboxRefreshRunning) return;
+            rekordboxRefreshRunning = true;
+            rekordboxRefreshPending = false;
+            var previous = WarmTask ?? Task.CompletedTask;
+            var warm = WarmFacts;
+            IntPtr c = C;
+            WarmTask = previous.ContinueWith(_ =>
+            {
+                try { warm?.Invoke(c); }
+                catch (Exception e) { Fail("rekordbox warm-up", e); }
+                try { ui.PostDrain(RekordboxWarmed); }
+                catch (Exception e) { Fail("rekordbox refresh", e); }
+            }, TaskScheduler.Default);
+        }
+
+        private void RekordboxWarmed()
+        {
+            rekordboxRefreshRunning = false;
+            if (Stopped || C == IntPtr.Zero) return;
+            if (rekordboxRefreshPending)
+            {
+                RefreshRekordbox();
+                return;
+            }
+
+            bool activate = activationPending, request = requestPending, repair = repairPending;
+            activationPending = requestPending = repairPending = false;
+            if (repair) Send(Json.Tab(CoreApi.CORE_TAB_MANAGE));
+            SendEvent(activate ? Activation.Activated : RekordboxChanged);
+            if (request) Send(Activation.CheckRequest);
+            RekordboxRefreshed?.Invoke();
+        }
+
         private void WarmOnActivation()
         {
             var warm = WarmFacts;
-            if (!LibUnchecked || warm == null || Stopped || C == IntPtr.Zero) return;
+            if (!LibUnchecked || warm == null || Stopped || C == IntPtr.Zero || rekordboxRefreshRunning) return;
             if (WarmTask != null && !WarmTask.IsCompleted)
             {
                 // the start's warm still running posts nothing of its own: refresh once when it ends

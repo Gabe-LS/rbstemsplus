@@ -26,4 +26,7 @@ void helper_proc_signal(helper_proc *p, int sig);
  * the reader is waited for (ended fires) and the Job closed */
 void helper_proc_close(helper_proc *p);
 
+/* One of this session's Prepare runs has this set open, including while paused. */
+int helper_proc_keeping(const char *set);
+
 #endif

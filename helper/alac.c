@@ -436,7 +436,7 @@ int alac_decode(plat_file f, int64_t size, const pcm_info *p, pcm_out *o, char *
     c.whyn = whyn;
     int rc = 1;
     if (p->kind != PCM_ALAC) snprintf(why, whyn, "not an ALAC track");
-    else if (!m4a_alac_packets(f, size, c.cookie, &c.skip, on_packet, &c, why, whyn)) {
+    else if (!m4a_alac_packets(f, size, p->mp4_track_id, c.cookie, &c.skip, on_packet, &c, why, whyn)) {
         if (o->got != o->n) snprintf(why, whyn, "decoded %zu samples, the file says %zu", o->got, o->n);
         else rc = 0;
     }

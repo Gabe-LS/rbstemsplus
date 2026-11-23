@@ -514,6 +514,32 @@ check(mm().restore().ok && live() == shaB, "restore when rekordbox's model is mi
 let noFolder = Models(dir: md + "/missing", originals: orig, ours: [oursSha], gate: mgate)
 check(noFolder.restore().ok && !exists(md + "/missing"), "no model folder: nothing put back, nothing created")
 
+// review b-a2a-F1: the saved model's engine file not written: the save fails and nothing is placed
+// (an untagged copy would rank below engine 0001's tagged one at restore); an untagged copy of the
+// live model gets its tag
+clearOriginals(); setEngine("0002")
+let dataE1 = Data("Pioneer's model for engine 0001".utf8), shaE1 = sha256(data: dataE1)
+put(dataE1, orig + "/\(shaE1).onnx"); put(Data("0001\n".utf8), orig + "/\(shaE1).engine")
+put(dataA, rbModel)
+var tagWrites = 0
+var noTag = mm()
+noTag.writeFile = { d, p in
+    if p.hasSuffix(".engine") { tagWrites += 1; return false }
+    return writeAtomically(d, to: p)
+}
+check(!noTag.installOurs(from: ourSource, sha: oursSha).ok && tagWrites == 1 && live() == shaA && noTemps() && !exists(orig + "/\(shaA).onnx")
+      && !exists(orig + "/\(shaA).engine") && !exists(orig + "/\(shaA).onnx.part"),
+      "the engine file not written: not saved, rekordbox's model untouched, no untagged copy, no part left")
+check(mm().installOurs(from: ourSource, sha: oursSha).ok && live() == oursSha
+      && (try? String(contentsOfFile: orig + "/\(shaA).engine", encoding: .utf8)) == "0002\n", "the next install tags the copy")
+check(mm().restore().ok && live() == shaA, "restore with engines 0001 and 0002 saved: engine 0002's model")
+try? fm.removeItem(atPath: orig + "/\(shaA).engine"); tagWrites = 0
+check(!noTag.saveOriginal(shaA).ok && tagWrites == 1 && !exists(orig + "/\(shaA).engine"), "already saved, its tag not writable: not saved")
+check(mm().saveOriginal(shaA).ok && (try? String(contentsOfFile: orig + "/\(shaA).engine", encoding: .utf8)) == "0002\n",
+      "already saved, untagged: the tag written")
+put(oursData, rbModel)
+check(mm().restore().ok && live() == shaA, "then restore picks engine 0002's model")
+
 // restore failing midway: the copy doesn't verify
 clearOriginals(); put(oursData, rbModel); setEngine("0002")
 put(Data("not what its name says".utf8), orig + "/\(shaA).onnx"); put(Data("0002\n".utf8), orig + "/\(shaA).engine")
@@ -539,6 +565,18 @@ check(!r.ok && live() == shaB && noTemps(), "install refuses to replace a model 
 check(!mm().installOurs(from: ourSource, sha: shaA).ok && live() == shaB && noTemps(), "install refuses a copy that doesn't match its checksum")
 
 // 1.0's layout: Pioneer's moves in, ours is set aside and never used
+clearOriginals(); put(oursData, rbModel); setEngine("0002"); put(dataA, orig + "/hdemucs.onnx")
+tagWrites = 0
+check(!noTag.migrateLegacy() && tagWrites == 1 && sha256(orig + "/hdemucs.onnx") == shaA
+      && !exists(orig + "/\(shaA).onnx") && noTag.originalsUnknown
+      && mlog.last == "1.0's saved model: its STEMS Engine version couldn't be written: left as it is",
+      "1.0's saved Pioneer model stays in place when its engine file can't be written")
+put(dataE1, orig + "/\(shaE1).onnx"); put(Data("0001\n".utf8), orig + "/\(shaE1).engine")
+tagWrites = 0
+let legacyNotice = noTag.migrateLegacy()
+r = noTag.restore()
+check(!legacyNotice && tagWrites == 1 && !r.ok && live() == oursSha && sha256(orig + "/hdemucs.onnx") == shaA
+      && noTemps() && originalsKept(mm()), "AR1: restore refuses when 1.0's saved model stays beside engine 0001's copy (\(r.message))")
 clearOriginals(); put(oursData, rbModel); setEngine("0002"); put(dataA, orig + "/hdemucs.onnx")
 check(!mm().migrateLegacy() && sha256(orig + "/\(shaA).onnx") == shaA && !exists(orig + "/hdemucs.onnx")
       && (try? String(contentsOfFile: orig + "/\(shaA).engine", encoding: .utf8)) == "0002\n", "1.0's saved Pioneer model moves to the new layout")

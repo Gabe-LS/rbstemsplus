@@ -552,6 +552,10 @@ static int handle_app_event(core *c, int id, const jval *ev) {
         view_location_measure(c);   /* LocationMonitor.shared.update(), in the background */
         view_prepare_changed(c, 1);
         view_refresh(c);
+#ifdef CORE_WIN_POLICY
+        view_r1_check(c);   /* R1 at activation (app.md §5.2) */
+        flows_win_inventory_changed(c);   /* the shell can coalesce activation with discovery */
+#endif
         flows_check_request(c);   /* Q12: the watcher's request, with EV_REOPENED's guards */
         view_check_watcher_on(c);   /* checkWatcherOn: the reminders line follows Login Items (M72) */
         return CORE_OK;
@@ -600,6 +604,10 @@ static int handle_app_event(core *c, int id, const jval *ev) {
     case EV_MENU: {
         const jval *idv = member(ev, "id", J_STR);
         if (!idv) return CORE_E_ARG;
+#ifdef CORE_WIN_POLICY
+        /* R1's Don't Ask Again names the versions its button showed: {"ev":"r1_dismiss"} only */
+        if (c->os == CORE_OS_WIN && idv->len == sizeof "r1_dismiss" - 1 && !memcmp(idv->s, "r1_dismiss", idv->len)) return CORE_E_ARG;
+#endif
         if (!view_click_enabled(c, idv->s, idv->len, id == EV_MENU))   /* a control that is off sends nothing */
             core_log(c->life, id == EV_MENU ? "core: a menu item that is off is ignored" : "core: a button that is off is ignored");
         else if (!flows_event(c, idv->s, idv->len))               /* the action flows (M6) */
@@ -612,6 +620,9 @@ static int handle_app_event(core *c, int id, const jval *ev) {
         return CORE_OK;
     case EV_REOPENED:
     case EV_CHECK_REQUEST:
+#ifdef CORE_WIN_POLICY
+        if (id == EV_CHECK_REQUEST) view_r1_check(c);   /* the watcher's notification: R1 again */
+#endif
         flows_check_request(c);
         return CORE_OK;
     case EV_LOCATION:
@@ -630,9 +641,21 @@ static int handle_app_event(core *c, int id, const jval *ev) {
         view_location_measure(c);
         return CORE_OK;
 #ifdef CORE_WIN_POLICY
+    case EV_REKORDBOX_CHANGED:
+        view_refresh(c);
+        view_r1_check(c);
+        flows_win_inventory_changed(c);
+        return CORE_OK;
     case EV_FACTS_WARM:   /* the cheap facts read again, now warm: no re-check, no request */
         view_refresh(c);
         return CORE_OK;
+    case EV_R1_DISMISS: {
+        const jval *v = member(ev, "versions", J_STR);
+        if (!v) return CORE_E_ARG;
+        if (!model_get_i64(&c->m, F_WIN_R1_DISMISS_ENABLED)) core_log(c->life, "core: a button that is off is ignored");
+        else flows_win_r1_dismiss(c, v->s, v->len);
+        return CORE_OK;
+    }
 #endif
     case EV_SETTINGS:
         return member(ev, "key", J_STR) && member(ev, "value", J_STR) ? CORE_OK : CORE_E_ARG;
@@ -1225,6 +1248,9 @@ uint32_t core_menu_state(core *c, core_menu_id id, const char **title, size_t *t
     view_menu_facts(c, &mf);
     int32_t t = -1;
     uint32_t st = menu_rule(id, &mf, &t);
+#ifdef CORE_WIN_POLICY
+    if (c->os == CORE_OS_WIN && id == M_APP && t == T_APP_NAME) t = T_WIN_MENU_APP;   /* core_menu_at's title, pulled too (review C15) */
+#endif
     if (title && t >= 0) {
         size_t n = 0;
         if (core_text(c->os, (core_text_id)t, NULL, 0, c->menu_title, sizeof c->menu_title, &n) >= CORE_OK) {

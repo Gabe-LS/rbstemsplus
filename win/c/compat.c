@@ -4,6 +4,8 @@
 #include "plat.h"
 
 #include "compat.h"
+#include "inventory.h"
+#include "native_facts.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -355,7 +357,7 @@ static struct {
     plat_id id;          /* a file swapped in by a rename is another file, whatever its size and time */
     uint64_t used;
     compat_file facts;   /* pin COMPAT_PIN_ERROR: not asked yet */
-    int pinned;
+    int pinned, code_checked;
     int main_only;       /* an unreadable file, remembered for the UI thread's reads only */
     int main_pin_error;  /* the UI thread's pin had no answer: it isn't asked again there */
 } memo[MEMO_SLOTS];
@@ -386,10 +388,10 @@ void compat_memo_clear(void) {
 }
 
 /* under memo_lock: the facts remembered for path while its stat holds (size, mtime, id) */
-static int memo_find(const char *path, const plat_stat *st, int want_pin, int on_main, compat_file *out, int *need_pin) {
+static int memo_find(const char *path, const plat_stat *st, int want_pin, int want_code, int on_main, compat_file *out, int *need_pin) {
     for (int i = 0; i < MEMO_SLOTS; i++)
         if (memo[i].used && memo[i].size == st->size && memo[i].mtime == st->mtime && plat_id_same(memo[i].id, st->id)
-            && !strcmp(memo[i].path, path) && (on_main || !memo[i].main_only)) {
+            && !strcmp(memo[i].path, path) && (on_main || !memo[i].main_only) && (!want_code || memo[i].code_checked)) {
             *out = memo[i].facts;
             memo[i].used = ++memo_clock;
             *need_pin = want_pin && !memo[i].pinned && !(on_main && (memo[i].main_pin_error || memo[i].main_only));
@@ -522,7 +524,8 @@ static int scan(plat_file f, compat_file *out) {
     return 0;
 }
 
-int compat_file_facts(const compat_os *os, const char *path, int flags, compat_file *out) {
+static int file_facts(const compat_os *os, const char *path, int flags,
+                      int (*digest)(compat_read_fn, void *, uint64_t, payload_sha), compat_file *out) {
     int want_pin = (flags & COMPAT_PIN) != 0, fresh = (flags & COMPAT_FRESH) != 0;
     memset(out, 0, sizeof *out);
     out->pin = COMPAT_PIN_ERROR;
@@ -556,7 +559,7 @@ int compat_file_facts(const compat_os *os, const char *path, int flags, compat_f
     plat_once(&flight_once, flight_init);
     plat_mutex_lock(&memo_lock);
     for (;;) {
-        hit = !fresh && memo_find(path, &st, want_pin, on_main, out, &need_pin);   /* FRESH: read again, whatever is remembered */
+        hit = !fresh && memo_find(path, &st, want_pin, digest != NULL, on_main, out, &need_pin);   /* FRESH: read again, whatever is remembered */
         if ((hit && !need_pin) || fresh) break;
         /* a miss, or a hit that still needs its pin (review SF5): one flight reads or pins it */
         int k = flight_of(path);
@@ -603,10 +606,12 @@ int compat_file_facts(const compat_os *os, const char *path, int flags, compat_f
         if (compat_pe_read(pread_fn, &f, &out->pe)) memset(&out->pe, 0, sizeof out->pe);
         if (!out->readable) memset(out->sha256, 0, sizeof out->sha256);
     }
-    if (need_pin) {
-        /* pinned through the handle that was read, while it is open; then the file must still be
-         * that file, unchanged, and still the one at path */
-        out->pin = os && os->pin ? os->pin(os->ctx, path, f) : COMPAT_PIN_ERROR;
+    if (need_pin) out->pin = os && os->pin ? os->pin(os->ctx, path, f) : COMPAT_PIN_ERROR;
+    int computed_code = digest && !hit && out->readable;
+    if (computed_code && !out->marker && digest(pread_fn, &f, (uint64_t)st.size, out->code_sha256))
+        out->code_sha256[0] = 0;
+    if (need_pin || computed_code) {
+        /* The pin and code digest describe this handle and the file still at path. */
         plat_stat st2, st3;
         if (plat_file_stat(f, &st2) || plat_stat_path(path, 0, &st3) || !plat_id_same(st2.id, st.id) || !plat_id_same(st3.id, st.id)
             || st2.size != st.size || st3.size != st.size || st2.mtime != st.mtime || st3.mtime != st.mtime) {
@@ -634,10 +639,16 @@ int compat_file_facts(const compat_os *os, const char *path, int flags, compat_f
         }
         int same = memo[slot].used && !strcmp(memo[slot].path, path) && memo[slot].size == st.size && memo[slot].mtime == st.mtime
                 && plat_id_same(memo[slot].id, st.id);
+        if (same && memo[slot].code_checked && !computed_code)
+            memcpy(out->code_sha256, memo[slot].facts.code_sha256, sizeof out->code_sha256);
         if (same && memo[slot].pinned && (!want_pin || out->pin == COMPAT_PIN_ERROR)) {
             /* another read pinned this file meanwhile (another thread, or a pin that re-entered):
              * a read with no pin answer keeps that answer and takes it (HR3) */
-            if (want_pin) *out = memo[slot].facts;
+            if (computed_code) {
+                memcpy(memo[slot].facts.code_sha256, out->code_sha256, sizeof out->code_sha256);
+                memo[slot].code_checked = 1;
+            }
+            if (want_pin && !fresh) *out = memo[slot].facts;
             memo[slot].used = ++memo_clock;
         } else {
             memcpy(memo[slot].path, path, strlen(path) + 1);
@@ -648,6 +659,7 @@ int compat_file_facts(const compat_os *os, const char *path, int flags, compat_f
             memo[slot].facts = *out;
             /* a pin that couldn't be checked isn't remembered as an answer: a worker asks again;
              * the UI thread doesn't (main_pin_error) until the file changes */
+            memo[slot].code_checked = computed_code || (same && memo[slot].code_checked);
             memo[slot].pinned = want_pin && out->pin != COMPAT_PIN_ERROR;
             memo[slot].main_only = !out->readable;
             memo[slot].main_pin_error = !memo[slot].pinned && ((on_main && want_pin && out->pin == COMPAT_PIN_ERROR)
@@ -661,6 +673,15 @@ int compat_file_facts(const compat_os *os, const char *path, int flags, compat_f
     return 0;
 }
 
+int compat_file_facts(const compat_os *os, const char *path, int flags, compat_file *out) {
+    return file_facts(os, path, flags, NULL, out);
+}
+
+int compat_ort_file_facts(const compat_os *os, const char *path, int flags,
+                         int (*digest)(compat_read_fn, void *, uint64_t, payload_sha), compat_file *out) {
+    return file_facts(os, path, flags, digest, out);
+}
+
 /* ------------------------------------------------------------------ rekordbox */
 
 static int join(char *out, size_t cap, const char *a, const char *b) {
@@ -672,133 +693,323 @@ static int join(char *out, size_t cap, const char *a, const char *b) {
     return 1;
 }
 
-/* a version folder's kind, unfollowed: 1 a folder; 0 none there (ENOENT, ENOTDIR, or a link or a
- * file); -1 it couldn't be looked at (review RE1: unknown, never "none") */
-static int dir_kind(const char *path) {
-    plat_stat st;
-    int err = plat_stat_path(path, 0, &st);
+static int inv_stat(const char *path, plat_stat *st) {
+    int err = plat_stat_path(path, 0, st);
 #ifdef COMPAT_TEST_HOOKS
     if (!err && compat_test_stat_fails && compat_test_stat_fails(path)) err = EACCES;
 #endif
-    if (err) return err == ENOENT || err == ENOTDIR ? 0 : -1;
-    return st.kind == PLAT_DIR;
+    return err;
 }
 
-/* review RC4 (C8's no fallback): a partial Uninstall enumeration may have missed the newest
- * version's entry. Whether root holds a "rekordbox X.Y.Z" folder newer than `than` ("": any) that
- * the list doesn't name and that holds a rekordbox.exe (or one that can't be looked at); 1 also
- * when root couldn't be listed (it may) */
+static int inv_index(const inv_list *l, const char *folder) {
+    for (int i = 0; i < l->n; i++)
+        if (equal_ci(l->it[i].folder, folder)) return i;
+    return -1;
+}
+
+static inv_install *inv_add(inv_list *l, const char *folder, const char *name, const char *version) {
+    inv_install *r = &l->it[l->n++];
+    strcpy(r->folder, folder);
+    strcpy(r->name, name);
+    strcpy(r->version, version);
+    return r;
+}
+
+static int absent(int err) { return err == ENOENT || err == ENOTDIR; }
+
+static int inv_exe_read(const compat_os *os, inv_install *r, int flags) {
+    plat_stat dir, after;
+    int err = inv_stat(r->folder, &dir);
+    r->exe.pin = COMPAT_PIN_ERROR;
+    if (absent(err)) return INV_STALE;
+    if (err) return INV_NO_ANSWER;
+    if (dir.kind != PLAT_DIR) return INV_UNVERIFIED;
+    r->dir_id = dir.id;
+
+    char exe[COMPAT_PATH_MAX];
+    if (!join(exe, sizeof exe, r->folder, "rekordbox.exe")
+        || compat_file_facts(os, exe, COMPAT_PIN | flags, &r->exe)
+        || inv_stat(r->folder, &after) || after.kind != PLAT_DIR || !plat_id_same(dir.id, after.id)) {
+        memset(&r->exe, 0, sizeof r->exe);
+        r->exe.pin = COMPAT_PIN_ERROR;
+        return INV_NO_ANSWER;
+    }
+    if (!r->exe.present) return INV_SETTLING;
+    if (!r->exe.exists) return INV_UNVERIFIED;
+    if (!r->exe.readable || r->exe.pin == COMPAT_PIN_ERROR) return INV_NO_ANSWER;
+    return r->exe.pin == COMPAT_PIN_OK
+        && compat_same_short_version(r->version, r->display_version)
+        && compat_same_short_version(r->version, r->exe.pe.product_version) ? INV_VERIFIED : INV_UNVERIFIED;
+}
+
 typedef struct {
-    const char *root, *than;
-    const compat_rekordbox *list;
-    int n, hit;
-} unlisted_walk;
+    const char *root;
+    inv_list *list;
+} inv_disk_walk;
 
-static int unlisted_one(void *ctx, const char *name, const plat_stat *st) {
-    unlisted_walk *w = ctx;
-    char v[COMPAT_VERSION_MAX], dir[COMPAT_PATH_MAX], exe[COMPAT_PATH_MAX];
-    (void)st;
-    if (!compat_folder_version(name, v, sizeof v) || (*w->than && version_order(w->than, v) >= 0)) return 0;
-    if (!join(dir, sizeof dir, w->root, name) || !join(exe, sizeof exe, dir, "rekordbox.exe")) {
-        w->hit = 1;   /* a name too long to look at: it may be the one */
-        return 1;
+static int inv_disk_one(void *ctx, const char *name, const plat_stat *st) {
+    inv_disk_walk *w = ctx;
+    char v[COMPAT_VERSION_MAX], folder[COMPAT_PATH_MAX], exe[COMPAT_PATH_MAX];
+    if (st->kind != PLAT_DIR || !compat_folder_version(name, v, sizeof v)) return 0;
+    if (!join(folder, sizeof folder, w->root, name)) return -1;
+    if (inv_index(w->list, folder) >= 0) return 0;
+    if (w->list->n == INV_MAX || !join(exe, sizeof exe, folder, "rekordbox.exe")) return -1;
+
+    plat_stat ds, xs;
+    int err = inv_stat(folder, &ds);
+    if (absent(err) || (!err && ds.kind != PLAT_DIR)) return 0;
+    inv_install *r = inv_add(w->list, folder, name, v);
+    r->trust = INV_DISK_ONLY;
+    r->exe.pin = COMPAT_PIN_ERROR;
+    if (!err) {
+        r->dir_id = ds.id;
+        err = inv_stat(exe, &xs);
+        if (!err && xs.kind == PLAT_FILE) {
+            r->exe.present = r->exe.exists = 1;
+            r->exe.id = xs.id;
+            r->exe.size = xs.size;
+            r->exe.mtime = xs.mtime;
+        }
     }
-    for (int i = 0; i < w->n; i++)
-        if (equal_ci(w->list[i].folder, dir)) return 0;
-    plat_stat es;
-    int dk = dir_kind(dir);
-    if (!dk) return 0;   /* not a version folder (none, a link, a file) */
-    if (dk < 0) {
-        w->hit = 1;      /* couldn't be looked at: it may be the one (review RE1) */
-        return 1;
-    }
-    int err = plat_stat_path(exe, 0, &es);
-    if (err == ENOENT || (!err && es.kind != PLAT_FILE)) return 0;      /* passed over, as the walk does */
-    w->hit = 1;
-    return 1;
+    /* A possible EXE in an unreadable disk-only folder is evidence for legacy
+     * selection on a partial registry walk. It was never pinned. */
+    if (err && err != ENOENT) r->exe.present = 1;
+    return 0;
 }
 
-static int newer_unlisted(const char *root, const char *than, const compat_rekordbox *list, int n) {
-    plat_dir d;
-    int r = plat_dir_open(root, &d);
-    if (r) return r != ENOENT;   /* no root: no folder there */
-    unlisted_walk w = {root, than, list, n, 0};
-    r = plat_dir_each(d, unlisted_one, &w);
-    plat_dir_close(d);
-    return w.hit || r != 0;
+static int inv_read_disk(const char *root, inv_list *l) {
+    plat_stat st;
+    int err = inv_stat(root, &st);
+    if (err) return err == ENOENT;
+    if (st.kind != PLAT_DIR) return 0;
+    plat_dir dir;
+    if (plat_dir_open(root, &dir)) return 0;
+    inv_disk_walk walk = {root, l};
+    int complete = plat_dir_each(dir, inv_disk_one, &walk) == 0;
+    plat_dir_close(dir);
+    return complete;
 }
 
-static int find_rekordbox(const compat_os *os, const char *root, compat_rekordbox *out, int max, int *current, int *state, int *partial) {
+static int inv_order(const void *a, const void *b) {
+    const inv_install *one = a, *two = b;
+    int order = version_order(two->version, one->version);
+    return order ? order : strcmp(one->version, two->version);
+}
+
+static int inv_walk(const compat_os *os, const char *root, int flags, int max_registered, inv_list *out) {
+    memset(out, 0, sizeof *out);
+    if (!os || !os->uninstall_entries || !root) return 0;
+#ifdef COMPAT_TEST_HOOKS
+    if (compat_test_entries_alloc_fails) return -1;
+#endif
+    compat_uninstall *entries = calloc(COMPAT_ENTRIES_MAX, sizeof *entries);
+    if (!entries) return -1;
+    int partial = 0;
+    int n = os->uninstall_entries(os->ctx, entries, COMPAT_ENTRIES_MAX, &partial);
+    out->registry_complete = !partial && n >= 0 && n < COMPAT_ENTRIES_MAX;
+    if (n > COMPAT_ENTRIES_MAX) n = COMPAT_ENTRIES_MAX;
+    for (int i = 0; i < n; i++) {
+        const compat_uninstall *entry = &entries[i];
+        char folder[COMPAT_PATH_MAX], version[COMPAT_VERSION_MAX];
+        if (!compat_entry_is_rekordbox(entry) || !compat_entry_folder(entry, root, folder, sizeof folder)) continue;
+        int at = inv_index(out, folder);
+        if (at >= 0) {
+            inv_install *r = &out->it[at];
+            if (r->trust == INV_VERIFIED && !compat_same_short_version(r->display_version, entry->display_version))
+                r->trust = INV_UNVERIFIED;
+            r->views |= entry->view;
+        } else if (out->n < max_registered && compat_folder_version(folder, version, sizeof version)) {
+            inv_install *r = inv_add(out, folder, strrchr(folder, SEP) + 1, version);
+            copy(r->display_version, sizeof r->display_version, entry->display_version, strlen(entry->display_version));
+            r->views = entry->view;
+            r->trust = inv_exe_read(os, r, flags);
+        }
+    }
+    free(entries);
+
+    out->disk_complete = inv_read_disk(root, out);
+    out->complete = out->registry_complete && out->disk_complete;
+    for (int i = 0; i < out->n; i++) {
+        const inv_install *r = &out->it[i];
+        if (r->trust == INV_NO_ANSWER || r->trust == INV_SETTLING || (r->trust == INV_DISK_ONLY && r->exe.present && !r->exe.exists))
+            out->complete = 0;
+    }
+    qsort(out->it, (size_t)out->n, sizeof out->it[0], inv_order);
+    return 0;
+}
+
+int inv_read(const compat_os *os, const char *root, int flags, inv_list *out) {
+#ifdef _WIN32
+    uint64_t gen = compat_uninstall_generation();
+#else
+    uint64_t gen = 0;
+#endif
+    int rc = inv_walk(os, root, flags, INV_MAX, out);
+    out->gen = gen;
+    return rc;
+}
+
+int inv_current(const inv_list *l, compat_rekordbox *out, int max, int *current, int *state) {
     *current = -1;
     *state = COMPAT_RB_NOT_INSTALLED;
-    *partial = 0;
-    if (!os || !os->uninstall_entries || !root || max <= 0) return 0;
-#ifdef COMPAT_TEST_HOOKS
-    compat_uninstall *e = compat_test_entries_alloc_fails ? NULL : calloc(COMPAT_ENTRIES_MAX, sizeof *e);
-#else
-    compat_uninstall *e = calloc(COMPAT_ENTRIES_MAX, sizeof *e);
-#endif
-    if (!e) {   /* review NW3: out of memory is no answer, never "not installed" */
-        *state = COMPAT_RB_NO_ANSWER;
-        *partial = 1;
-        return 0;
-    }
-    int inc = 0;
-    int ne = os->uninstall_entries(os->ctx, e, COMPAT_ENTRIES_MAX, &inc), n = 0;
-    if (ne < 0) ne = 0, inc = 1;
-    if (ne >= COMPAT_ENTRIES_MAX) inc = 1;   /* the list may have been cut short */
-    *partial = inc != 0;
-    for (int i = 0; i < ne && n < max; i++) {
-        compat_rekordbox r;
-        memset(&r, 0, sizeof r);
-        if (!compat_entry_is_rekordbox(&e[i]) || !compat_entry_folder(&e[i], root, r.folder, sizeof r.folder)) continue;
-        int seen = 0;
-        for (int k = 0; k < n && !seen; k++) seen = equal_ci(out[k].folder, r.folder);
-        if (seen) continue;
-        compat_folder_version(r.folder, r.folder_version, sizeof r.folder_version);
-        copy(r.display_version, sizeof r.display_version, e[i].display_version, strlen(e[i].display_version));
-        char exe[COMPAT_PATH_MAX];
-        int dk = dir_kind(r.folder), dir = dk == 1;
-        if (dk < 0) r.unknown = 1;   /* review RE1: a folder that couldn't be looked at is no answer */
-        if (dir && join(exe, sizeof exe, r.folder, "rekordbox.exe")) r.unknown = compat_file_facts(os, exe, COMPAT_PIN, &r.exe) != 0;
-        r.agree = compat_same_short_version(r.folder_version, r.display_version)
-               && compat_same_short_version(r.folder_version, r.exe.pe.product_version);
-        r.ok = dir && r.exe.exists && r.exe.pin == COMPAT_PIN_OK && r.agree;
-        /* newest first */
-        int at = n;
-        while (at > 0 && version_order(out[at - 1].folder_version, r.folder_version) < 0) at--;
-        memmove(out + at + 1, out + at, (size_t)(n - at) * sizeof *out);
-        out[at] = r;
+    int n = 0, candidate = -1;
+    for (int i = 0; i < l->n && n < max; i++) {
+        const inv_install *r = &l->it[i];
+        if (r->trust == INV_DISK_ONLY) continue;
+        compat_rekordbox *c = &out[n];
+        memset(c, 0, sizeof *c);
+        strcpy(c->folder, r->folder);
+        strcpy(c->folder_version, r->version);
+        strcpy(c->display_version, r->display_version);
+        c->exe = r->exe;
+        c->unknown = r->trust == INV_NO_ANSWER && !r->exe.exists;
+        c->agree = compat_same_short_version(r->version, r->display_version)
+                && compat_same_short_version(r->version, r->exe.pe.product_version);
+        c->ok = r->trust == INV_VERIFIED;
+        if (candidate < 0 && (c->exe.exists || c->unknown)) {
+            candidate = n;
+            c->candidate = 1;
+            if (c->ok) {
+                *current = n;
+                *state = COMPAT_RB_OK;
+            } else if (c->unknown || !c->exe.readable) {
+                *state = COMPAT_RB_NO_ANSWER;
+            } else if (!c->agree || c->exe.pin == COMPAT_PIN_NO || r->trust == INV_UNVERIFIED) {
+                *state = COMPAT_RB_UNVERIFIED;
+            } else {
+                *state = COMPAT_RB_NO_ANSWER;
+            }
+        }
         n++;
     }
-    free(e);
-    /* the newest folder holding a rekordbox.exe decides; no fallback past it (owner decided) */
-    for (int i = 0; i < n; i++) {
-        compat_rekordbox *c = &out[i];
-        if (!c->exe.exists && !c->unknown) continue;
-        c->candidate = 1;
-        if (c->ok) {
-            *current = i;
-            *state = COMPAT_RB_OK;
-        } else if (c->unknown || !c->exe.readable) {
-            *state = COMPAT_RB_NO_ANSWER;
-        } else if (!c->agree || c->exe.pin == COMPAT_PIN_NO) {
-            *state = COMPAT_RB_UNVERIFIED;
-        } else {
-            *state = COMPAT_RB_NO_ANSWER;   /* agreeing, its pin ERROR */
+    if (!l->registry_complete) {
+        int may_be_newer = !l->disk_complete;
+        for (int i = 0; !may_be_newer && i < l->n; i++) {
+            const inv_install *r = &l->it[i];
+            may_be_newer = r->trust == INV_DISK_ONLY && r->exe.present
+                && (candidate < 0 || version_order(r->version, out[candidate].folder_version) > 0);
         }
-        break;
-    }
-    if (*partial) {
-        const char *than = "";
-        for (int i = 0; i < n; i++)
-            if (out[i].candidate) than = out[i].folder_version;
-        if (newer_unlisted(root, than, out, n)) {
-            for (int i = 0; i < n; i++) out[i].candidate = 0;   /* review RE3: the older one doesn't decide */
+        if (may_be_newer) {
+            if (candidate >= 0) out[candidate].candidate = 0;
             *current = -1;
             *state = COMPAT_RB_NO_ANSWER;
         }
     }
+    return n;
+}
+
+typedef struct { int err; plat_stat st; } inv_stamp;
+typedef struct {
+    inv_stamp root;
+    struct { inv_stamp dir, exe; } rows[INV_MAX];
+} inv_stamps;
+
+static inv_stamp inv_stamp_path(const char *folder, const char *name) {
+    inv_stamp stamp = {0};
+    if (!name) stamp.err = inv_stat(folder, &stamp.st);
+    else {
+        char path[COMPAT_PATH_MAX];
+        stamp.err = join(path, sizeof path, folder, name) ? inv_stat(path, &stamp.st) : ENAMETOOLONG;
+    }
+    return stamp;
+}
+
+static int inv_same_stamp(inv_stamp a, inv_stamp b) {
+    return a.err == b.err && (a.err || (a.st.kind == b.st.kind && a.st.size == b.st.size
+           && a.st.mtime == b.st.mtime && plat_id_same(a.st.id, b.st.id)));
+}
+
+static int inv_stamps_hold(const inv_list *l, const char *root, const inv_stamps *s) {
+    if (!inv_same_stamp(s->root, inv_stamp_path(root, NULL))) return 0;
+    for (int i = 0; i < l->n; i++) {
+        const char *f = l->it[i].folder;
+        if (!inv_same_stamp(s->rows[i].dir, inv_stamp_path(f, NULL))
+            || (!s->rows[i].dir.err && s->rows[i].dir.st.kind == PLAT_DIR
+                && !inv_same_stamp(s->rows[i].exe, inv_stamp_path(f, "rekordbox.exe")))) return 0;
+    }
+    return 1;
+}
+
+static int inv_stamps_save(const inv_list *l, const char *root, inv_stamps *s, inv_stamp before) {
+    s->root = inv_stamp_path(root, NULL);
+    if (!inv_same_stamp(s->root, before)) return 0;
+    for (int i = 0; i < l->n; i++) {
+        const inv_install *r = &l->it[i];
+        inv_stamp dir = s->rows[i].dir = inv_stamp_path(r->folder, NULL);
+        if (r->trust == INV_STALE) {
+            if (!absent(dir.err)) return 0;
+        } else if (dir.err) return 0;
+        if (dir.err || dir.st.kind != PLAT_DIR) {
+            if (r->exe.present || r->trust == INV_VERIFIED || r->trust == INV_DISK_ONLY) return 0;
+            continue;
+        }
+        if (!plat_id_same(dir.st.id, r->dir_id)) return 0;
+        inv_stamp exe = s->rows[i].exe = inv_stamp_path(r->folder, "rekordbox.exe");
+        if (r->exe.exists) {
+            if (exe.err || exe.st.kind != PLAT_FILE || exe.st.size != r->exe.size
+                || exe.st.mtime != r->exe.mtime || !plat_id_same(exe.st.id, r->exe.id)) return 0;
+        } else if (!exe.err && exe.st.kind == PLAT_FILE) return 0;
+    }
+    return 1;
+}
+
+int inv_read_cached(inv_cache *c, const compat_os *os, uint64_t gen, const char *root, inv_list *out) {
+    if (!c || !root) {
+        int rc = inv_walk(os, root, 0, INV_MAX, out);
+        out->gen = gen;
+        return rc;
+    }
+    int rc = 0;
+    plat_mutex_lock(&c->lock);
+    if (c->valid && gen && gen == c->gen && !strcmp(root, c->root) && inv_stamps_hold(c->list, root, c->stamps)) {
+        *out = *c->list;
+    } else {
+        c->valid = 0;
+        c->walks++;
+        inv_stamp before = inv_stamp_path(root, NULL);
+        rc = inv_walk(os, root, 0, INV_MAX, out);
+        out->gen = gen;
+        if (!rc && out->complete && gen && strlen(root) < sizeof c->root) {
+            if (!c->list) c->list = malloc(sizeof *c->list);
+            if (!c->stamps) c->stamps = malloc(sizeof(inv_stamps));
+            if (c->list && c->stamps && inv_stamps_save(out, root, c->stamps, before)) {
+                *c->list = *out;
+                strcpy(c->root, root);
+                c->gen = gen;
+                c->valid = 1;
+            }
+        }
+    }
+    plat_mutex_unlock(&c->lock);
+    return rc;
+}
+
+void inv_cache_clear(inv_cache *c) {
+    plat_mutex_lock(&c->lock);
+    free(c->list);
+    free(c->stamps);
+    c->list = NULL;
+    c->stamps = NULL;
+    c->valid = c->walks = 0;
+    plat_mutex_unlock(&c->lock);
+}
+
+static int find_rekordbox(const compat_os *os, const char *root, compat_rekordbox *out, int max,
+                          int *current, int *state, int *partial) {
+    *current = -1;
+    *state = COMPAT_RB_NOT_INSTALLED;
+    *partial = 0;
+    if (!os || !os->uninstall_entries || !root || max <= 0) return 0;
+    inv_list *list = malloc(sizeof *list);
+    if (!list || inv_walk(os, root, 0, max < INV_MAX ? max : INV_MAX, list)) {
+        free(list);
+        *state = COMPAT_RB_NO_ANSWER;
+        *partial = 1;
+        return 0;
+    }
+    *partial = !list->registry_complete;
+    int n = inv_current(list, out, max, current, state);
+    free(list);
     return n;
 }
 

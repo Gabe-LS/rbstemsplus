@@ -113,9 +113,17 @@ func reportTests() {
     check(lastProblem(appLog: log([(60, "report: couldn't save it in ~/Desktop")]), bridgeLog: "", now: now).title == nil, "the report's own lines aren't problems")
     p = lastProblem(appLog: log([(60, String(repeating: "x", count: 100) + " failed")]), bridgeLog: "", now: now)
     check((p.title?.count ?? 0) <= 60 && p.title?.hasSuffix("…") == true, "a long title is cut to 60 characters")
-    p = lastProblem(appLog: log([(60, "download failed for dj@example.com with token=abcdef0123456789")]), bridgeLog: "", now: now)
-    let masked = redact(p.text)
-    check(masked.contains("<email>") && masked.contains("token=<token>") && !masked.contains("example.com"), "the last problem is masked like the rest: \(masked)")
+    p = lastProblem(appLog: log([(60, "download failed for dj@example.com with token=abcdef0123456789")]), bridgeLog: "", now: now, mask: { redact($0) })
+    check(p.text.contains("<email>") && p.text.contains("token=<token>") && !p.text.contains("example.com"), "the last problem is masked like the rest: \(p.text)")
+
+    let fullName = "Dana Jones"
+    let linePrefix = "download failed:".padding(toLength: 200 - at(120).count - 2 - 7, withPad: " ", startingAt: 0)
+    let titlePrefix = "download failed:".padding(toLength: 60 - 7, withPad: " ", startingAt: 0)
+    let suffix = fullName + " while loading"
+    p = lastProblem(appLog: log([(120, linePrefix + suffix), (60, titlePrefix + suffix)]), bridgeLog: "", now: now,
+                    mask: { $0.replacingOccurrences(of: fullName, with: "<user>") })
+    check(p.text.contains("\(at(120))  \(linePrefix)<user>…\n"), "the last problem line masks a full name across the 200-character cut")
+    check(p.title == titlePrefix + "<user>…", "the title masks a full name across the 60-character cut")
 
     // MARK: the summary's short lines
     check(appLine(version: "1.0.0", build: "7", plus: (.on, "Demucs v4 is on."), cache: (.limited, "Stems Cache stopped saving stems."))

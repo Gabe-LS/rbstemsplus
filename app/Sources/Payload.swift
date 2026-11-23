@@ -75,7 +75,7 @@ let payloadFloorFile = support + "/payload-version"
 let shownVersionFile = support + "/shown-version"
 
 /// The compatibility list used until a payload.json has been downloaded (1.0.0's).
-let builtInCompatible = Manifest.Compatible(rekordbox: ["7.2.17", "7.2.18", "7.2.19"], ortVersionPrefix: "1.18.", stemsEngine: ["0002"])
+let builtInCompatible = Manifest.Compatible(rekordbox: ["7.2.17", "7.2.18", "7.2.19", "7.2.20"], ortVersionPrefix: "1.18.", stemsEngine: ["0002"])
 
 /// Parses payload.json, without checking its signature: only checkManifest uses it for a
 /// payload.json that counts. Its keys must pass plainJSONKeys first.

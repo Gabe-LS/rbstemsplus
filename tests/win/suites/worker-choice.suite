@@ -1,0 +1,34 @@
+# J23/UP8 across accounts, from "rekordbox 7.2.19 installed"; worker-update.suite's TEST pair.
+# A installs a/ and its worker. sessions creates B's own logon and installs new/ there.
+# SYSTEM stages B's installed release and runs protocol 2 install-worker and then install
+# with --force 1 to reinstall the carried bridge through B's worker. A's older
+# desktop app uninstalls through the newer matching worker. B's app and watcher stay intact.
+include lib/vmlib.ps1
+include worker/rblib.ps1
+include uninstall/cases/unlib.ps1
+include uac/uaclib.ps1
+include admin-paths/worker-trace.ps1
+include admin-paths/worker-action.ps1
+include admin-paths/worker-releases.ps1
+include update/updatelib.ps1
+include sessions/sslib.ps1
+need http
+need vm
+need file repo/core/texts.def
+need file vm/uia/rbui/rbui.exe
+need file repo/tests/win/suites/lib/vmlib.ps1
+need file repo/tests/win/suites/sessions/as-b.ps1
+need fixture dist-test/a/payload.json
+need candidate dist-test/new/payload.json
+sys   60  releases                 admin-paths/worker-pair-prep.ps1
+sys  120  prep                     worker/prep.ps1
+sys  120  switch-a                 update/switch.ps1
+user 600  install                  update/install.ps1
+user 420  initial-worker           admin-paths/worker-update-action.ps1
+sys  600  account-b-worker-choice  sessions/account-b.ps1
+sys  360  b-install-worker         sessions/worker-choice-install.ps1
+sys   60  trace-worker-choice      sessions/worker-choice.ps1
+user 420  worker-choice            sessions/worker-choice.ps1
+sys  120  check-worker-choice      sessions/worker-choice.ps1
+sys  180  b-after                  sessions/b-after.ps1
+sys  120  switch-clean             update/switch.ps1

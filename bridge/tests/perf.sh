@@ -528,7 +528,7 @@ run_set() {   # SIDE K: one run set of SIDE as round pK; short, or disturbed a s
 
 cmd_gate() {
   [ $# -ge 3 ] || die "usage: perf.sh gate A B OUT [options]"
-  local a="$1" b="$2" out="$3" rc k s notb0=; shift 3
+  local a="$1" b="$2" out="$3" rc k s l notb0=; shift 3
   RESULTS= IDLE_WAIT= DRY= SET=gp
   parse_opts "$@"
   # the selftest's stubs (BRIDGE_PERF_TEST=1 only): the bench, the idle reader
@@ -555,7 +555,9 @@ cmd_gate() {
     [ -z "$VOL" ] || echo "  the drive's pre-flight first: $([ -n "$NOPREFLIGHT" ] && echo "skipped (--no-preflight)" || echo "$((4 * $([ -n "$QUICK" ] && echo 2 || echo 15))) remount and purge cycles")"
     return 0
   fi
-  [ ! -e "$out" ] || [ -z "$(ls -A "$out" 2> /dev/null)" ] || die "$out exists: a new OUT for each session"
+  if [ -e "$out" ] || [ -L "$out" ]; then
+    [ -d "$out" ] && l="$(ls -A "$out" 2> /dev/null)" && [ -z "$l" ] || die "$out exists: a new OUT for each session"
+  fi
   mkdir -p "$out/sets" || die "can't make $out"; OUT="$(cd "$out" && pwd -P)"; SS="$OUT/session.txt"; ALL="$OUT/samples.tsv"; : > "$ALL"
   {
     echo "gate started=$(date -u +%FT%TZ)"
@@ -600,10 +602,12 @@ cmd_gate() {
     notb0=1
     sed 's/^GP: pass/GP: information only (A is not B0): pass/' "$OUT/gate.txt" > "$OUT/gate.txt.new" && mv "$OUT/gate.txt.new" "$OUT/gate.txt"
     echo "GP: information only (A is not B0, $GA/B0): never a pass" >> "$OUT/gate.txt"
+    echo "# compare: information only (A is not B0)" >> "$OUT/gate.tsv"    # record.py refuses it
     [ "$rc" = 0 ] && rc=3
   fi
   if [ -n "$IMAGE$NOPURGE$QUICK$TESTMODE" ]; then
     echo "GP: not a valid gate (${QUICK:+quick }${IMAGE:+disk image }${NOPURGE:+no purge }${TESTMODE:+stubs}${nodrive:+no drive (P-B1.cold and P-B1.warm-drive not required)}): tooling check only" >> "$OUT/gate.txt"
+    echo "# compare: information only (${QUICK:+quick }${IMAGE:+disk image }${NOPURGE:+no purge }${TESTMODE:+stubs}: not a valid gate)" >> "$OUT/gate.tsv"
     [ "$rc" = 0 ] && rc=3
   fi
   [ "$IDLE_WAIT" -gt 0 ] && idle_display end "$SS"

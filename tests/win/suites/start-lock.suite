@@ -1,0 +1,23 @@
+# N12 (the judged GPT pre-release audit, w6/audit-fixes): the rows that need no UAC prompt. From
+# "clean Windows":
+#   tests/win/vm-run.sh stage
+#   tests/win/vm-run.sh run "clean Windows" start-lock
+# - elevated (item 2, I35): the stub started with the full token (user-high, as Run as
+#   administrator) is refused at start-up (T_CANT_OPEN, T_START_ROOT), exit 1, nothing written;
+#   then normal: a normal start opens the main window.
+# - lock (item 6, AF14, AF16): the complete uninstall from the menu, the one-liner at once, while
+#   the after-exit holds the install lock (a PING.EXE copy running from the apps folder keeps it
+#   held about 30 s): the one-liner's notice once, then it installs.
+# Needs a TEST build with w6/audit-fixes (447ea474 or later) in dist-test/. Not a release.list row.
+include lib/vmlib.ps1
+include uninstall/cases/unlib.ps1
+include uac/uaclib.ps1
+need http
+need file repo/core/texts.def
+need file repo/scripts/bootstrap.ps1
+need file dist-test/bootstrap.ps1
+# MODE       SECS NAME          SCRIPT
+user         600  install       bootstrap/install.ps1
+user-high    180  elevated      start-lock/elevated.ps1
+user         180  normal        start-lock/normal.ps1
+user         600  lock          start-lock/lock.ps1

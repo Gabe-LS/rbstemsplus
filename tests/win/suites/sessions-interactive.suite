@@ -1,0 +1,21 @@
+# UN8's Switch user case. Snapshot: local rbB has signed in to a separate desktop, then switched
+# back to A without signing out. A is the active console user. No sign-in UI is driven here.
+#   tests/win/vm-run.sh run "UN8 two users" sessions-interactive
+# This reuses the sessions.suite steps, but installs and runs B through B's Interactive token.
+include lib/vmlib.ps1
+include uninstall/cases/unlib.ps1
+include sessions/sslib.ps1
+need http
+need vm
+need file vm/uia/rbui/rbui.exe
+need file repo/core/texts.def
+need file repo/tests/win/suites/lib/vmlib.ps1
+need file repo/tests/win/suites/sessions/as-b.ps1
+need file dist-test/bootstrap.ps1
+# MODE       SECS NAME                 SCRIPT
+user         600  install              bootstrap/install.ps1
+sys          600  account-b-desktop    sessions/account-b.ps1
+user         300  a-start              sessions/a-start.ps1
+user         360  a-undo               sessions/a-undo.ps1
+user         600  a-uninstall          sessions/a-uninstall.ps1
+sys          180  b-after-desktop      sessions/b-after.ps1

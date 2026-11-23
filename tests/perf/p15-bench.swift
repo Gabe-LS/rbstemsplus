@@ -1,6 +1,7 @@
-// P15 (mac-core §2.1): the helper-line parse time per line, on the host: today's Swift parser
-// (Prepare.swift's parseRunLine); the C core's parser gets the same lines when it exists.
-// Built by tests/perf/p15.sh with the app's sources (main.swift left out).
+// P15 (mac-core §2.1): the helper-line parse time per line, on the host: 1.3.0's Swift parser
+// (Prepare.swift's parseRunLine, kept in the frozen core/tests/swift/oracle); the C core's parser
+// gets the same lines in tests/perf/p15-bench.c. Built by tests/perf/p15.sh with the oracle's
+// sources (main.swift left out).
 import Foundation
 
 let lines: [Substring] = {

@@ -18,6 +18,7 @@
 #define RBSP_WIN_NATIVE_FACTS_H
 
 #include "compat.h"
+#include "inventory.h"
 
 #include <stdint.h>
 
@@ -59,6 +60,27 @@ int native_r1(const compat_os *os, const char *folder, const char *root, const p
 int native_r1_read(const compat_os *os, const char *support, const char *own, const sig_pubkey *keys, size_t nkeys, const char *folder,
                    const char *root);
 
+/* Read and memoise an ORT's code digest through the same file handle as its
+ * ordinary facts. The caller supplies the PE digest implementation. */
+int compat_ort_file_facts(const compat_os *os, const char *path, int flags,
+                         int (*digest)(compat_read_fn, void *, uint64_t, payload_sha), compat_file *out);
+
+/* App-side observations for each inventory row, sharing the worker's scope inputs. */
+typedef struct {
+    int bridge, trace, original_signed;
+    char ort_version[COMPAT_VERSION_MAX];
+    int live_line;
+    char cache_line[COMPAT_CACHE_LINE_MAX];
+    size_t cache_line_len;
+} native_inv_caps;
+void native_inventory_assess(const compat_os *os, const inv_list *list, const char *root, const payload_manifest *m,
+                             const payload_manifest *installed, inv_assess_row *out, native_inv_caps *caps);
+
+void native_inventory_running(const compat_os *os, const inv_list *list, inv_assess_row *out, char *versions, size_t cap);
+
+/* The repair state for an explicitly requested folder in this inventory. */
+int native_r1_assessed(const inv_list *list, const inv_assess_row *rows, const char *folder);
+
 /* -- BLOCKED (core.h's step; Compat.swift's stemsPlusBlocked and stemsCacheBlocked, their facts
  * only: the core decides, cache_blocked_win on Windows). The compatible list is the verified
  * saved payload's windows.compatible, else the verified installed-release record's; Windows has
@@ -66,7 +88,6 @@ int native_r1_read(const compat_os *os, const char *support, const char *own, co
 
 /* Compat.swift's listed(): v is an entry, or starts with an entry and a '.' ("7.2.19.0342" by
  * "7.2.19") */
-int native_listed(const char *v, const char (*list)[PAYLOAD_NAME_MAX], int n);
 /* engineSupported's contains: v is exactly an entry (the STEMS Engine; watch.c's listed_engine) */
 int native_listed_exact(const char *v, const char (*list)[PAYLOAD_NAME_MAX], int n);
 /* "plus": engineVersion(), demucs3_ver.txt beside rekordbox's model file (model), trimmed ("" none),

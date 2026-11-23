@@ -27,16 +27,14 @@
 #   --x64: also OUT/app-x64, the x64-forced exe (PlatformTarget x64: under Prism on ARM64, loading
 #               x64\rbsp-core.dll) gated as a release; with --test-app also OUT/app-x64-test.
 #               For the Prism pass (app.md §7). Never shipped.
-#   --prepare: also OUT/app-prepare, the Prepare release's exe (PREPARE_TABS: the Status and Prepare
-#               tabs shown), gated as a release that carries the tabs' code.
+#   --prepare: compatibility alias for the default build, which shows the Status and Prepare tabs.
 #   --app-version V: the exe's and the core DLLs' version V (x.y.z) instead of VERSION's
 #               (scripts/build-windows.sh --stamp: a TEST zip at the next version, or a release
 #               build stamped with the previous version for release.sh's carry decision).
 # Every exe is gated: a release one names no TEST hook or probe marker and no TEST download base,
 # a TEST one names every marker, and its PE machine is anycpu (i386 with the CLR's ILONLY flag and
-# no 32-bit flag) or amd64 (x64-forced). The first release's exes (app, app-x64) hold no code that
-# creates the Status and Prepare tabs (I10, I86: none of its names); the Prepare release's and
-# every TEST exe hold all of it.
+# no 32-bit flag) or amd64 (x64-forced). Every exe must carry the code that creates the Status and
+# Prepare tabs and the full icon group.
 #
 # The SDK is downloaded once into build/dl/, checked against its pinned SHA-256 (release.md §9.2)
 # and extracted into build/dotnet/ with its licence files checked; NuGet's cache is build/nuget/.
@@ -54,7 +52,7 @@ DOTNET_URL="https://builds.dotnet.microsoft.com/dotnet/Sdk/$DOTNET_VERSION/$DOTN
 DOTNET_LICENSE_SHA256=cfc21f5e8bd655ae997eec916138b707b1d290b83272c02a95c9f821b8c87310
 DOTNET_TPN_SHA256=2dc8f8c5a39401e928b5784ab564eb8b3ceb99ead3df8f260e0cab7e0bbecc7a
 
-relock= test=1 testapp= testbase= testkey= appversion= x64= prepare=
+relock= test=1 testapp= testbase= testkey= appversion= x64=
 usage() { echo "usage: $0 [--relock] [--no-test] [--test-app [--test-base URL --test-key PEM]] [--x64] [--prepare] [--app-version V] [OUT]" >&2; exit 2; }
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -65,7 +63,7 @@ while [ $# -gt 0 ]; do
     --test-key) [ $# -ge 2 ] || usage; testkey="$2"; shift 2 ;;
     --app-version) [ $# -ge 2 ] || usage; appversion="$2"; shift 2 ;;
     --x64) x64=1; shift ;;
-    --prepare) prepare=1; shift ;;
+    --prepare) shift ;;
     -*) usage ;;
     *) break ;;
   esac
@@ -136,8 +134,8 @@ elif [ ! -f "$here/packages.lock.json" ]; then
   echo "win/shell/packages.lock.json is missing: run with --relock once and review it" >&2
   exit 1
 fi
-# one exe: test 0|1 (SHELL_TEST), x64 0|1 (PlatformTarget x64), prepare 0|1 (PREPARE_TABS, default
-# 0), into $here/bin; a TEST exe gets --test-base's URL (ShellTestUpdateBase), a release one an
+# one exe: test 0|1 (SHELL_TEST), x64 0|1 (PlatformTarget x64), into $here/bin;
+# a TEST exe gets --test-base's URL (ShellTestUpdateBase), a release one an
 # empty one. The properties on the command line, which beats the environment
 build_exe() {
   ub=
@@ -146,7 +144,7 @@ build_exe() {
   # from the project's folder, so global.json picks the pinned SDK
   (cd "$here" && "$dotnet" build RbStemsPlus.csproj -c Release -nologo -v:minimal --disable-build-servers \
      "-p:ShellIds=$out/ids" "-p:Version=$version" "$lockp" "-p:ShellTest=$1" "-p:ShellX64=$2" "-p:ShellTestUpdateBase=$ub" \
-     "-p:ShellPrepare=${3:-0}" -p:UseSharedCompilation=false)
+     -p:UseSharedCompilation=false)
 }
 # the release exe never carries the TEST hooks nor the probe: their markers, in UTF-16 string
 # literals (tr drops the NULs) or in the metadata's UTF-8 names; grep -a: the exe is binary, and
@@ -179,24 +177,20 @@ if m == 0x14c and struct.unpack_from("<H", b, opt)[0] == 0x10b:
 print(name)' "$1"
 }
 # the code that creates the Status and Prepare tabs (PrepareView.cs, StatusView.cs and
-# MainWindow.AddPrepareTabs: compiled only with PREPARE_TABS or SHELL_TEST): their metadata's UTF-8
-# names, all three or none
+# MainWindow.AddPrepareTabs): all three metadata names are required
 tabs_marker='AddPrepareTabs|PrepareView|StatusView'
 n_tabs=3
 tabs_count() { LC_ALL=C grep -a -o -E "$tabs_marker" "$1" | sort -u | wc -l | tr -d ' '; }
-# gate EXE KIND MACHINE [TABS]: KIND release (no marker) or test (every marker); TABS yes (the
-# tabs' code there: the Prepare release, every TEST exe) or no (the first release: default for a
-# release)
+# gate EXE KIND MACHINE: KIND release (no TEST marker) or test (every TEST marker)
 gate() {
   n="$(has_markers "$1")"
   if [ "$2" = release ] && [ "$n" != 0 ]; then echo "$1: a release exe carries the TEST hooks or the probe" >&2; exit 1; fi
   if [ "$2" = test ] && [ "$n" != "$n_markers" ]; then echo "$1: a TEST exe lacks a marker the release gate looks for" >&2; exit 1; fi
-  tabs="${4:-}"; [ -n "$tabs" ] || { [ "$2" = test ] && tabs=yes || tabs=no; }
   t="$(tabs_count "$1")"
-  if [ "$tabs" = no ] && [ "$t" != 0 ]; then echo "$1: a first-release exe can show the Status and Prepare tabs" >&2; exit 1; fi
-  if [ "$tabs" = yes ] && [ "$t" != "$n_tabs" ]; then echo "$1: this exe lacks the Status and Prepare tabs' code" >&2; exit 1; fi
+  if [ "$t" != "$n_tabs" ]; then echo "$1: this exe lacks the Status and Prepare tabs' code" >&2; exit 1; fi
   m="$(pe_machine "$1")"
   [ "$m" = "$3" ] || { echo "$1: its PE machine is $m, not $3" >&2; exit 1; }
+  python3 -I "$root/scripts/win-icon-check.py" "$1"
 }
 # nor a download base of its own (the TEST server's metadata, the core's test hook): GitHub's only.
 # Not one of test_markers: a TEST exe built without --test-base names neither
@@ -262,15 +256,6 @@ if [ -n "$x64" ]; then
     echo "built $out/app-x64-test (x64-forced, TEST: SHELL_TEST)"
   fi
 fi
-# the Prepare release's exe (the Status and Prepare tabs shown), gated as a release with their code
-if [ -n "$prepare" ]; then
-  build_exe 0 0 1
-  rm -rf "$out/app-prepare"
-  cp -R "$out/app" "$out/app-prepare"
-  cp "$here/bin/RB Stems Plus.exe" "$out/app-prepare/"
-  gate "$out/app-prepare/RB Stems Plus.exe" release anycpu yes
-  echo "built $out/app-prepare (the Prepare release: the Status and Prepare tabs)"
-fi
 rm -rf "$here/bin" "$here/obj"
 
 # 3. the Mac tests
@@ -279,8 +264,9 @@ mkdir -p "$out/test"
 # the core as a dylib for this Mac, as the core's host test build compiles it (CORE_WIN_POLICY,
 # the test hooks; no "native" Windows code: the tests' host runs post_work itself)
 # shellcheck disable=SC2046
-(cd "$root/core" && clang -std=c11 -O1 -g -DCORE_TEST_HOOKS -DCORE_WIN_POLICY -I. $("$root/core/build.sh" srcs) \
-   -dynamiclib -lpthread -o "$out/test/librbsp-core.dylib")
+(cd "$root/core" && clang -std=c11 -O1 -g -DCORE_TEST_HOOKS -DCORE_WIN_POLICY -I. -I../common $("$root/core/build.sh" srcs) \
+   ../win/c/core_shell_files.c ../win/c/fs_write.c ../common/plat_mac.c \
+   -dynamiclib -lpthread -framework CoreFoundation -framework Accelerate -o "$out/test/librbsp-core.dylib")
 (cd "$here/tests" && "$dotnet" build ShellTests.csproj -c Release -nologo -v:minimal --disable-build-servers \
    "-p:ShellIds=$out/ids" "-p:OutputPath=$out/test/bin/" "-p:BaseIntermediateOutputPath=$out/test/obj/" \
    -p:UseSharedCompilation=false)

@@ -11,8 +11,13 @@
  * The enable/hidden/title rules are code (menu_rule in menus.c), moved unchanged from
  * main.swift:71-91. The Mac rows are today's menus (main.swift makeMenu, extraAppMenuItems,
  * windowMenus, helpMenuItems), in today's order; the Windows keys of the shared rows are
- * app.md §4.5's (Ctrl for ⌘, F1 for Help). W-core writes the win rows (About in Help, Exit, Edit,
- * the first Windows release's hidden items).
+ * app.md §4.5's (Ctrl for ⌘, F1 for Help). The win rows (W-core, app.md §4.5): Exit (Alt+F4) in the
+ * first menu, Edit drawn from the table (Cut, Copy, Paste, Select All: WPF's own commands, so
+ * native), About in Help; no Hide and no Window menu. Their titles carry WPF's access keys
+ * ("_" before the letter) in texts.def's Windows column. Without the Status and Prepare tabs (no
+ * "prepare_tabs":true in the start config) the rules hide
+ * View > Status, View > Prepare and the Prepare menu, and their shortcuts do nothing (menu_rule);
+ * the 1.5.0 release sends the key and shows them.
  */
 #ifndef MENU
 #define MENU(id, os, menu, kind, title, key_mac, key_win, mods_mac, mods_win, event)
@@ -26,6 +31,7 @@ MENU(M_APP_UPDATE,    all, M_APP,     item,      T_MENU_UPDATE,      "",  "",   
 MENU(M_APP_SETTINGS,  all, M_APP,     item,      T_MENU_SETTINGS,    ",", ",",  CORE_MOD_CMD_OR_CTRL, CORE_MOD_CMD_OR_CTRL, "settings")
 MENU(M_APP_UNINSTALL, all, M_APP,     item,      T_MENU_UNINSTALL,   "",  "",   0,                    0,                    "uninstall_all")
 MENU(M_APP_SEP1,      all, M_APP,     separator, NONE,               "",  "",   0,                    0,                    "")
+MENU(M_WIN_APP_EXIT,  win, M_APP,     native,    T_MENU_QUIT,        "",  "F4", 0,                    CORE_MOD_ALT,         "")
 MENU(M_APP_HIDE,      mac, M_APP,     native,    T_MENU_HIDE,        "h", "",   CORE_MOD_CMD_OR_CTRL, 0,                    "")
 MENU(M_APP_SEP2,      mac, M_APP,     separator, NONE,               "",  "",   0,                    0,                    "")
 MENU(M_APP_QUIT,      mac, M_APP,     native,    T_MENU_QUIT,        "q", "",   CORE_MOD_CMD_OR_CTRL, 0,                    "")
@@ -33,6 +39,12 @@ MENU(M_APP_QUIT,      mac, M_APP,     native,    T_MENU_QUIT,        "q", "",   
 /* Edit and Window: AppKit's own menus on the Mac (Cut, Copy, Paste, Select All; Close, Minimize):
  * one native row each; W-core's Windows Edit rows are drawn from the table (T_MENU_CUT, ...) */
 MENU(M_EDIT,          mac, NONE,      native,    T_MENU_EDIT,        "",  "",   0,                    0,                    "")
+MENU(M_WIN_EDIT,      win, NONE,      item,      T_MENU_EDIT,        "",  "",   0,                    0,                    "")
+MENU(M_WIN_EDIT_CUT,  win, M_WIN_EDIT, native,   T_MENU_CUT,         "",  "x",  0,                    CORE_MOD_CMD_OR_CTRL, "")
+MENU(M_WIN_EDIT_COPY, win, M_WIN_EDIT, native,   T_MENU_COPY,        "",  "c",  0,                    CORE_MOD_CMD_OR_CTRL, "")
+MENU(M_WIN_EDIT_PASTE, win, M_WIN_EDIT, native,  T_MENU_PASTE,       "",  "v",  0,                    CORE_MOD_CMD_OR_CTRL, "")
+MENU(M_WIN_EDIT_SEP,  win, M_WIN_EDIT, separator, NONE,              "",  "",   0,                    0,                    "")
+MENU(M_WIN_EDIT_ALL,  win, M_WIN_EDIT, native,   T_MENU_SELECT_ALL,  "",  "a",  0,                    CORE_MOD_CMD_OR_CTRL, "")
 
 /* View */
 MENU(M_VIEW,          all, NONE,      item,      T_MENU_VIEW,        "",  "",   0,                    0,                    "")
@@ -69,5 +81,7 @@ MENU(M_HELP_HOME,     all, M_HELP,    item,      T_MENU_HELP_HOME,   "?", "F1", 
 MENU(M_HELP_TROUBLESHOOTING, all, M_HELP, item,  T_MENU_TROUBLESHOOTING, "", "", 0,                   0,                    "troubleshooting")
 MENU(M_HELP_ISSUES,   all, M_HELP,    item,      T_MENU_REPORT_ISSUE, "", "",   0,                    0,                    "issues")
 MENU(M_HELP_REPORT,   all, M_HELP,    item,      T_MENU_REPORT,      "",  "",   0,                    0,                    "create_report")
+MENU(M_WIN_HELP_SEP,  win, M_HELP,    separator, NONE,               "",  "",   0,                    0,                    "")
+MENU(M_WIN_HELP_ABOUT, win, M_HELP,   native,    T_MENU_ABOUT,       "",  "",   0,                    0,                    "")
 
 #undef MENU

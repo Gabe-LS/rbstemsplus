@@ -26,7 +26,21 @@ while (-not $asked -and $t.Elapsed.TotalSeconds -lt $limit) {
     if (Invoke-UiNamed $app.Id (Get-CoreText 'T_CONTINUE') 1 'Button') { 'the welcome answered: Continue' }
 }
 Check $asked 'the complete uninstall asks its confirmation: Uninstall'
-Check (Invoke-UiNamed $app.Id (Get-CoreText 'T_DONE') 180 'Button') 'its end: Done'
+$done = Invoke-UiNamed $app.Id (Get-CoreText 'T_DONE') 180 'Button'
+Check $done 'its end: Done'
+if (-not $done) {
+    # what shows instead (the window's texts) and the app's log, for the failure's reading
+    Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+    $A = [Windows.Automation.AutomationElement]
+    $cond = New-Object Windows.Automation.PropertyCondition($A::ProcessIdProperty, $app.Id)
+    foreach ($w in $A::RootElement.FindAll([Windows.Automation.TreeScope]::Children, $cond)) {
+        foreach ($e in $w.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)) {
+            if ($e.Current.Name) { "ui: $($e.Current.ControlType.ProgrammaticName) '$($e.Current.Name)'" }
+        }
+    }
+    $alog = Join-Path $l.Support 'Logs\app.log'
+    if (Test-Path -LiteralPath $alog) { Get-Content -LiteralPath $alog -Tail 40 | ForEach-Object { "app.log: $_" } }
+}
 Check (Wait-Until { $app.HasExited } 90) 'the app quits'
 $tmp = Join-Path $l.Local 'Temp'
 $copy = @(Get-ChildItem -LiteralPath $tmp -Directory -Filter 'rbsp-uninstall-*' -ErrorAction SilentlyContinue)

@@ -6,6 +6,8 @@
 #                                      its .exe.config (win/shell/build.sh), x64\ and arm64\rbsp-core.dll
 #                                      (core/build.sh dll), rbsp-watch-x64.exe and rbsp-watch-arm64.exe
 #                                      (the watcher, as win/c/tests/watch.sh builds its shipped exes),
+#                                      rbsp-prepare.exe (the prepare helper, x64 also on ARM64:
+#                                      helper/build-win.sh, its gates; the shell's paths.helper),
 #                                      admin\RB Stems Plus.exe (win/admin/build.sh), stub\x64\ and
 #                                      stub\arm64\RB Stems Plus.exe (win/c/stub.c), NOTICE,
 #                                      NOTICE-windows.txt (win/NOTICE.txt) and LICENSE
@@ -23,8 +25,8 @@
 #                                                                (the core, the worker, the watcher);
 #                                                                never a release key
 #   ... --stamp VERSION                                          the app stamped VERSION instead of
-#                                                                VERSION's (the exe, the core DLLs,
-#                                                                the watchers; release.sh's carry
+#                                                                VERSION's (the exe, core DLLs,
+#                                                                watchers, prepare helper; release.sh's carry
 #                                                                decision builds the previous
 #                                                                windows.app.version, release.md 1.3
 #                                                                "As built (T13)"); a TEST build may
@@ -42,13 +44,13 @@
 #                                                                admin/RB Stems Plus.exe; repeatable
 #
 # The zip is deterministic (sorted names, one fixed time, deflate), as the updater's unzip.c reads
-# it. Version resources (release.md §3.2, read by scripts/win-version.py): the shell, the core DLLs
-# and the watchers carry the version (ProductVersion, FILEVERSION X.Y.Z.0); the worker and the
-# stubs a constant one with no version (I83); the bridge none. Every PE's link map and symbols:
+# it. Version resources (release.md §3.2, read by scripts/win-version.py): the shell, core DLLs,
+# watchers and prepare helper carry the version (ProductVersion, FILEVERSION X.Y.Z.0); the worker
+# and stubs have a constant resource with no version (I83); the bridge has none. Every PE's link map and symbols:
 # no pthread_, _Unwind_ or __cxa_, no libmfuuid.a (I52, linkgate). Every shipped file's SHA-256
 # goes into build/win.sha256 (build/win-test.sha256 for a TEST build); --check-repro builds it all
-# again from scratch in another folder and requires the same bytes for every file. Not yet here:
-# rbsp-prepare.exe (with Prepare).
+# again from scratch in another folder and requires the same bytes for every file. rbsp-prepare.exe
+# ships from 1.5.0 (owner 2026-11-17: Prepare on Windows in 1.5.0).
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 die() { echo "build-windows.sh: $*" >&2; exit 1; }
@@ -156,6 +158,7 @@ if [ -n "$test_base" ]; then
   "$root/win/shell/build.sh" --no-test --test-app --test-base "$test_base" --test-key "$test_key" ${stamp[@]+"${stamp[@]}"} "$work/shell"
   app="$work/shell/app-test"
 else
+  # The standard C# shell shows Status and Prepare and runs the helper staged below.
   "$root/win/shell/build.sh" --no-test ${stamp[@]+"${stamp[@]}"} "$work/shell"
   app="$work/shell/app"
 fi
@@ -183,17 +186,26 @@ echo "== the bridge (bridge/win/build.sh: the release's, in TEST builds too)"
 [ -f "$work/bridge/onnxruntime.dll" ] || die "bridge/win/build.sh made no onnxruntime.dll"
 linkgate x64 "$work/bridge/onnxruntime.dll" "$work/bridge/onnxruntime.dll.map"
 
+echo "== the prepare helper (helper/build-win.sh: x64, its own gates)"
+# never a research helper (--keys) in a zip; build-win.sh's own gate refuses a release-flagged
+# build with --keys or the timing lines
+[ "${RBSP_RESEARCH:-}" != 1 ] || die "RBSP_RESEARCH=1 is set: a research helper never ships"
+"$root/helper/build-win.sh" --version "$version" "$work/helper"
+[ -f "$work/helper/rbsp-prepare.exe" ] || die "helper/build-win.sh made no rbsp-prepare.exe"
+linkgate x64 "$work/helper/rbsp-prepare.exe" "$work/helper/rbsp-prepare.exe.map"
+
 echo "== the start stubs (win/c/stub.c)"
 for a in x64 arm64; do
   mkdir -p "$work/stub/$a"
-  # its manifest and constant version resource (win/c/stub.rc: nothing per release, I83)
-  cp "$root/win/c/stub.rc" "$root/win/c/stub.manifest" "$work/stub/$a/"
+  # The fixed resources include the icon shared with the WPF app (I83).
+  cp "$root/win/c/stub.rc" "$root/win/c/stub.manifest" "$root/win/shell/RbStemsPlus.ico" "$work/stub/$a/"
   (cd "$work/stub/$a" && "$wcc" --tool "$a" windres stub.rc -O coff -o stub.res.o)
   # shellcheck disable=SC2086
   (cd "$root" && "$wcc" "$a" $WARN -Wno-unused-command-line-argument -municode -mwindows win/c/stub.c win/c/stub_rules.c \
      "$work/stub/$a/stub.res.o" -Wl,-Map="$work/stub/$a/stub.map" -o "$work/stub/$a/RB Stems Plus.exe")
   gate "$a" "$work/stub/$a/RB Stems Plus.exe" 'KERNEL32\.dll|USER32\.dll|api-ms-win-crt-[a-z0-9-]+\.dll'
   linkgate "$a" "$work/stub/$a/RB Stems Plus.exe" "$work/stub/$a/stub.map"
+  python3 -I "$root/scripts/win-icon-check.py" "$work/stub/$a/RB Stems Plus.exe"
 done
 
 echo "== the watchers (win/c/watch_win.c, as win/c/tests/watch.sh builds the shipped ones)"
@@ -218,12 +230,16 @@ keysc="$work/watch_keys.c"
 } > "$keysc"
 pf="$("$root/scripts/win-deps.sh" pocketfft)"
 v1="${version%%.*}"; rest="${version#*.}"; v2="${rest%%.*}"; v3="${rest#*.}"
-CORESRC="arena dialog dialog_texts flow flows helper_lines ids json lights mask menus model schema selftest state text watcher words core dump"
+# The prepared playlist check shares the app's facts and helper process.
+PREPARE="win/c/inventory.c win/c/receipt.c win/c/pe_code.c win/c/host_facts.c win/c/native_facts.c win/c/update.c win/c/update_rules.c win/c/unzip.c
+  win/c/native_location.c win/c/native_config.c win/c/volumes.c win/c/volumes_win.c common/cfg_ini.c common/path_rules.c
+  common/marker.c win/c/helper_proc.c win/c/helper_proc_win.c win/c/admin.c win/c/admin_proto.c"
+CORESRC="$("$root/core/build.sh" srcs)"
 for a in x64 arm64; do
   d="$work/watch-$a"; mkdir -p "$d"
   for s in $CORESRC; do
     # shellcheck disable=SC2086
-    (cd "$root" && "$wcc" "$a" $WARN -Wno-unused-command-line-argument -DCORE_WIN_POLICY -Icore -c "core/$s.c" -o "$d/core-$s.o")
+    (cd "$root" && "$wcc" "$a" $WARN -Wno-unused-command-line-argument -DCORE_WIN_POLICY -Icore -c "core/$s" -o "$d/core-${s%.c}.o")
   done
   # shellcheck disable=SC2086
   (cd "$root/common" && "$wcc" "$a" $WARN -Wno-unused-command-line-argument -DPLAT_NO_BLOCKS -I"$pf" -c plat_win.c -o "$d/core-plat_win.o")
@@ -234,9 +250,10 @@ for a in x64 arm64; do
   (cd "$d" && "$wcc" --tool "$a" windres watch.rc -O coff -o watch.res.o)
   # shellcheck disable=SC2086
   (cd "$root" && "$wcc" "$a" $WARN -Wno-unused-command-line-argument -municode -mwindows -DCORE_WIN_POLICY "-DRBSP_VERSION=\"$version\"" -Icore -Icommon -Iwin/c \
-     win/c/watch_win.c win/c/watch.c win/c/watch_facts.c win/c/compat.c win/c/compat_win.c win/c/payload.c win/c/payload_store.c win/c/fs_write.c \
+     $PREPARE win/c/watch_win.c win/c/watch.c win/c/watch_facts.c win/c/dismissed.c win/c/compat.c win/c/compat_win.c win/c/payload.c win/c/payload_store.c win/c/fs_write.c \
      win/c/sig.c win/c/sig_bcrypt.c "$keysc" "$d/watch.res.o" "$d/libcore.a" \
      -lcomctl32 -lshell32 -lole32 -luuid -ladvapi32 -luser32 -lntdll -Wl,-Map="$d/rbsp-watch-$a.exe.map" -o "$d/rbsp-watch-$a.exe")
+  sh "$root/win/c/tests/watch-map.sh" release "$d/rbsp-watch-$a.exe.map"
   gate "$a" "$d/rbsp-watch-$a.exe" 'KERNEL32\.dll|ADVAPI32\.dll|USER32\.dll|SHELL32\.dll|ole32\.dll|COMCTL32\.dll|ntdll\.dll|api-ms-win-crt-[a-z0-9-]+\.dll'
   linkgate "$a" "$d/rbsp-watch-$a.exe" "$d/rbsp-watch-$a.exe.map"
 done
@@ -250,6 +267,7 @@ for a in x64 arm64; do
   cp "$work/stub/$a/RB Stems Plus.exe" "$stage/stub/$a/"
 done
 cp "$work/admin/rbsp-admin.exe" "$stage/admin/RB Stems Plus.exe"
+cp "$work/helper/rbsp-prepare.exe" "$stage/"
 cp "$root/NOTICE" "$root/LICENSE" "$stage/"
 cp "$root/win/NOTICE.txt" "$stage/NOTICE-windows.txt"
 # a carried stub or worker: the previous release's bytes in place of this build's
@@ -268,7 +286,7 @@ diff -u "$root/win/zip-contents.txt" "$work/zip-contents.txt" || die "the zip's 
 has() {   # FILE TEXT [utf16]: the bytes hold TEXT (as UTF-16LE with utf16)
   python3 -I -c 'import sys; t = sys.argv[2].encode("utf-16-le" if sys.argv[3] else "ascii"); sys.exit(0 if t in open(sys.argv[1], "rb").read() else 1)' "$1" "$2" "${3:-}"
 }
-for f in "admin/RB Stems Plus.exe" "stub/x64/RB Stems Plus.exe" x64/rbsp-core.dll rbsp-watch-x64.exe \
+for f in "admin/RB Stems Plus.exe" "stub/x64/RB Stems Plus.exe" x64/rbsp-core.dll rbsp-watch-x64.exe rbsp-prepare.exe \
          "stub/arm64/RB Stems Plus.exe" arm64/rbsp-core.dll rbsp-watch-arm64.exe; do
   case "$f" in *arm64*) a=arm64 m=coff-arm64 ;; *) a=x64 m=coff-x86-64 ;; esac
   fmt="$("$wcc" --tool "$a" llvm-objdump -f "$stage/$f")" || die "$f: llvm-objdump failed"
@@ -285,13 +303,22 @@ wi="$(printf '%s\n' "$wi" | sed -n 's/^ *Name: \(.*\.dll\)$/\1/p' | sort -u)"
 printf '%s\n' "$wi" | grep -qx 'KERNEL32.dll' || die "the worker has no KERNEL32.dll in its imports"
 bad="$(printf '%s\n' "$wi" | grep -viE '^(KERNEL32|ADVAPI32|ntdll)\.dll$|^api-ms-win-crt-[a-z0-9-]+\.dll$' || true)"
 [ -z "$bad" ] || die "the worker imports $(echo $bad)"
-has "$worker" 'rbsp-admin worker: proto=1 minimum=' || die "the worker has no rbsp-admin marker"
+has "$worker" 'rbsp-admin worker: proto=2 minimum=' || die "the worker has no rbsp-admin marker"
 has "$worker" requireAdministrator || die "the worker has no requireAdministrator manifest"
 if [ -n "$test_key" ]; then
   has "$worker" RBSP_TEST_PROGRAMS utf16 || die "the TEST worker can't move its root (no RBSP_TEST_PROGRAMS)"
+  has "$worker" RBSP_TEST_WORKER_HOLD utf16 || die "the TEST worker can't be held"
+  has "$worker" RBSP_TEST_WORKER_MIDHOLD utf16 || die "the TEST worker can't be held mid-work"
+  has "$worker" RBSP_TEST_WORKER_MIDHOLD_TARGET || die "the TEST worker can't hold one chosen swap"
+  has "$worker" RBSP_TEST_WORKER_FAIL_TARGET || die "the TEST worker can't fail one chosen version"
   has "$worker" "$pub" || die "the TEST worker doesn't trust $test_key"
 else
   if has "$worker" RBSP_TEST_PROGRAMS utf16; then die "the release worker reads RBSP_TEST_PROGRAMS (a TEST build's)"; fi
+  if has "$worker" RBSP_TEST_WORKER_HOLD utf16; then die "the release worker reads RBSP_TEST_WORKER_HOLD (a TEST build's)"; fi
+  if has "$worker" RBSP_TEST_WORKER_MIDHOLD utf16; then die "the release worker reads RBSP_TEST_WORKER_MIDHOLD (a TEST build's)"; fi
+  # the two target names are read as ANSI (GetEnvironmentVariableA): their ASCII bytes
+  if has "$worker" RBSP_TEST_WORKER_MIDHOLD_TARGET; then die "the release worker reads RBSP_TEST_WORKER_MIDHOLD_TARGET (a TEST build's)"; fi
+  if has "$worker" RBSP_TEST_WORKER_FAIL_TARGET; then die "the release worker reads RBSP_TEST_WORKER_FAIL_TARGET (a TEST build's)"; fi
   for name in release backup; do
     k="$(pubkey_b64 "$root/keys/$name.pub.pem")" || die "keys/$name.pub.pem isn't a P-256 public key"
     has "$worker" "$k" || die "the release worker doesn't trust keys/$name.pub.pem"
@@ -307,10 +334,10 @@ if [ -n "$test_base" ]; then
 elif names "$exe" 'RBSP_SHELL_TEST|RbspTestUpdateBase|core_test_update_base'; then
   die "the release exe carries TEST hooks"
 fi
-# the version resources (release.md §3.2): the shell, the core DLLs and the watchers stamped with
+# the version resources (release.md §3.2): the shell, core DLLs, watchers and prepare helper stamped with
 # the version; the worker and the stubs a constant one (no version, I83); the bridge none
 vres() { python3 -I "$root/scripts/win-version.py" "$1"; }
-for f in "RB Stems Plus.exe" x64/rbsp-core.dll arm64/rbsp-core.dll rbsp-watch-x64.exe rbsp-watch-arm64.exe; do
+for f in "RB Stems Plus.exe" x64/rbsp-core.dll arm64/rbsp-core.dll rbsp-watch-x64.exe rbsp-watch-arm64.exe rbsp-prepare.exe; do
   vr="$(vres "$stage/$f")"
   for want in "fixed.file=$version.0" "fixed.product=$version.0" "string.ProductVersion=$version" "string.ProductName=RB Stems Plus"; do
     printf '%s\n' "$vr" | grep -qxF "$want" || die "$f's version resource has no $want"

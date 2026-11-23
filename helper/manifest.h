@@ -9,9 +9,11 @@
  *   model <64 hex: the model folder>
  *   playlist <rekordbox's playlist ID, or ->
  *   rate <model runs> <their seconds> <threads>
- *   file <size> <mtime in ns> <complete 0|1> <entries> <path>
+ *   file <size> <mtime in ns> <complete 0|1 or 2 for verified Windows AAC> <entries> [hz=<source rate>] <path>
  *   <64 hex: an entry's key>              (one line per entry)
+ *   decoder <Media Foundation AAC decoder file version>  (optional Windows row)
  *
+ * Windows records the pre-resample rate when known. Anything other than 44100 requires proof.
  * A path with a newline isn't recorded. Paths are compared with common/path_rules.h's paths_same
  * (helper.md §4); the folder is opened, and the file written and renamed, through common/'s file
  * layer. */
@@ -19,13 +21,26 @@
 #define RBSP_MANIFEST_H
 #include <stddef.h>
 #include "plat_helper.h"
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+#include "aac_mf.h"
+#endif
+
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+enum { MFILE_COMPLETE_AAC = 2 };
+#endif
 
 typedef struct {
     char *path;
     long long size, mtime_ns;
-    int complete;                       /* every chunk was done (not stopped in the middle) */
+    int complete;                       /* every chunk was done and for Windows AAC its length was verified */
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+    int source_rate;                    /* 0 in records without a known rate */
+#endif
     size_t nkeys, cap;
     char (*keys)[65];
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+    char decoder[AAC_MF_VERSION_MAX];    /* empty for older records, other codecs or unavailable version */
+#endif
 } mfile;
 
 typedef struct {

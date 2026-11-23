@@ -4,6 +4,10 @@
 # refused, not passing through, no stub given to rekordbox). Then rekordbox closed as a user
 # would and waited for; its process lingers about 75 s and may end with its own crash at exit
 # (phase0-probes.md 2.2), which is no failure here; one still running after that is.
+# Never run in the Parallels VMs (owner's decision, 2026-11-17): they never launch rekordbox,
+# signed in or not, and hold no account; an activated rekordbox runs only on the owner's PC and in
+# tart. So this step always SKIPs here; rekordbox with the shipped bridge is the owner's PC's case
+Skip 'starting rekordbox.exe is not allowed in the VMs (it may activate on the owner''s account)'
 $l = Get-Layout
 if (-not (Read-WorkerFacts)) { Skip 'no facts from the prep step (it failed: its log)' }
 $bridge = ([string](Read-TestPayload).windows.bridge.sha256).ToLowerInvariant()

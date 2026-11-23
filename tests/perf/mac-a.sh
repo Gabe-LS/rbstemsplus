@@ -64,5 +64,5 @@ cp "$tmp/build.log" "$arch_dir/build.log"
   echo "macos=$(sw_vers -productVersion)"
 } > "$arch_dir/toolchain.txt"
 (cd "$arch_dir" && find . -type f ! -name SHA256SUMS | sort | xargs shasum -a 256 > SHA256SUMS)
-seal || die "the gate archive's SHA256SUMS couldn't be written"
+seal mac-A || die "the gate archive's SHA256SUMS couldn't be written"
 echo "mac-A archived in $arch_dir, $A/SHA256SUMS sealed (copy the archive to the second disk)"

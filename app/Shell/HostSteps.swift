@@ -311,8 +311,10 @@ func shellStep(_ kind: core_step, _ args: [String], _ out: OpaquePointer?, _ env
         return 0
 
     case CORE_STEP_REQUEST:
-        let age = arg(0) == "take" ? takeReinstallRequest() : reinstallRequestAge()
+        let take = arg(0) == "take"
+        let age = take ? takeReinstallRequest() : reinstallRequestAge()
         o.i64(FACT_STEP_CODE, age.map { Int64($0) } ?? -1)
+        if !take && age != nil { o.str(FACT_STEP_TEXT, reinstallRequestText()) }
         return 0
 
     case CORE_STEP_BRIDGE_SHA:
@@ -398,8 +400,8 @@ func shellStep(_ kind: core_step, _ args: [String], _ out: OpaquePointer?, _ env
 
     case CORE_STEP_LOCATION_SIZE:
         let dir = arg(0) == "this_mac" ? defaultCacheDir : arg(0)
-        guard !dir.isEmpty else { return 1 }
-        o.i64(FACT_STEP_CODE, entriesSize(dir) ?? 0)
+        guard !dir.isEmpty, let size = entriesSize(dir) else { return 1 }
+        o.i64(FACT_STEP_CODE, size)
         return 0
 
     case CORE_STEP_LOCATION_WRITABLE:
@@ -756,8 +758,10 @@ private func updateSwap(_ env: ShellStepEnv) -> Int32 {
         safeRemove(updateDir)
         return got == .ok ? 3 : fetchedCode(got)
     }
-    // the swap couldn't be started: the app stays open and says the update failed (3)
-    guard afterExit(poll: "0.2", Controller.updateScript,
+    // the swap couldn't be started: the app stays open and says the update failed (3). It checks
+    // every 0.05 s whether this app has quit: at 0.2 s the new app often started a whole check
+    // later (G2 P14, 2026-11-17: the handover took ~320 or ~520 ms by where the exit fell)
+    guard afterExit(poll: "0.05", Controller.updateScript,
                     [me, newApp, updateDir, logPath, m.app.version, bundleID, busyFile, lsregister, "/usr/bin/open"]) else {
         env.log("update: the swap after quitting couldn't be started")
         safeRemove(updateDir)

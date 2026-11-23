@@ -241,9 +241,9 @@ static void t_blocked(const compat_os *os, const char *scratch) {
     saved->n_win_stems_engine = 1;
 
     /* listed */
-    CHECK(native_listed("7.2.19.0342", saved->win_rekordbox, 1) && native_listed("7.2.19", saved->win_rekordbox, 1)
-              && !native_listed("7.2.190", saved->win_rekordbox, 1) && !native_listed("7.2.1", saved->win_rekordbox, 1)
-              && !native_listed("", saved->win_rekordbox, 1),
+    CHECK(payload_win_rekordbox_supported(saved, "7.2.19.0342") && payload_win_rekordbox_supported(saved, "7.2.19")
+              && !payload_win_rekordbox_supported(saved, "7.2.190") && !payload_win_rekordbox_supported(saved, "7.2.1")
+              && !payload_win_rekordbox_supported(saved, ""),
           "listed: the entry, or it and a '.'");
 
     /* plus: the engine from demucs3_ver.txt beside the model */
@@ -322,6 +322,25 @@ static void t_blocked(const compat_os *os, const char *scratch) {
     free(saved);
     free(inst);
     compat_memo_clear();
+}
+
+static void t_inventory_r1_missing(const compat_os *os, const char *scratch) {
+    inv_list *list = calloc(1, sizeof *list);
+    if (!list) abort();
+    static const int trusts[] = {INV_VERIFIED, INV_UNVERIFIED, INV_SETTLING, INV_NO_ANSWER};
+    list->n = sizeof trusts / sizeof trusts[0];
+    for (int i = 0; i < list->n; i++) {
+        list->it[i].trust = trusts[i];
+        snprintf(list->it[i].folder, sizeof list->it[i].folder, "%s/missing-runtime-%d", scratch, i);
+    }
+    inv_assess_row rows[sizeof trusts / sizeof trusts[0]];
+    native_inv_caps caps[sizeof trusts / sizeof trusts[0]];
+    native_inventory_assess(os, list, NULL, NULL, NULL, rows, caps);
+    CHECK(rows[0].r1 == NF_R1_LIVE_MISSING && rows[1].r1 == NF_R1_LIVE_MISSING,
+          "registered rows with a present EXE still report a missing runtime");
+    CHECK(rows[2].r1 == NF_R1_NOTHING && rows[3].r1 == NF_R1_NOTHING,
+          "settling and no-answer rows without a bridge do not offer R1");
+    free(list);
 }
 
 void test_native_facts(const char *scratch) {
@@ -405,5 +424,6 @@ void test_native_facts(const char *scratch) {
     t_r1(&os, scratch);
     t_blocked(&os, scratch);
     t_r1_read(&os, scratch);
+    t_inventory_r1_missing(&os, scratch);
     compat_memo_clear();
 }

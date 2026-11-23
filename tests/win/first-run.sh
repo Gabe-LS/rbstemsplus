@@ -21,7 +21,7 @@
 #  7  platform, bootstrap, uninstall, update, one at a time, no --record: none fails (a SKIP is
 #     said); the host can delete dist-test/current afterwards
 #  8  Defender's query as SYSTEM: uninstall's defender step passed
-#  9  one --record run per row of tests/win/suites/release.list, then vm-run.sh check HEAD: it
+#  9  one --record run per row of tests/win/suites/release.list, then vm-run.sh check-vm HEAD: it
 #     must fail (exit 1) with exactly one line for each row no suite can pass yet and nothing
 #     else: "no record of S" for a row with no suite; "S ... failed: F.failed" for a row whose
 #     record, the one this step just made, skipped only a known gap's step (GAPS below)
@@ -39,13 +39,8 @@ SHARE="${VMRUN_SHARE:-$(cd "$(git -C "$here" rev-parse --path-format=absolute --
 GATES="${VMRUN_GATES:-$root/build/gates}"   # vm-run.sh's records
 STATE="$SHARE/results/first-run.state"
 ASK_SECS="${FIRST_RUN_ASK_SECS:-600}"   # how long a question waits for the owner
-# the steps that SKIP by design until a suite can drive them (SUITE:STEP): worker.suite's cache-hit
-# (no step loads a track in rekordbox yet; whether a by-hand W13a round may stand in is the
-# owner's open question). check fails closed on their rows; step 9 says so and goes on. The
-# commit that makes cache-hit real removes worker:cache-hit from here (review WS)
-# TODO (review VX9, due with WS5, in the change that adds a second worker row and clears GAPS):
-# step 9 picks the records as check does (rec_for and the snapshot match), wants exactly one, and
-# wants it to say "run RUN_ID" of this run
+# SUITE:STEP pairs that SKIP by design. Remove worker:cache-hit when the release gate accepts the
+# PC cache-hit record (M6). The current VM suite deliberately skips it, and check fails closed.
 GAPS="worker:cache-hit"
 dry=0 from=0
 while [ $# -gt 0 ]; do
@@ -61,9 +56,10 @@ vm_state_said() { [ "$dry" = 1 ] && { echo "(dry run: not asked)"; return; }; se
 
 # bounded SECS CMD...: as vm-run.sh's: CMD in its own group, TERM after SECS (124), or on INT, TERM
 # or HUP (130); then CMD's own cleanup is waited for, as long as vm-run.sh's can take (up to 240 s
-# to stop the VM and 600 s to revert it: 960 s, VT4), and only then KILL. Once CMD ends, whatever
-# it left running in its group is killed too (VT6: a leftover holding the output open). With
-# BOUNDED_PIDFILE set, its own pid goes there once its handlers are set (vmrun's TERM, VX10)
+# to stop the VM, 600 s to revert it and 240 s to stop it again: 1080 s, VT4), and only then
+# KILL. Once CMD ends, whatever it left running in its group is killed too (VT6: a leftover
+# holding the output open). With BOUNDED_PIDFILE set, its own pid goes there once its handlers are
+# set (vmrun's TERM, VX10)
 bounded() {
   perl -e '
     use POSIX ":sys_wait_h";
@@ -81,7 +77,7 @@ bounded() {
         # cut the cleanup of vm-run.sh (stop, revert, unlock) short (VX5)
         alarm 0; $SIG{$_} = "IGNORE" for qw(INT TERM HUP ALRM);
         kill "TERM", -$pid;
-        for (1 .. 1920) { last if waitpid($pid, WNOHANG) != 0; select(undef, undef, undef, 0.5); }
+        for (1 .. 2160) { last if waitpid($pid, WNOHANG) != 0; select(undef, undef, undef, 0.5); }
         kill "KILL", -$pid; waitpid($pid, 0); exit $_[0];
     }
     waitpid($pid, 0);
@@ -284,6 +280,22 @@ only_gaps() {
   [ "$n" -gt 0 ]
 }
 
+# Match the row's snapshot name or ID as vm-run.sh's rec_for does, then require that the sole
+# matching record belongs to the run step 9 just made.
+record_for_run() {
+  local suite="$1" arch="$2" snap="$3" run_id="$4" r s
+  local recs=()
+  for r in "$GATES/$head/vm-win/$suite@"*"-$arch.ok" "$GATES/$head/vm-win/$suite@"*"-$arch.failed"; do
+    [ -f "$r" ] || continue
+    s="$(sed -n 's/^snapshot //p' "$r" | head -1)"
+    if [ "${s%% *}" = "$snap" ] || [ "${s#* }" = "$snap" ]; then recs+=("$r"); fi
+  done
+  [ "${#recs[@]}" = 1 ] || fail "$suite on \"$snap\" ($arch) has ${#recs[@]} records in $GATES/$head/vm-win, expected one"
+  record="${recs[0]}"
+  [ -n "$run_id" ] && [ "$(grep -c '^run ' "$record")" = 1 ] && grep -Fxq "run $run_id" "$record" \
+    || fail "$suite's record ${record##*/} isn't the run step 9 just made (${run_id:-no run ID})"
+}
+
 if step 9 "the record: each row of release.list with --record, then check"; then
   head="$HEAD"
   [ "$dry" = 1 ] || [ "$(git -C "$root" rev-parse HEAD)" = "$head" ] || fail "HEAD moved during the run (it was ${head:0:9})"
@@ -298,24 +310,16 @@ if step 9 "the record: each row of release.list with --record, then check"; then
       expected+="vm-run.sh check: no record of $suite on \"$snap\" ($arch) in $GATES/$head/vm-win"$'\n'
       continue
     fi
-    vmrun 5400 run "$snap" "$root/tests/win/suites/$suite.suite" --record
+    vmrun 5400 run "$snap" "$root/tests/win/suites/$suite.suite" --arch "$arch" --record
     [ "$RC" = 0 ] || fail "the --record run of $suite on \"$snap\" ($arch) didn't pass (exit $RC)"
-    # a known gap's row (WS1, WS3): check fails closed on it with exactly one line, naming the one
-    # record of SUITE@*-ARCH there is, the one this run just made, and only when that record
-    # skipped only the gap's steps; any other record leaves its line unexpected (a stop below)
-    if [ "$dry" = 0 ] && [[ " $GAPS " == *" $suite:"* ]]; then
-      run_id="$(basename "${RES:-none}")"
-      recs=()
-      for r in "$GATES/$head/vm-win/$suite@"*"-$arch.ok" "$GATES/$head/vm-win/$suite@"*"-$arch.failed"; do [ -f "$r" ] && recs+=("$r"); done
-      [ "${#recs[@]}" = 1 ] || fail "$suite ($arch) has ${#recs[@]} records in $GATES/$head/vm-win, not the one this run made: $(for r in "${recs[@]}"; do basename "$r"; done | tr '\n' ' ')"
-      grep -qx "run $run_id" "${recs[0]}" || fail "$suite's record $(basename "${recs[0]}") isn't the run step 9 just made ($run_id)"
-      if [[ "${recs[0]}" == *.failed ]] && only_gaps "$suite" "${recs[0]}"; then
-        gaps+=" $suite"
-        expected+="vm-run.sh check: $suite on \"$snap\" ($arch) failed: $(basename "${recs[0]}")"$'\n'
-      fi
+    [ "$dry" = 0 ] || continue
+    record_for_run "$suite" "$arch" "$snap" "${RES##*/}"
+    if [[ "$record" == *.failed ]] && only_gaps "$suite" "$record"; then
+      gaps+=" $suite"
+      expected+="vm-run.sh check: $suite on \"$snap\" ($arch) failed: ${record##*/}"$'\n'
     fi
   done < <(git -C "$root" show "$head:tests/win/suites/release.list")
-  vmrun 120 check "$head"
+  vmrun 120 check-vm "$head"
   if [ "$dry" = 0 ]; then
     # exit 1 with exactly the expected lines, one per such row, and at least one; or a pass with
     # none expected (check_ok); anything else stops

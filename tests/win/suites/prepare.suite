@@ -1,0 +1,30 @@
+# T17's first checks, the VM half (helper.md "T17's first checks"): the built rbsp-prepare.exe on
+# the VM's CPU (x64 under emulation; no DirectML there), against the VM's installed rekordbox
+# files (onnxruntime.dll and the MP3 decoder from rekordbox's folder, Pioneer's model from the
+# user's rekordbox6 folder); rekordbox itself is never started, signed in or activated. Four
+# 44.1 kHz corpus tracks (WAV, FLAC, MP3, AAC) with both models, then the re-run and the estimate,
+# --keys against rekordbox's own keys from the owner's PC, the exit-2 and 48 kHz refusals, the
+# DirectML fallback, Stop and Pause then Stop. Steps share the user's LocalAppData\rbsp-t17 and
+# run in order. Staged from one checkout:
+#   helper/build-win.sh build/helper-win
+#   helper/build-win.sh --test-timing build/helper-win-timing
+#   RBSP_RESEARCH=1 helper/build-win.sh build/helper-win-research
+#   helper/tests/prepare-vm-stage.sh --release build/helper-win --timing build/helper-win-timing \
+#     --research build/helper-win-research --corpus CORPUS --evidence PC1
+#   tests/win/vm-run.sh run "rekordbox 7.2.19 installed + stems model" prepare
+include lib/vmlib.ps1
+include prepare/lib.ps1
+need file prepare/commit.txt
+need file prepare/release/rbsp-prepare.exe
+need file prepare/timing/rbsp-prepare.exe
+need file prepare/research/rbsp-prepare.exe
+need file prepare/model/stemsplus-model.onnx
+need file prepare/rb-keys.txt
+# MODE       SECS NAME        SCRIPT
+user         600  ours        prepare/ours.ps1
+user         600  pioneer     prepare/pioneer.ps1
+user         300  again       prepare/again.ps1
+user         300  keys        prepare/keys.ps1
+user         300  refuse      prepare/refuse.ps1
+user         300  dml         prepare/dml.ps1
+user         500  stop        prepare/stop.ps1

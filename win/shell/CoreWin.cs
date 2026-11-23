@@ -32,7 +32,11 @@ namespace RbStemsPlus.Shell
         public static extern int core_win_update_at_start([MarshalAs(U8)] string support, [MarshalAs(U8)] string app, [MarshalAs(U8)] string own, WinLogFn log, IntPtr ctx);
         [DllImport(Dll, CallingConvention = C, ExactSpelling = true)]
         public static extern int core_win_update_after_render([MarshalAs(U8)] string support, [MarshalAs(U8)] string app, [MarshalAs(U8)] string own, WinLogFn log, IntPtr ctx);
+        [DllImport(Dll, CallingConvention = C, ExactSpelling = true)]
+        public static extern int core_win_update_shown([MarshalAs(U8)] string support, [MarshalAs(U8)] string own, [Out] byte[] version, UIntPtr cap);
         [DllImport(Dll, CallingConvention = C, ExactSpelling = true)] public static extern int core_win_os_check();
+        /// lifecycle.h's life_token_check: LIFE_TOKEN_OK 0, ELEVATED 1, UAC_OFF 2, SERVICE 3, UNKNOWN 4
+        [DllImport(Dll, CallingConvention = C, ExactSpelling = true)] public static extern int core_win_token_check();
         /// host->facts: the cheap rows (win/c/host_facts.c), main, inside facts only; 1 the sheet
         /// carries FACT_LIB_UNCHECKED, 0 it doesn't, -1 nothing read
         [DllImport(Dll, CallingConvention = C, ExactSpelling = true)] public static extern int core_win_cheap_facts(IntPtr core, IntPtr sheet);
@@ -79,7 +83,6 @@ namespace RbStemsPlus.Shell
         private readonly string support, app, own;
         private readonly LogSink log;
         private readonly WinLogFn logFn;   // kept alive with this object: the DLL calls it during each call
-        private int afterRender;
 
         /// support: %LOCALAPPDATA%\rbstemsplus; app: the running exe's folder (the version folder); own: the app's version.
         public UpdateNative(string support, string app, string own, LogSink log)
@@ -106,7 +109,15 @@ namespace RbStemsPlus.Shell
         public int SwapWait(uint ms) => Call("core_win_swap_wait", () => CoreWin.core_win_swap_wait(support, app, own, ms, logFn, IntPtr.Zero), -1);
         public int SwapFailed() => Call("core_win_swap_failed", () => CoreWin.core_win_swap_failed(support, app, own, logFn, IntPtr.Zero), -1);
         public int OsCheck() => Call("core_win_os_check", CoreWin.core_win_os_check, -1);
+        public int TokenCheck() => Call("core_win_token_check", CoreWin.core_win_token_check, -1);
         public int AtStart() => Call("core_win_update_at_start", () => CoreWin.core_win_update_at_start(support, app, own, logFn, IntPtr.Zero), StartSequence.UpdateFailNone);
+
+        public string ShownVersion()
+        {
+            var version = new byte[64];   // room for update.h's PAYLOAD_VERSION_MAX
+            int n = Call("core_win_update_shown", () => CoreWin.core_win_update_shown(support, own, version, (UIntPtr)version.Length), -1);
+            return n > 0 && n < version.Length ? Encoding.UTF8.GetString(version, 0, n) : own;
+        }
 
         /// Without the core (WU9): the old app named by update\pending (by pid, checked by its start
         /// time within a second, as update_win.c's same_start) waited for, at most ms.
@@ -142,16 +153,11 @@ namespace RbStemsPlus.Shell
         }
 
         /// After the first full snapshot is on screen, once: `started` and the pointers (or the
-        /// leftovers), on a worker thread.
+        /// leftovers). Called by the close gate's handoff worker.
         public void AfterRender()
         {
-            if (Interlocked.Exchange(ref afterRender, 1) != 0) return;
-            var t = new Thread(() =>
-            {
-                int r = Call("core_win_update_after_render", () => CoreWin.core_win_update_after_render(support, app, own, logFn, IntPtr.Zero), -1);
-                if (r > 0) Log("update: the commit didn't finish (" + r + "): the next start finishes it");
-            }) { IsBackground = true, Name = "update after render" };
-            t.Start();
+            int r = Call("core_win_update_after_render", () => CoreWin.core_win_update_after_render(support, app, own, logFn, IntPtr.Zero), -1);
+            if (r > 0) Log("update: the commit didn't finish (" + r + "): the next start finishes it");
         }
 
         /// The stub next to the version folders (%LOCALAPPDATA%\Programs\RB Stems Plus\RB Stems Plus.exe),

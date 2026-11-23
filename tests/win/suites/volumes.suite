@@ -9,26 +9,35 @@
 # C:\rbtest\vol\jt, on the way: "folder"; exFAT holds no reparse points, so an INFO line says the
 # junction case is skipped there); its letter moved to a mount folder ("folder"
 # through it, "ok" by its GUID path); attached again read-only ("read-only"); detached
-# ("not-connected" from location_check and location_gone; the empty mount folder said only).
-# The disk steps run as SYSTEM (diskpart), the checks as the user (unelevated). An empty card
-# reader and a disk set offline stay by hand. Not a release.list row.
+# ("not-connected" from location_check and location_gone, and through the empty mount folder,
+# DRIVE_NO_ROOT_DIR). On NTFS also its disk set offline while mounted in its folder
+# ("not-connected" by its GUID path and from location_gone), then online again. Last, the VM's
+# CD-ROM drive with no disc (DRIVE_CDROM, not ready): "not-connected", the stand-in for an empty
+# card reader (DRIVE_REMOVABLE), which stays by hand. The disk steps run as SYSTEM (diskpart,
+# Set-Disk), the checks as the user (unelevated). Not a release.list row.
 include lib/vmlib.ps1
 include volumes/vlib.ps1
 need vm
 # MODE       SECS NAME                   SCRIPT
 sys          300  ntfs-attach            volumes/attach.ps1
 user         300  ntfs-cases             volumes/cases.ps1
+user         300  ntfs-remove-location   volumes/remove-location.ps1
 sys          120  ntfs-mount-folder      volumes/mount-folder.ps1
 user         300  ntfs-no-letter         volumes/no-letter.ps1
+sys          120  ntfs-offline           volumes/offline.ps1
+user         300  ntfs-offline-check     volumes/offline-check.ps1
+sys          120  ntfs-online            volumes/online.ps1
 sys          120  ntfs-read-only         volumes/read-only.ps1
 user         300  ntfs-read-only-check   volumes/read-only-check.ps1
 sys          120  ntfs-detach            volumes/detach.ps1
 user         300  ntfs-gone              volumes/gone.ps1
 sys          300  exfat-attach           volumes/attach.ps1
 user         300  exfat-cases            volumes/cases.ps1
+user         300  exfat-remove-location   volumes/remove-location.ps1
 sys          120  exfat-mount-folder     volumes/mount-folder.ps1
 user         300  exfat-no-letter        volumes/no-letter.ps1
 sys          120  exfat-read-only        volumes/read-only.ps1
 user         300  exfat-read-only-check  volumes/read-only-check.ps1
 sys          120  exfat-detach           volumes/detach.ps1
 user         300  exfat-gone             volumes/gone.ps1
+user         300  no-media               volumes/no-media.ps1

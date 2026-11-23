@@ -1,19 +1,19 @@
-# The VM runs a release needs (release.md section 8, I76). tests/win/vm-run.sh check COMMIT reads
+# The Windows runs a release needs (release.md section 8, I76). tests/win/vm-run.sh check COMMIT reads
 # this file as committed in COMMIT and passes only when every row has one passing record
-# (tests/win/vm-run.sh run SNAPSHOT SUITE --record) for COMMIT and its TEST payload.json, made with
-# COMMIT's scripts, and no failed one. One row a line:
-#   SUITE  ARCH  SNAPSHOT     ARCH: the VM's own (arm64, x64); SNAPSHOT: its name (the rest of the
-#                             line) or its {id}
-# smoke is vm-run.sh's own check, never a release's. arm64 only: rb-win-template is an ARM64 VM;
-# whether x64 under Prism there fills an x64 row, or x64 is the real PC's round only, is the
-# owner's question. The cases no suite drives are in by-hand.md (never a pass here).
-# worker: the shipped worker and bridge (release.md section 8: install through the shipped
-# worker, rekordbox with the shipped bridge, a cache hit on each newly listed version), by
-# worker.suite. Its cache-hit step SKIPs until a step can load a track in rekordbox, so its record
-# isn't a pass and check fails on this row: no release with an uncarried Windows worker or bridge
-# passes (whether a recorded by-hand W13a round may stand in is the owner's open question).
+# for COMMIT and its TEST payload.json. VM rows use runs made with COMMIT's scripts
+# (tests/win/vm-run.sh run SNAPSHOT SUITE --record) and must have no failed record. One row a line:
+#   SUITE  ARCH  SNAPSHOT     ARCH: arm64, x64 (native) or x64-prism (forced x64 on ARM64);
+#                             SNAPSHOT: its name (the rest of the line) or its {id}
+# rb-win-template is ARM64. Run the platform and startup matrix with --arch ARCH --record.
+# The native x64 PC checklist stays in by-hand.md (VR2, recorded separately). smoke checks
+# vm-run.sh itself.
+# worker: release checks take pc-win.ok from RB-KIT's auto record on the real PC (M6). The
+# snapshot below is used by VM diagnostics, where worker.suite's cache-hit step SKIPs.
 bootstrap  arm64  clean Windows
 uninstall  arm64  clean Windows
 update     arm64  clean Windows
 platform   arm64  clean Windows
-worker     arm64  rekordbox 7.2.19 logged in
+platform   x64-prism  clean Windows
+startup    arm64  clean Windows
+startup    x64-prism  clean Windows
+worker     arm64  rekordbox 7.2.19 installed

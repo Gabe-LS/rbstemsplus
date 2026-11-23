@@ -46,12 +46,14 @@
  *                 from a cache on this Mac); elsewhere its size and time only
  *                 (no header: a track to prepare has no length); a cache on another drive isn't
  *                 looked at at all (a track unchanged since it was prepared is ready; no sizes)
+ *                 Windows needs a recorded source rate to report ready, and proof of resampling
+ *                 if the source rate differs from 44.1 kHz.
  *     --estimate  what preparing would take, without running the model or writing anything but
  *                 the kept sets' folder and a cleared cache folder on this Mac (made; sets past
  *                 their date deleted): each file is ready
  *                 (its manifest record matches the file and every entry is in the cache), to
  *                 prepare (its length from the file's header, about 3 MB an entry: 16 MB a minute,
- *                 AAC twice that) or skipped. With --keep NAME and no files, the set's own files:
+ *                 AAC twice that on the Mac: AAC_OUTPUTS) or skipped. With --keep NAME and no files, the set's own files:
  *                 what the app checks when a set's playlist can't be read (without --playlist:
  *                 a playlist that was read and has no tracks stays empty)
  *
@@ -64,12 +66,14 @@
  * "until", "kept_gb" (every kept set's, with a set), "kept_error", "manifest_error"}. A file
  * that isn't there is skipped with its reason; an input that isn't a local file (a streaming track:
  * the command line's, --list's or a playlist's) is dropped silently, with no line and no count.
- * "result": "stopped" when the run stopped inside a file. With a set, its manifest (manifest.h) is
+ * "result": "stopped" when the run stopped inside a file. A short Windows AAC decode is skipped
+ * with an incomplete diagnostic and the available chunks are kept. With a set, its manifest (manifest.h) is
  * written with it. SIGTERM or SIGINT stops the run after
  * its current chunk ("stopped": "stopped"), the set written. The run is in the utility QoS class.
  * --estimate: per file {"file", "result": "ready", "entries", "gb"}, {"file", "result":
  * "prepare", "seconds", "entries", "gb", "missing" (a prepared file's entries no longer in the
- * cache)} or {"file", "result": "skipped", "why"}; then {"estimate": files, "ready", "prepare",
+ * cache), "approximate" (true for Windows AAC counts based on the sample table)}
+ * or {"file", "result": "skipped", "why"}; then {"estimate": files, "ready", "prepare",
  * "skipped", "entries", "runs", "time_s", "need_gb" (new entries), "kept_gb" (every set's with
  * this one's ready files), "share_gb", "max_gb", "cache_gb", "free_gb", "fits", "fit_files" (how
  * many of the first files fit the share), "max_gb_needed" (the smallest limit whose share holds
@@ -79,13 +83,18 @@
  * when no set can be kept. Exit 0 unless the setup failed. */
 #include <errno.h>
 #include <limits.h>
+#include "win_path_max.h"
 #include <math.h>
+#if !defined(_WIN32)
 #include <pthread/qos.h>
+#endif
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
 #include <sys/sysctl.h>
+#endif
 #include <unistd.h>
 #include "entry.h"
 #include "entries.h"
@@ -101,11 +110,23 @@
 #include "model.h"
 #include "rbsp.h"
 #include "readable.h"
+#if KEPT_CACHE_AT
+#define cache_close plat_dir_close
+#else
+#define cache_root cache
+#define cache_close(cache) ((void)0)
+#endif
+#if defined(_WIN32)
+#include "stdin_stop.h"
+#define THIS_COMPUTER "this PC"
+#else
+#define THIS_COMPUTER "this Mac"
+#endif
 
 /* the helper's stem maths and decoding rules: every entry names it (RBSTEMS_HELPER), a platform
  * prefix and a number ("1" the Mac's, "w1" Windows'); an entry from an older version of this
  * platform's helper isn't "already there", it is rewritten (requirement 1; keep) */
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
 #define HELPER_PLATFORM "w"
 #else
 #define HELPER_PLATFORM ""
@@ -116,7 +137,11 @@
 #define HELPER_VERSION HELPER_PLATFORM HELPER_STR(HELPER_NUMBER)
 #define FREE_FLOOR_MAX 50000000000ULL
 #define ENTRY_EST 3000000LL             /* an entry on disk, for estimates: 2.5 MB measured (Demucs v4), 2.9 (rekordbox's) */
+#if defined(_WIN32)
+#define RUN_S_EST 5.0                   /* Windows (helper.md §3): the VM's CPU 4-8 s, an x64 PC's about 2-4, until a manifest has this PC's */
+#else
 #define RUN_S_EST 2.5                   /* seconds a model run, until a set's manifest has this Mac's (the VM: 4 threads) */
+#endif
 
 static void json_str(FILE *f, const char *s) {
     fputc('"', f);
@@ -139,7 +164,7 @@ static int absolute(const char *p, char *out, size_t n) {
 
 /* bytes the cache takes on disk, as the bridge counts (allocated blocks), every regular file of
  * the whole folder; no link followed. The Mac keeps fts, its fast path (helper.md §2a) */
-#if defined(__APPLE__)
+#if !KEPT_CACHE_AT
 static long long disk_used(const char *root) {
     char *const paths[] = {(char *)root, NULL};
     FTS *t = fts_open(paths, FTS_PHYSICAL | FTS_NOCHDIR, NULL);
@@ -152,9 +177,9 @@ static long long disk_used(const char *root) {
 }
 #else
 static int sum_alloc(void *ctx, const char *rel, const plat_stat *st) { (void)rel; *(long long *)ctx += st->alloc; return 0; }
-static long long disk_used(const char *root) {
+static long long disk_used(kept_cache root) {
     long long sum = 0;
-    plat_walk(root, sum_alloc, &sum);                   /* what could be read counts */
+    plat_walk_at(root, sum_alloc, &sum);                /* what could be read counts */
     return sum;
 }
 #endif
@@ -246,6 +271,9 @@ static int keep(plat_dir x, const char *key) {
 }
 
 /* the prefix folder <cache>/<model>/<xx> into *x, made if `create`: 0 or an errno */
+#if KEPT_CACHE_AT
+#define prefix_dir kept_prefix_dir
+#else
 static int prefix_dir(const char *cache, const char *model, const char *key, int create, plat_dir *x) {
     char p[4096];
     if (create) {
@@ -256,6 +284,7 @@ static int prefix_dir(const char *cache, const char *model, const char *key, int
     if (create) plat_mkdir_at(plat_dir_cwd(), p);
     return plat_dir_open(p, x);
 }
+#endif
 
 typedef struct { size_t n; int16_t *pcm; const char *why; } shared;   /* chunk i's stems, per track length */
 
@@ -274,16 +303,20 @@ static int opening(const char *path, double secs, plat_finfo *st, read_state *st
     char why[400];
     const char *folder = "";
     *state = READ_FAILED;
-    if (!paths_local_file(path)) { skipped(path, "not a file on this Mac", NULL, NULL); return 1; }
+    if (!paths_local_file(path)) { skipped(path, "not a file on " THIS_COMPUTER, NULL, NULL); return 1; }
     *state = readable(path, secs, st, why, sizeof why, &folder);
     if (*state == READ_OK) return 0;
     skipped(path, why, *state == READ_ASKING ? "asking" : *state == READ_DENIED ? "denied" : NULL, folder);
     return 1;
 }
 
-static int cache_gone(const char *cache) {
+static int cache_gone(kept_cache cache) {
     plat_stat st;
+#if KEPT_CACHE_AT
+    return plat_dir_stat(cache, &st) || st.kind != PLAT_DIR;
+#else
     return plat_stat_path(cache, 1, &st) || st.kind != PLAT_DIR;
+#endif
 }
 
 static const char *share_stop(char *buf, size_t n, double max_bytes) {
@@ -292,13 +325,25 @@ static const char *share_stop(char *buf, size_t n, double max_bytes) {
     return buf;
 }
 
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+/* Only AAC records with a known version can show a decoder change. Legacy records
+ * still go through the full estimate's ordinary audio probe before its reuse check. */
+static int decoder_changed(const mfile *f) {
+    if (!f || !f->decoder[0]) return 0;
+    const char *version = aac_mf_decoder_version();
+    return version[0] && strcmp(f->decoder, version);
+}
+#else
+#define decoder_changed(f) 0
+#endif
+
 /* a track this run skipped (its file can't be opened, decoded or run through the model) that the
  * set's earlier run prepared to its end: its record and its entries still in the cache stay in the
  * set, so a drive unplugged today doesn't unprepare it. ST: the file as it is now (its record must
  * match it), or NULL when it can't be seen. MF: this run's record for it, if one was started.
  * -1 when the cache folder itself can't be seen (its drive unplugged during the run): nothing is
  * known about its entries, nothing was changed, and the run must stop so its records stay. */
-static int carry(manifest *mine, mfile *mf, const manifest *earlier, kept *k, const char *cache, const char *id,
+static int carry(manifest *mine, mfile *mf, const manifest *earlier, kept *k, kept_cache cache, const char *id,
                  const char *path, const plat_finfo *st) {
     if (cache_gone(cache)) return -1;
     const mfile *r = st ? manifest_find(earlier, path, st) : manifest_by_path(earlier, path);
@@ -307,8 +352,16 @@ static int carry(manifest *mine, mfile *mf, const manifest *earlier, kept *k, co
         plat_finfo was = {PLAT_FILE, r->size, r->mtime_ns};
         if (!(mf = manifest_file(mine, path, &was))) return 0;
     }
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+    memcpy(mf->decoder, r->decoder, sizeof mf->decoder);
+#endif
     mf->nkeys = 0;
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+    mf->complete = r->complete;
+    mf->source_rate = r->source_rate;
+#else
     mf->complete = 1;
+#endif
     for (size_t j = 0; j < r->nkeys; j++) {
         long long b = kept_entry_bytes(cache, id, r->keys[j]);
         if (b < 0) { mf->complete = 0; continue; }
@@ -336,9 +389,18 @@ static void t_track(size_t fi, const char *path, size_t chunks, uint64_t decode,
     char ext[12] = "-";
     if (dot && (!slash || dot > slash) && strlen(dot + 1) < sizeof ext)
         for (size_t j = 0; dot[1 + j]; j++) ext[j] = (char)tolower((unsigned char)dot[1 + j]), ext[j + 1] = 0;
+#if defined(_WIN32)
+    /* Windows: the power source and the execution provider too (helper.md §1 prepare.c:637) */
+    char fields[64];
+    model_timing_fields(fields, sizeof fields, model_ac_line_status(), model_ep_used());
+    fprintf(stderr, "rbsp-timing track at=%zu ext=%s chunks=%zu decode_ns=%llu resample_ns=%llu start_ns=%llu end_ns=%llu%s\n",
+            fi, ext, chunks, (unsigned long long)decode, (unsigned long long)resample, (unsigned long long)start,
+            (unsigned long long)end, fields);
+#else
     fprintf(stderr, "rbsp-timing track at=%zu ext=%s chunks=%zu decode_ns=%llu resample_ns=%llu start_ns=%llu end_ns=%llu\n",
             fi, ext, chunks, (unsigned long long)decode, (unsigned long long)resample, (unsigned long long)start,
             (unsigned long long)end);
+#endif
 }
 #endif
 
@@ -346,6 +408,10 @@ static void t_track(size_t fi, const char *path, size_t chunks, uint64_t decode,
 static const char CACHE_GONE[] = "the cache folder can't be read";
 static volatile sig_atomic_t interrupted;
 static void on_signal(int sig) { (void)sig; interrupted = 1; }
+#if defined(_WIN32)
+/* Windows' Stop: stdin's EOF or a "stop" line (stdin_stop.h), from the watcher's thread */
+static void on_stop(void) { interrupted = 1; }
+#endif
 
 /* the kept sets' manifests for model ID and this helper version: what the estimate knows is
  * prepared. *rate: seconds a model run, from the newest manifest whose run used THREADS threads */
@@ -377,6 +443,7 @@ static manifest *manifests(const char *kdir, const char *id, int threads, size_t
     return v;
 }
 
+#if !defined(_WIN32)
 /* iCloud Drive's and other services' folders: macOS may ask before they are read */
 static int cloud_folder(const char *path) {
     const char *h = home_folder();
@@ -388,9 +455,14 @@ static int cloud_folder(const char *path) {
 static int may_ask(const char *path) {
     return protected_folder(path)[0] || paths_other_drive(path) || cloud_folder(path);
 }
+#else
+/* whether even a look at PATH's size may wait or download it: another drive, a network or
+ * removable drive, a cloud placeholder (readable.h; its attributes only) */
+static int may_ask(const char *path) { return readable_may_wait(path); }
+#endif
 
 /* a track that can't be looked at now stays in the set with what it holds (carry, in a run) */
-static void est_hold(const manifest *ms, size_t nm, kept *k, const char *cache, const char *id, const char *path) {
+static void est_hold(const manifest *ms, size_t nm, kept *k, kept_cache cache, const char *id, const char *path) {
     for (size_t i = 0; i < nm; i++) {
         const mfile *r = manifest_by_path(&ms[i], path);
         if (!r || !r->complete) continue;
@@ -402,8 +474,40 @@ static void est_hold(const manifest *ms, size_t nm, kept *k, const char *cache, 
     }
 }
 
+/* the estimate's entries per chunk of an AAC file: one per decoder output (decode.c); the Mac's
+ * Apple decoder has two (aac.c), Windows' Media Foundation one (aac_mf.c, Q3 in helper.md §2) */
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+#define AAC_OUTPUTS 1
+#else
+#define AAC_OUTPUTS 2
+#endif
+
+#if defined(_WIN32)
+/* a track's header probe and its decode with their reads bounded (readable_watch_start): a read
+ * that moves nothing for SECS (a share or a drive that stopped answering) is cancelled, the track
+ * skipped, and its drive not waited for again this run. Without the watch, nothing is read. */
+static const char STALLED[] = "its drive stopped answering while it was read: check that it's connected, then check again";
+static const char UNWATCHED[] = "Windows couldn't watch the read: check again";
+static int watched_probe(const char *path, double *sec, int *aac, char *why, size_t n, double secs) {
+    if (readable_watch_start(path, secs)) { snprintf(why, n, "%s", UNWATCHED); return 1; }
+    int r = probe_track(path, sec, aac, why, n);
+    if (readable_watch_stop(r != 0)) snprintf(why, n, "%s", STALLED);
+    return r;
+}
+static int watched_load(const char *path, const char *rb, tracks *ts, char *why, size_t n, double secs) {
+    if (readable_watch_start(path, secs)) { snprintf(why, n, "%s", UNWATCHED); return 1; }
+    int r = load_tracks(path, rb, ts, why, n);
+    if (readable_watch_stop(r != 0)) snprintf(why, n, "%s", STALLED);
+    return r;
+}
+#endif
+
 /* --estimate: what preparing FILES would take (the header comment) */
-static void estimate(char **files, size_t nfiles, const char *cache, const char *id, kept *k, const char *keep_name,
+static void estimate(char **files, size_t nfiles, const char *cache,
+#if KEPT_CACHE_AT
+                     kept_cache cache_root,
+#endif
+                     const char *id, kept *k, const char *keep_name,
                      const char *kdir, int threads, long long max_bytes, double wait, int quick) {
     size_t nm = 0, ready = 0, prep = 0, skip = 0, fit = nfiles, asking = 0, unchecked = 0;
     int cache_off = paths_other_drive(cache) != 0;   /* --quick doesn't read another drive */
@@ -433,11 +537,15 @@ static void estimate(char **files, size_t nfiles, const char *cache, const char 
             const mfile *done = NULL;
             for (size_t i = 0; i < nm && !done; i++) {
                 const mfile *r = manifest_by_path(&ms[i], path);
-                if (r && r->complete) done = r;
+                if (r && r->complete && !decoder_changed(r)) done = r;
             }
             long long gone = 0;     /* the entries in this Mac's cache can be looked at: no prompt there */
-            for (size_t j = 0; done && !cache_off && j < done->nkeys; j++)
-                if (kept_entry_bytes(cache, id, done->keys[j]) < 0) gone++;
+            for (size_t j = 0; done && !cache_off && j < done->nkeys
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+                 && done->source_rate && (done->source_rate == 44100 || rb_resample_build_proved)
+#endif
+                 ; j++)
+                if (kept_entry_bytes(cache_root, id, done->keys[j]) < 0) gone++;
             printf("{\"file\":"); json_str(stdout, path);
             if (done) {
                 if (gone) {
@@ -451,31 +559,57 @@ static void estimate(char **files, size_t nfiles, const char *cache, const char 
                     printf(",\"result\":\"unchecked\"}\n");
                     unchecked++;
                 }
-                if (!cache_off) est_hold(ms, nm, k, cache, id, path);
+                if (!cache_off) est_hold(ms, nm, k, cache_root, id, path);
             }
             else { printf(",\"result\":\"prepare\",\"seconds\":0.0,\"entries\":0,\"gb\":0.000}\n"); prep++; adds[fi] = 0; }
             continue;
         }
         if (quick) {                    /* its size and time only: no read */
-            if (!paths_local_file(path)) { skipped(path, "not a file on this Mac", NULL, NULL); skip++; continue; }
+            if (!paths_local_file(path)) { skipped(path, "not a file on " THIS_COMPUTER, NULL, NULL); skip++; continue; }
             if (plat_finfo_path(path, &st) || st.kind != PLAT_FILE) {
                 skipped(path, "the file isn't there (moved, renamed, or its drive isn't connected)", NULL, NULL);
                 skip++;
-                if (!cache_off) est_hold(ms, nm, k, cache, id, path);
+                if (!cache_off) est_hold(ms, nm, k, cache_root, id, path);
                 continue;
             }
         } else {
-            if (opening(path, wait, &st, &rs)) { skip++; asking += rs == READ_ASKING; est_hold(ms, nm, k, cache, id, path); continue; }
-            if (probe_track(path, &sec, &aac, why, sizeof why)) { skipped(path, why, NULL, NULL); skip++; est_hold(ms, nm, k, cache, id, path); continue; }
+            if (opening(path, wait, &st, &rs)) { skip++; asking += rs == READ_ASKING; est_hold(ms, nm, k, cache_root, id, path); continue; }
+#if defined(_WIN32)
+            if (watched_probe(path, &sec, &aac, why, sizeof why, wait)) { skipped(path, why, NULL, NULL); skip++; est_hold(ms, nm, k, cache_root, id, path); continue; }
+#else
+            if (probe_track(path, &sec, &aac, why, sizeof why)) { skipped(path, why, NULL, NULL); skip++; est_hold(ms, nm, k, cache_root, id, path); continue; }
+#endif
         }
         const mfile *rec = NULL;
         for (size_t i = 0; i < nm && !rec; i++) {
             const mfile *r = manifest_find(&ms[i], path, &st);
-            if (r && r->complete) rec = r;
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+            if (r && !r->nkeys) continue;     /* earlier helpers could mark a refused track complete */
+            if (r && aac && r->complete != MFILE_COMPLETE_AAC) continue;
+#endif
+            if (r && r->complete && !decoder_changed(r)) rec = r;
         }
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+        if (quick && rec) {
+            if (!rec->source_rate) {
+                printf("{\"file\":"); json_str(stdout, path);
+                printf(",\"result\":\"unchecked\"}\n");
+                fflush(stdout);
+                unchecked++;
+                if (!cache_off) est_hold(ms, nm, k, cache_root, id, path);
+                continue;
+            }
+            if (rec->source_rate != 44100 && rb_win_rate_refused(rec->source_rate, "", why, sizeof why)) {
+                skipped(path, why, NULL, NULL);
+                skip++;
+                if (!cache_off) est_hold(ms, nm, k, cache_root, id, path);
+                continue;
+            }
+        }
+#endif
         long long have = 0, missing = 0, fe, fr;
         for (size_t j = 0; rec && j < rec->nkeys; j++) {     /* what is there stays: it is kept again */
-            long long b = quick && cache_off ? 0 : kept_entry_bytes(cache, id, rec->keys[j]);
+            long long b = quick && cache_off ? 0 : kept_entry_bytes(cache_root, id, rec->keys[j]);
             if (b < 0) missing++;
             else { have += b; kept_add(k, id, rec->keys[j], b); }
         }
@@ -484,9 +618,17 @@ static void estimate(char **files, size_t nfiles, const char *cache, const char 
             ready++;
             printf(",\"result\":\"ready\",\"entries\":%zu,\"gb\":%.3f}\n", rec->nkeys, have / 1073741824.0);
         } else {
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+            /* Recover the probe's integral frame count after converting it to seconds: AAC's, and
+             * a counted length's at 44.1 kHz or resampled (decode.c gives the converter's exact
+             * output count, rb_resample_out_frames); MP3's estimate is rounded alike */
+            double frames = sec * 44100;
+            size_t ch = sec > 0 ? n_chunks((size_t)round(frames)) : 0;
+#else
             size_t ch = sec > 0 ? n_chunks((size_t)(sec * 44100)) : 0;
-            fe = rec ? missing : (long long)ch * (aac ? 2 : 1);   /* AAC: two decoder outputs, one run */
-            fr = rec ? (aac ? (missing + 1) / 2 : missing) : (long long)ch;
+#endif
+            fe = rec ? missing : (long long)ch * (aac ? AAC_OUTPUTS : 1);   /* AAC: each decoder output, one run */
+            fr = rec ? (aac ? (missing + AAC_OUTPUTS - 1) / AAC_OUTPUTS : missing) : (long long)ch;
             need += fe * ENTRY_EST;
             adds[fi] = fe * ENTRY_EST;
             if (!rec && own_ok) {
@@ -498,6 +640,9 @@ static void estimate(char **files, size_t nfiles, const char *cache, const char 
             prep++;
             printf(",\"result\":\"prepare\",\"seconds\":%.1f,\"entries\":%lld,\"gb\":%.3f", sec, fe, fe * ENTRY_EST / 1073741824.0);
             if (rec) printf(",\"missing\":%lld", missing);
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+            if (aac && !rec) printf(",\"approximate\":true");
+#endif
             printf("}\n");
         }
         fflush(stdout);
@@ -528,7 +673,7 @@ static void estimate(char **files, size_t nfiles, const char *cache, const char 
            "\"need_gb\":%.3f,\"kept_gb\":%.3f,\"share_gb\":%.3f,\"max_gb\":%.4g,\"cache_gb\":%.3f,\"free_gb\":%.3f,"
            "\"fits\":%s,\"fit_files\":%zu,\"max_gb_needed\":%.3f,\"disk_ok\":%s,\"asking\":%zu,\"unchecked\":%zu,\"folders\":[",
            nfiles, ready, prep, skip, entries, runs, runs * rate, need / 1073741824.0, kb / 1073741824.0,
-           share / 1073741824.0, max_bytes / 1073741824.0, blind ? 0 : disk_used(cache) / 1073741824.0, free_ / 1e9,
+           share / 1073741824.0, max_bytes / 1073741824.0, blind ? 0 : disk_used(cache_root) / 1073741824.0, free_ / 1e9,
            !keeping || prep == 0 || kb + need <= share ? "true" : "false", fit, (kb + need) / KEPT_SHARE / 1073741824.0,
            free_ - floor_ >= (double)need ? "true" : "false", asking, unchecked);
     for (int i = 0, n = 0; i < 3; i++) if (folders & 1 << i) printf("%s\"%s\"", n++ ? "," : "", PROT[i]);
@@ -543,7 +688,7 @@ static void estimate(char **files, size_t nfiles, const char *cache, const char 
  * itself, so a release build's bytes stay 1.3.0's */
 static int model_id(const char *model_path, char id[65], int *ours) {
     char fp[65];
-    if (file_sha256(model_path, fp)) { fprintf(stderr, "can't read the model %s\n", model_path); return 1; }
+    if (file_sha256(model_path, fp, NULL)) { fprintf(stderr, "can't read the model %s\n", model_path); return 1; }
     *ours = !strcmp(fp, OURS_V4);
     if (!*ours && strcmp(fp, PIONEER_0002)) { fprintf(stderr, "not a model the bridge caches: %s\n", fp); return 1; }
     if (*ours) memcpy(id, fp, 65);
@@ -572,13 +717,24 @@ static int print_keys(const char *model_path, const char *rb, const char *list, 
         files[nfiles++] = strdup(argv[i]);
     }
     if (list) {
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+        FILE *lf = fopen(list, "rb");
+#else
         FILE *lf = fopen(list, "r");
+#endif
         if (!lf) { fprintf(stderr, "can't read %s\n", list); return 1; }
         char *line = NULL;
         size_t ln = 0;
         ssize_t r;
+#ifdef _WIN32
+        while ((r = plat_getline(&line, &ln, lf)) > 0) {
+#else
         while ((r = getline(&line, &ln, lf)) > 0) {
+#endif
             if (line[r - 1] == '\n') line[--r] = 0;
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+            if (r && line[r - 1] == '\r') line[--r] = 0;   /* a list written with CRLF (read in binary mode) */
+#endif
             if (!r) continue;
             if (nfiles == cap) files = realloc(files, sizeof(char *) * (cap *= 2));
             files[nfiles++] = strdup(line);
@@ -612,6 +768,9 @@ static int print_keys(const char *model_path, const char *rb, const char *list, 
 #endif
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    if (plat_exe_start()) { fprintf(stderr, "plat_exe_start failed\n"); return 1; }
+#endif
     long first_n = -1;
     const char *model_path = NULL, *cache = NULL, *list = NULL, *playlist = NULL, *libpath = NULL, *keep_name = NULL, *kept_dir = NULL;
     const char *track_list = NULL;
@@ -619,8 +778,22 @@ int main(int argc, char **argv) {
 #ifdef RBSP_RESEARCH
     int keys = 0;
 #endif
+#ifdef RBSP_TEST_FORMAT_RATES
+    int test_unproved_aac = 0;
+    int test_unproved_mp3 = 0;
+    int test_unproved_rates = 0;
+#endif
     double keep_days = 10, wait = -1;
     long long until = 0;
+#if defined(_WIN32)
+    /* no default guessed (helper.md §1 prepare.c:494): the core passes both, and the run path
+     * refuses them unless drive-absolute */
+    const char *rb = "";
+    const char *ort = "";
+    double max_gb = 20;
+    int chosen = 0, first = argc, dml = 0;
+    int threads = model_default_threads(model_active_processors());
+#else
     const char *rb = "/Applications/rekordbox 7/rekordbox.app";
     const char *ort = "/Library/Application Support/rbstemsplus/ort/libonnxruntime.1.18.0.dylib";
     double max_gb = 20;
@@ -628,6 +801,7 @@ int main(int argc, char **argv) {
     size_t sz = sizeof ncpu;
     if (sysctlbyname("hw.activecpu", &ncpu, &sz, NULL, 0) || ncpu < 1) ncpu = 2;
     int threads = ncpu / 2 > 1 ? ncpu / 2 : 1;
+#endif
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--model") && i + 1 < argc) model_path = argv[++i];
         else if (!strcmp(argv[i], "--cache") && i + 1 < argc) cache = argv[++i];
@@ -650,15 +824,44 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--kept-dir") && i + 1 < argc) kept_dir = argv[++i];
         else if (!strcmp(argv[i], "--rekordbox") && i + 1 < argc) rb = argv[++i];
         else if (!strcmp(argv[i], "--ort") && i + 1 < argc) ort = argv[++i];
+#if defined(_WIN32)
+        else if (!strcmp(argv[i], "--dml")) dml = 1;   /* DirectML (helper.md §3): the CPU otherwise */
+#endif
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+        /* the core's: --rekordbox's rekordbox.exe is in windows.resampler_proved (Q15, helper.md §2) */
+        else if (!strcmp(argv[i], "--resample-proved")) rb_resample_build_proved = 1;
+#endif
 #ifdef RBSP_RESEARCH
         else if (!strcmp(argv[i], "--keys")) keys = 1;
+#endif
+#ifdef RBSP_TEST_FORMAT_RATES
+        else if (!strcmp(argv[i], "--test-unproved-aac")) test_unproved_aac = 1;
+        else if (!strcmp(argv[i], "--test-unproved-mp3")) test_unproved_mp3 = 1;
+        else if (!strcmp(argv[i], "--test-unproved-rates")) test_unproved_rates = 1;
 #endif
         else if (!strncmp(argv[i], "--", 2)) { fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
         else { first = i; break; }
     }
+#ifdef RBSP_TEST_FORMAT_RATES
+    if ((test_unproved_aac || test_unproved_mp3 || test_unproved_rates) && (!keys || !rb_resample_build_proved)) {
+        fprintf(stderr, "%s requires --keys and --resample-proved\n",
+                test_unproved_aac ? "--test-unproved-aac" :
+                test_unproved_mp3 ? "--test-unproved-mp3" : "--test-unproved-rates");
+        return 2;
+    }
+    rb_aac_test_unproved = test_unproved_aac;
+    rb_mp3_test_unproved = test_unproved_mp3;
+    rb_rates_test_unproved = test_unproved_rates;
+#endif
 #ifdef RBSP_RESEARCH
     if (keys) {
         if (!model_path) { fprintf(stderr, "usage: %s --keys --model MODEL.onnx [--rekordbox APP] [--list FILE] FILE...\n", argv[0]); return 2; }
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+        if (!paths_local_file_win(rb) || rb[1] != ':') {
+            fprintf(stderr, "--rekordbox needs a drive-absolute path\n");
+            return 2;
+        }
+#endif
         return print_keys(model_path, rb, list, argv + first, argc - first);
     }
 #endif
@@ -696,10 +899,21 @@ int main(int argc, char **argv) {
                         "       %s --tracks ID [--library DB]\n", argv[0], argv[0], argv[0]);
         return 2;
     }
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+    if (!estimating && (!paths_local_file_win(rb) || rb[1] != ':')) {
+        fprintf(stderr, "--rekordbox needs a drive-absolute path\n");
+        return 2;
+    }
+    if (!estimating && (!paths_local_file_win(ort) || ort[1] != ':')) {
+        fprintf(stderr, "--ort needs a drive-absolute path\n");
+        return 2;
+    }
+#endif
     /* the model that runs decides the folder (requirement 8): ours under its checksum, rekordbox's
      * under the bridge's rebuilt id (written out here, not through model_id: release bytes as 1.3.0) */
     char fp[65], id[65];
-    if (file_sha256(model_path, fp)) { fprintf(stderr, "can't read the model %s\n", model_path); return 1; }
+    plat_model_info model_info;
+    if (file_sha256(model_path, fp, estimating ? NULL : &model_info)) { fprintf(stderr, "can't read the model %s\n", model_path); return 1; }
     int ours = !strcmp(fp, OURS_V4);
     if (!ours && strcmp(fp, PIONEER_0002)) { fprintf(stderr, "not a model the bridge caches: %s\n", fp); return 1; }
     if (ours) memcpy(id, fp, 65);
@@ -711,14 +925,18 @@ int main(int argc, char **argv) {
     cache = cache_abs;
     if (kept_dir && kept_dir[0] && absolute(kept_dir, kdir_abs, sizeof kdir_abs)) { fprintf(stderr, "the kept sets' folder can't be read: %s\n", kept_dir); return 1; }
     if (kept_dir && kept_dir[0]) kept_dir = kdir_abs;   /* "": kept_open's "no home folder" */
+#if !KEPT_CACHE_AT
     plat_stat cst;
+#endif
     /* --quick with the cache on another drive doesn't look at it (not even this stat): a read there
      * may bring up macOS's privacy prompt over rekordbox */
     int cache_blind = quick && paths_other_drive(cache);
     /* this Mac's may have been cleared; the bridge makes it again only once rekordbox runs a model.
      * A chosen location's is never made: its absence means the drive or the folder is gone */
     if (!cache_blind && !chosen) plat_mkdir_at(plat_dir_cwd(), cache);
+#if !KEPT_CACHE_AT
     if (!cache_blind && (plat_stat_path(cache, 1, &cst) || cst.kind != PLAT_DIR)) { fprintf(stderr, "no cache folder %s\n", cache); return 1; }
+#endif
 
     /* the files: the command line's, then the list's. An input that isn't a local file (a streaming
      * track) is dropped here, silently: it gets no line and isn't in any count, the totals, the
@@ -732,13 +950,24 @@ int main(int argc, char **argv) {
         files[nfiles++] = strdup(argv[i]);
     }
     if (list) {
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+        FILE *lf = fopen(list, "rb");
+#else
         FILE *lf = fopen(list, "r");
+#endif
         if (!lf) { fprintf(stderr, "can't read %s\n", list); return 1; }
         char *line = NULL;
         size_t ln = 0;
         ssize_t r;
+#ifdef _WIN32
+        while ((r = plat_getline(&line, &ln, lf)) > 0) {
+#else
         while ((r = getline(&line, &ln, lf)) > 0) {
+#endif
             if (line[r - 1] == '\n') line[--r] = 0;
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+            if (r && line[r - 1] == '\r') line[--r] = 0;   /* a list written with CRLF (read in binary mode) */
+#endif
             if (!r) continue;
             given++;
             if (!paths_local_file(line)) continue;
@@ -746,6 +975,15 @@ int main(int argc, char **argv) {
             files[nfiles++] = strdup(line);
         }
         free(line);
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+        if (ferror(lf) || !feof(lf)) {
+            fclose(lf);
+            for (size_t i = 0; i < nfiles; i++) free(files[i]);
+            free(files);
+            fprintf(stderr, "can't read %s\n", list);
+            return 1;
+        }
+#endif
         fclose(lf);
     }
     if (playlist) {
@@ -765,34 +1003,72 @@ int main(int argc, char **argv) {
 
     /* the kept sets: this run's (a playlist's, or --keep), and the others, which count towards the
      * share and are never removed to make room */
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+    char kdir[PATH_MAX];
+    if (kept_dir) {
+        int r = snprintf(kdir, sizeof kdir, "%s", kept_dir);
+        if (r < 0 || (size_t)r >= sizeof kdir) {
+            fprintf(stderr, "the kept sets' folder path is too long\n");
+            return 1;
+        }
+    } else kept_default_dir(kdir, sizeof kdir);
+#else
     char kdir[1024];
     if (kept_dir) snprintf(kdir, sizeof kdir, "%s", kept_dir);
     else kept_default_dir(kdir, sizeof kdir);
+#endif
+#if KEPT_CACHE_AT
+    kept_cache cache_root = plat_dir_cwd();              /* unopened, with no sizes in a blind estimate */
+    if (!cache_blind && plat_dir_open(cache, &cache_root)) { fprintf(stderr, "no cache folder %s\n", cache); return 1; }
+    kept *k = kept_open(kdir, keep_name, (time_t)until, cache_root, why, sizeof why);
+#else
     kept *k = kept_open(kdir, keep_name, (time_t)until, cache_blind ? "" : cache, why, sizeof why);   /* "": no sizes */
+#endif
     long long max_bytes = (long long)(max_gb * 1073741824.0);
     if (estimating) {
-        if (!k) { printf("{\"refused\":"); json_str(stdout, why); printf("}\n"); return 0; }
+        if (!k) { printf("{\"refused\":"); json_str(stdout, why); printf("}\n"); cache_close(cache_root); return 0; }
         manifest own;
         if (!given && !playlist && keep_name && manifest_read(kdir, keep_name, &own) == 0) {    /* the set's own files */
             files = realloc(files, sizeof(char *) * (own.n ? own.n : 1));
             for (size_t i = 0; i < own.n; i++) files[nfiles++] = strdup(own.f[i].path);
             manifest_free(&own);
         }
-        estimate(files, nfiles, cache, id, k, keep_name, kdir, threads, max_bytes, wait < 0 ? 2 : wait, quick);
+        estimate(files, nfiles, cache,
+#if KEPT_CACHE_AT
+                 cache_root,
+#endif
+                 id, k, keep_name, kdir, threads, max_bytes, wait < 0 ? 2 : wait, quick);
         kept_close(k);
+        cache_close(cache_root);
         for (size_t i = 0; i < nfiles; i++) free(files[i]);
         free(files);
         return 0;
     }
-    if (!k) { fprintf(stderr, "%s\n", why); return 1; }
+    if (!k) { fprintf(stderr, "%s\n", why); cache_close(cache_root); return 1; }
+    int rc = 1;
+    model *m = NULL;
+    float *c = malloc(sizeof(float) * 2 * CHUNK_L);
+    if (!c) { fprintf(stderr, "out of memory\n"); goto run_cleanup; }
+#if defined(_WIN32)
+    /* next to a playing rekordbox: below normal, out of EcoQoS (model_background) */
+    if (model_background()) fprintf(stderr, "the run's priority or power throttling couldn't be set\n");
+#else
     /* next to a playing rekordbox: the utility class (its threads, ONNX Runtime's included, inherit it) */
     pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+#endif
     signal(SIGTERM, on_signal);
     signal(SIGINT, on_signal);
+#if defined(_WIN32)
+    /* the app's Stop of a run (stdin_stop.h); without a stdin, only the end of the process stops it */
+    if (stop_watch_start(on_stop)) fprintf(stderr, "no stdin to watch: this run stops only when it ends or is ended\n");
+#endif
     if (wait < 0) wait = 60;
-    if (model_load_ort(ort, why, sizeof why)) { fprintf(stderr, "%s\n", why); return 1; }
-    model *m = model_open(model_path, threads, ours, why, sizeof why);
-    if (!m) { fprintf(stderr, "%s\n", why); return 1; }
+#if defined(_WIN32)
+    if (dml) model_use_dml(rb);          /* a failure is said on stderr: the CPU then */
+#endif
+    if (model_load_ort(ort, why, sizeof why)) { fprintf(stderr, "%s\n", why); goto run_cleanup; }
+    m = model_open(model_path, &model_info, threads, ours, why, sizeof why);
+    if (!m) { fprintf(stderr, "%s\n", why); goto run_cleanup; }
 
     /* the set's manifest: this run's files, and the earlier one's (kept while the run goes) */
     manifest mine = {0}, earlier = {0};
@@ -815,7 +1091,7 @@ int main(int argc, char **argv) {
      * left the playlist, another model's) hold neither the share nor the room, as the estimate
      * says, and leave the set when the run finishes. With the cache out of reach nothing is known,
      * and the run stops below */
-    if (keep_name && !cache_gone(cache)) {
+    if (keep_name && !cache_gone(cache_root)) {
         for (size_t fi = 0; same_model && fi < nfiles; fi++) {
             const mfile *r = manifest_by_path(&earlier, files[fi]);
             plat_finfo st;
@@ -829,11 +1105,10 @@ int main(int argc, char **argv) {
         kept_release(k);
     }
 
-    long long used = disk_used(cache);
+    long long used = disk_used(cache_root);
     long long share = (long long)(KEPT_SHARE * (double)max_bytes);
     long long next = 4LL << 20;        /* an entry: about 3 MB (8 channels, 16-bit, 11 s, FLAC) */
     time_t written_at = time(NULL);
-    float *c = malloc(sizeof(float) * 2 * CHUNK_L);
     const char *stop = NULL;
     char stopbuf[200];
     size_t done = 0;
@@ -845,57 +1120,123 @@ int main(int argc, char **argv) {
         if (interrupted) { stop = "stopped"; break; }
         /* its drive unplugged during the run: nothing can be known about its entries, and the
          * records of the tracks not reached stay as they were */
-        if (cache_gone(cache)) { stop = CACHE_GONE; break; }
+        if (cache_gone(cache_root)) { stop = CACHE_GONE; break; }
         if (opening(path, wait, &fst, &rs)) {                           /* one file never stops the batch */
-            if (keep_name && have_earlier && carry(&mine, NULL, &earlier, k, cache, id, path, NULL)) stop = CACHE_GONE;
+            if (keep_name && have_earlier && carry(&mine, NULL, &earlier, k, cache_root, id, path, NULL)) stop = CACHE_GONE;
             continue;
         }
-        /* changed since this set prepared it: what it held stays protected only if the run finds it */
-        if (same_model && !manifest_find(&earlier, path, &fst)) {
-            const mfile *old = manifest_by_path(&earlier, path);
-            for (size_t j = 0; old && j < old->nkeys; j++) kept_unhold(k, old->keys[j]);
+        /* changed track or decoder: what it held stays protected only if the run finds it */
+        if (same_model) {
+            const mfile *r = manifest_find(&earlier, path, &fst);
+            if (!r || decoder_changed(r)) {
+                const mfile *old = r ? r : manifest_by_path(&earlier, path);
+                for (size_t j = 0; old && j < old->nkeys; j++) kept_unhold(k, old->keys[j]);
+            }
         }
         /* unchanged since a set's manifest recorded it, every entry still there: nothing to decode,
          * its entries are used now (touched) and kept again */
         const mfile *rec = NULL;
         for (size_t i = 0; i < nms && !rec; i++) {
             const mfile *r = manifest_find(&ms[i], path, &fst);
-            if (r && r->complete) rec = r;
+            if (r && r->complete && !decoder_changed(r)) rec = r;
         }
         /* nothing recorded (every part refused, or silent): decoded again, so the line says why */
         if (rec && rec->nkeys == 0) rec = NULL;
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+        /* the estimate probes an unchanged track too: the run refuses what the probe refuses, with
+         * the same line (e.g. a resampled rate without --resample-proved, Q15), and doesn't report
+         * its earlier entries as prepared */
+        if (rec) {
+            double psec;
+            int paac;
+#if defined(_WIN32)
+            int pr = watched_probe(path, &psec, &paac, why, sizeof why, wait);
+#else
+            int pr = probe_track(path, &psec, &paac, why, sizeof why);
+#endif
+            if (pr) {
+                skipped(path, why, NULL, NULL);
+                if (keep_name && have_earlier && carry(&mine, NULL, &earlier, k, cache_root, id, path, &fst)) stop = CACHE_GONE;
+                continue;
+            }
+            /* Re-derive the keys of old records once so quick checks have the decoded rate. */
+            if (!rec->source_rate || (paac && rec->complete != MFILE_COMPLETE_AAC)) rec = NULL;
+        }
+#endif
         long long more = 0;                 /* what keeping it adds: its entries no set keeps yet */
         for (size_t j = 0; rec && j < rec->nkeys; j++) {
-            long long b = kept_entry_bytes(cache, id, rec->keys[j]);
+            long long b = kept_entry_bytes(cache_root, id, rec->keys[j]);
             if (b < 0) rec = NULL;
             else if (!kept_has(k, rec->keys[j])) more += b;
         }
         if (rec && (!keep_name || more == 0 || kept_bytes(k) + more <= share)) {
             mfile *mf = keep_name ? manifest_file(&mine, path, &fst) : NULL;
             for (size_t j = 0; j < rec->nkeys; j++) {
+#if KEPT_CACHE_AT
+                long long b = kept_touch_entry(cache_root, id, rec->keys[j]);
+                if (b < 0) { rec = NULL; break; }     /* an entry left since the size check */
+                kept_add(k, id, rec->keys[j], b);
+#else
                 char p[4096];
                 snprintf(p, sizeof p, "%s/%s/%.2s/%s.flac", cache, id, rec->keys[j], rec->keys[j]);
                 plat_touch_at(plat_dir_cwd(), p);
                 kept_add(k, id, rec->keys[j], kept_entry_bytes(cache, id, rec->keys[j]));
+#endif
                 mfile_key(mf, rec->keys[j]);
             }
-            if (mf) mf->complete = 1;
-            printf("{\"file\":"); json_str(stdout, path);
-            printf(",\"result\":\"prepared\",\"written\":0,\"already\":%zu,\"silent\":0,\"refused\":0,\"how\":\"unchanged since it was prepared\"}\n", rec->nkeys);
-            fflush(stdout);
-            done++;
-            continue;
+#if KEPT_CACHE_AT
+            if (rec) {
+#endif
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+                if (mf) {
+                    mf->complete = rec->complete;
+                    mf->source_rate = rec->source_rate;
+                    memcpy(mf->decoder, rec->decoder, sizeof mf->decoder);
+                }
+#else
+                if (mf) mf->complete = 1;
+#endif
+                printf("{\"file\":"); json_str(stdout, path);
+                printf(",\"result\":\"prepared\",\"written\":0,\"already\":%zu,\"silent\":0,\"refused\":0,\"how\":\"unchanged since it was prepared\"}\n", rec->nkeys);
+                fflush(stdout);
+                done++;
+                continue;
+#if KEPT_CACHE_AT
+            }
+            if (mf) manifest_drop_last(&mine);
+#endif
         }
         TIMING(uint64_t tt0 = t_now(); t_resample = 0;)
+#if defined(_WIN32)
+        if (watched_load(path, rb, &ts, why, sizeof why, wait)) {
+#else
         if (load_tracks(path, rb, &ts, why, sizeof why)) {
+#endif
             skipped(path, why, NULL, NULL);
-            if (keep_name && have_earlier && carry(&mine, NULL, &earlier, k, cache, id, path, &fst)) stop = CACHE_GONE;
+            if (keep_name && have_earlier && carry(&mine, NULL, &earlier, k, cache_root, id, path, &fst)) stop = CACHE_GONE;
             continue;
         }
         TIMING(uint64_t tt_dec = t_now() - tt0;)
+#ifdef _WIN32
+        fst = ts.source;
+#endif
         mfile *mf = keep_name ? manifest_file(&mine, path, &fst) : NULL;
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+        if (mf) {
+            mf->source_rate = ts.source_rate;
+            if (ts.aac) strcpy(mf->decoder, aac_mf_decoder_version());
+        }
+#endif
         size_t made = 0, already = 0, silent = 0, refused = 0, most = 0;
+#ifdef _WIN32
+        size_t chunks[MAX_TRACKS];
+        for (int t = 0; t < ts.count; t++) {
+            chunks[t] = track_chunks(&ts.t[t]);
+            if (chunks[t] > most) most = chunks[t];
+        }
+#else
         for (int t = 0; t < ts.count; t++) if (n_chunks(ts.t[t].n) > most) most = n_chunks(ts.t[t].n);
+#endif
         int failed = 0;
         for (size_t i = 0; i < most && !stop && !failed; i++) {
             if (interrupted) { stop = "stopped"; break; }
@@ -910,7 +1251,11 @@ int main(int argc, char **argv) {
             char seen[MAX_TRACKS][65];
             int nseen = 0;
             for (int t = 0; t < ts.count && !stop && !failed; t++) {
+#ifdef _WIN32
+                if (i >= chunks[t]) continue;
+#else
                 if (i >= n_chunks(ts.t[t].n)) continue;
+#endif
                 TIMING(uint64_t q0 = t_now(), q1, q2, q_model = 0, q_ort = 0, q_post = 0;)
                 chunk_at(&ts.t[t], i, c);
                 TIMING(q1 = t_now();)
@@ -922,7 +1267,7 @@ int main(int argc, char **argv) {
                 if (dup) continue;
                 memcpy(seen[nseen++], key, 65);
                 plat_dir x;
-                int xe = prefix_dir(cache, id, key, 0, &x);
+                int xe = prefix_dir(cache_root, id, key, 0, &x);
                 if (!xe && keep(x, key)) {       /* prepared again: it counts as used now */
                     char name[80], dn[80];
                     snprintf(name, sizeof name, "%s.flac", key);
@@ -958,11 +1303,11 @@ int main(int argc, char **argv) {
                 if (over_limit(used, next, max_bytes)) {
                     /* with a small limit 80% may not leave room for the next one under 90% */
                     double down_to = 0.8 * (double)max_bytes, under = 0.9 * (double)max_bytes - (double)next;
-                    long long removed = make_room(cache, k, &used, (long long)(under < down_to ? under : down_to));
+                    long long removed = make_room(cache_root, k, &used, (long long)(under < down_to ? under : down_to));
                     if (removed) { printf("{\"room\":%lld,\"cache_gb\":%.3f}\n", removed, used / 1073741824.0); fflush(stdout); }
                 }
                 if ((stop = room(cache, used, next, max_bytes, stopbuf, sizeof stopbuf))) break;
-                if ((xe = prefix_dir(cache, id, key, 1, &x))) { snprintf(stopbuf, sizeof stopbuf, "the cache folder can't be written: %s", strerror(xe)); stop = stopbuf; break; }
+                if ((xe = prefix_dir(cache_root, id, key, 1, &x))) { snprintf(stopbuf, sizeof stopbuf, "the cache folder can't be written: %s", strerror(xe)); stop = stopbuf; break; }
                 int s = 0;
                 while (s < nsh && sh[s].n != ts.t[t].n) s++;
                 if (s == nsh) {
@@ -970,9 +1315,16 @@ int main(int argc, char **argv) {
                     size_t F = 0;
                     TIMING(uint64_t m0 = t_now();)
                     uint64_t t0 = plat_now_mono_ns();
-                    if (model_run(m, c, CHUNK_L, ours, &xo, &xt, &F, why, sizeof why)) {
+                    int model_rc = model_run(m, c, CHUNK_L, ours, &xo, &xt, &F, why, sizeof why);
+                    if (model_rc) {
                         plat_dir_close(x);
-                        failed = 1;
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+                        if (model_rc == MODEL_RUN_BATCH_ERROR) {
+                            snprintf(stopbuf, sizeof stopbuf, "%s", why);
+                            stop = stopbuf;
+                        } else
+#endif
+                            failed = 1;
                         break;
                     }
                     uint64_t t1 = plat_now_mono_ns();
@@ -1017,18 +1369,35 @@ int main(int argc, char **argv) {
             for (int s = 0; s < nsh; s++) free(sh[s].pcm);
         }
         TIMING(t_track(fi, path, most, tt_dec - t_resample, t_resample, tt0, t_now());)
-        if (stop && cache_gone(cache)) {            /* gone during this track: its earlier record stays */
+        if (stop && cache_gone(cache_root)) {            /* gone during this track: its earlier record stays */
             if (mf) { manifest_drop_last(&mine); mf = NULL; }
             stop = CACHE_GONE;
         }
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+        int short_aac = ts.aac_length == AAC_LENGTH_SHORT;
+        if (mf && !failed && !stop && !refused && !short_aac)
+            mf->complete = ts.aac_length == AAC_LENGTH_COMPLETE ? MFILE_COMPLETE_AAC : 1;
+#else
         if (mf) mf->complete = !failed && !stop;
-        if (mf && failed && have_earlier && carry(&mine, mf, &earlier, k, cache, id, path, &fst)) {
+#endif
+        if (mf && failed && have_earlier
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+            && !short_aac
+#endif
+            && carry(&mine, mf, &earlier, k, cache_root, id, path, &fst)) {
             manifest_drop_last(&mine);              /* its earlier record stays */
             mf = NULL;
             stop = CACHE_GONE;
         }
         printf("{\"file\":"); json_str(stdout, path);
         if (failed) { printf(",\"result\":\"skipped\",\"why\":"); json_str(stdout, why); }
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+        else if (short_aac && !stop) {
+            printf(",\"result\":\"skipped\",\"written\":%zu,\"already\":%zu,\"silent\":%zu,\"refused\":%zu,\"why\":",
+                   made, already, silent, refused);
+            json_str(stdout, ts.how);
+        }
+#endif
         else {
             printf(",\"result\":\"%s\",\"written\":%zu,\"already\":%zu,\"silent\":%zu,\"refused\":%zu,\"how\":",
                    stop ? "stopped" : "prepared", made, already, silent, refused);
@@ -1037,7 +1406,11 @@ int main(int argc, char **argv) {
         printf("}\n");
         fflush(stdout);
         tracks_free(&ts);
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_PREPARE)
+        if (!short_aac) done++;
+#else
         done++;
+#endif
         /* what is prepared so far is kept at least once a minute: a run that is killed loses no
          * more (this set's earlier entries stay in the file until the run is done) */
         if (keep_name && !stop && time(NULL) - written_at >= 60) {
@@ -1051,7 +1424,7 @@ int main(int argc, char **argv) {
     char mwhy[400];
     /* --first: what an earlier run prepared of the tracks past N stays in the set */
     for (size_t fi = nrun; keep_name && have_earlier && !stop && fi < nfiles; fi++)
-        if (carry(&mine, NULL, &earlier, k, cache, id, files[fi], NULL)) stop = CACHE_GONE;
+        if (carry(&mine, NULL, &earlier, k, cache_root, id, files[fi], NULL)) stop = CACHE_GONE;
     /* the set becomes this run's tracks only when the run covered them all to the end */
     int whole = !stop;
     if (keep_name && kept_write(k, whole, why, sizeof why)) kept_why = why;
@@ -1072,10 +1445,13 @@ int main(int argc, char **argv) {
     manifest_free(&earlier);
     for (size_t i = 0; i < nms; i++) manifest_free(&ms[i]);
     free(ms);
+    rc = 0;
+run_cleanup:
     kept_close(k);
+    cache_close(cache_root);
     free(c);
     for (size_t i = 0; i < nfiles; i++) free(files[i]);
     free(files);
     model_close(m);
-    return 0;
+    return rc;
 }

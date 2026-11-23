@@ -38,6 +38,7 @@
 set -uo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 vm="${ABAB_VM:-$root/tests/harness/vm.sh}"          # ABAB_VM: the selftest's stub
+clone_file="${ABAB_CLONE_FILE:-$root/build/harness/clone}"   # ABAB_CLONE_FILE: the selftest's own (vm.sh's pointer)
 stats="${ABAB_STATS:-$root/tests/perf/stats.py}"
 # shellcheck source=idle.sh
 . "$root/tests/perf/idle.sh"
@@ -104,7 +105,7 @@ verify_side "$src_b" "$key_b" || exit 2
 
 mkdir -p "$out"
 {
-  echo "label=$label mode=$mode clone=$(cat "$root/build/harness/clone" 2>/dev/null || echo unknown) started=$(date -u +%FT%TZ)"
+  echo "label=$label mode=$mode clone=$(cat "$clone_file" 2>/dev/null || echo rbsp-harness) started=$(date -u +%FT%TZ)"
   echo "A=$za sha256=$(shasum -a 256 "$za" | cut -d' ' -f1)"
   echo "B=$zb sha256=$(shasum -a 256 "$zb" | cut -d' ' -f1)"
   echo "server_A=$src_a key_A=$key_a"

@@ -7,7 +7,7 @@ $l = Get-Layout
 if (-not (Test-Path -LiteralPath $l.Stub)) { Skip 'not installed (the install step failed or was skipped)' }
 Stop-App
 $clr = Join-Path $l.Local 'Microsoft\CLR_v4.0'
-if (-not (Test-Path -LiteralPath (Join-Path $clr 'UsageLogs\RB Stems Plus.exe.log'))) { Skip "no UsageLogs entry in $clr (the app didn't start)" }
+Set-UsageLogEntry (Join-Path $clr 'UsageLogs\RB Stems Plus.exe.log') 1   # (unlib: planted when the CLR wrote none)
 $real = Join-Path $CaseDir 'clr-real'
 Remove-Item -LiteralPath $real -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $CaseDir | Out-Null

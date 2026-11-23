@@ -47,6 +47,18 @@ COMMON_API int plat_stdio_sync(FILE *s);
  * goes on with the others) or fn returned nonzero (which stops it). */
 typedef int (*plat_walk_fn)(void *ctx, const char *rel, const plat_stat *st);
 COMMON_API int plat_walk(const char *path, plat_walk_fn fn, void *ctx);
+#if defined(_WIN32) || defined(RBSP_TEST_PREPARE_CACHE_AT)
+/* The same walk under an already open folder. The caller owns the handle. */
+COMMON_API int plat_walk_at(plat_dir top, plat_walk_fn fn, void *ctx);
+#endif
+
+/* ---------------------------------------------------------------- the model file */
+
+/* Identity from the open model or its path (following links), with the mtime in Unix seconds
+ * and full subsecond precision (nanoseconds on the Mac, 100 ns steps on Windows). */
+typedef struct { plat_id id; int64_t size, mtime; long mtime_nsec; } plat_model_info;
+COMMON_API int plat_model_stat_file(plat_file f, plat_model_info *info);
+COMMON_API int plat_model_stat_path(const char *path, plat_model_info *info);
 
 /* ---------------------------------------------------------------- a track's file */
 
@@ -58,6 +70,22 @@ COMMON_API int plat_walk(const char *path, plat_walk_fn fn, void *ctx);
  * LastWriteTime as Unix ns. 0, or an errno. */
 typedef struct { int kind; int64_t size, mtime_ns; } plat_finfo;
 COMMON_API int plat_finfo_path(const char *path, plat_finfo *fi);
+#if defined(_WIN32) || defined(RBSP_TEST_WIN_RATE)
+/* The same metadata from the handle the decoder reads. */
+COMMON_API int plat_finfo_file(plat_file f, plat_finfo *fi);
+#endif
+
+/* A track opened for reading (the decoders', readable.c's). Windows: by the track path kind
+ * (win_rules.h's wr_track_nt_path: wr_nt_path's paths and validated UNC, "\\server\share\..." or
+ * "\\?\UNC\...", as "\\?\UNC\..."; never a relative, dotted or device path), links followed,
+ * sharing everything, synchronous; plat_finfo_path and plat_path_where take the same paths. UNC is
+ * for track input only: a cache location never takes it (helper.md T13, the UNC ruling). Mac:
+ * plat_file_open_path. 0 or an errno (EINVAL: not a track path) */
+#if defined(_WIN32)
+COMMON_API int plat_track_open(const char *path, plat_file *out);
+#else
+static inline int plat_track_open(const char *path, plat_file *out) { return plat_file_open_path(path, out); }
+#endif
 
 /* ---------------------------------------------------------------- temporary files */
 

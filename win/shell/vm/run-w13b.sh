@@ -20,7 +20,9 @@ rm -rf "$SHARE/shell/app" "$SHARE/shell/app-test"   # results/ is the VM's (root
 mkdir -p "$SHARE/shell" "$SHARE/job"
 [ -d "$out/app-test" ] || { echo "no $out/app-test: build with win/shell/build.sh --test-app" >&2; exit 2; }
 cp -R "$out/app" "$out/app-test" "$SHARE/shell/"
-cp "$here/w13b.ps1" "$here/w13b-fixture.ps1" "$here/prepare-fixture.ps1" "$SHARE/job/"
+[ -f "$SHARE/vm/uia/rbui/rbui.exe" ] || { echo "stage rbui with vm-run.sh stage --build" >&2; exit 2; }
+cp "$here/w13b.ps1" "$here/w13b-checks.ps1" "$here/w13b-fixture.ps1" "$here/prepare-fixture.ps1" \
+  "$root/tests/harness/traces/A/prepare-choose-estimate.jsonl" "$SHARE/job/"
 "$winps" < "$here/install.ps1"
 rc=0
 for part in spike pt; do

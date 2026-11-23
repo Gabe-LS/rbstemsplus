@@ -56,7 +56,11 @@ typedef struct {
     char uninstall_string[COMPAT_PATH_MAX];
     char display_icon[COMPAT_PATH_MAX];
     char install_location[COMPAT_PATH_MAX];
+    int view;                /* COMPAT_VIEW_64 or COMPAT_VIEW_32: the registry view it came from
+                              * (multi-version contract, mv-spec §2.1; 0 until compat_win.c and
+                              * the fakes set it). Diagnostics and inventory.c's dedup only */
 } compat_uninstall;
+enum { COMPAT_VIEW_64 = 1, COMPAT_VIEW_32 = 2 };
 
 /* One process: its image name ("rekordbox.exe"), its full path when this account can read it
  * ("" otherwise: another account's), and its machine (COMPAT_MACHINE_UNKNOWN when unknown). */
@@ -141,10 +145,11 @@ const char *compat_machine_words(uint16_t process, uint16_t native);
 /* compat_file_facts' flags: COMPAT_PIN asks for the AlphaTheta pin too; COMPAT_FRESH reads the
  * file (and pins it) whatever the memo holds, and stores the result.
  *
- * Memoised facts are for display and R1's offer only: the memo's key (path, size, whole-second
- * mtime, identity) misses a same-size rewrite in place within its second. Whatever acts on a
- * file's verdict reads it FRESH, through the handle it holds: W5's worker always does. A finer
- * mtime is a common/plat.h change for a later core lane. */
+ * Display, R1's offer and the resampler check (app.md W2) use memoised facts. The key (path,
+ * size, whole-second mtime, identity) misses a same-size rewrite in place within its second.
+ * W2 accepts that limit to avoid a hash per run: rekordbox updates normally use a new folder,
+ * and a stale resampler flag can cost extra resampling or a cache miss. W5's worker reads a
+ * verdict FRESH through the handle it holds. */
 enum { COMPAT_PIN = 1, COMPAT_FRESH = 2 };
 
 /* one file's facts, from one read: the sha256, the bridge's marker text "rbstems bridge: ",
@@ -156,6 +161,8 @@ typedef struct {
     int64_t size, mtime;
     plat_id id;              /* the file read (exists) */
     payload_sha sha256;      /* "" unless readable */
+    payload_sha code_sha256; /* pe_code_sha256 (pe_code.h) from the same read, "" unless readable and a
+                              * PE that digest takes (mv-spec §2.3; "" until lane B computes it) */
     int marker;              /* holds "rbstems bridge: " (the bridge's own text, Rekordbox.swift) */
     int has_cache_line;      /* the first "rbstems-cache: " is followed by a ';' within 4096 bytes */
     char cache_line[COMPAT_CACHE_LINE_MAX];       /* what's between them (bridgeCacheModels' line, 4095 bytes at most), NUL-ended */

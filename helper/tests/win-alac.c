@@ -5,7 +5,7 @@
  * stdin: one fixture per line, KIND TAB PATH [TAB REF]:
  *   alac   m4a_probe and alac_decode agree with AudioToolbox: rate, channels, bit depth, seconds,
  *          the length (FileLengthFrames), the planar float output byte for byte
- *   same   PATH (a rewritten REF: 64-bit box sizes, size 0) decodes to REF's AudioToolbox output
+ *   same   PATH decodes to REF's AudioToolbox output (also reads FFmpeg's reference PCM WAV)
  *   aac    m4a_probe says AAC where decode.c's is_aac does, with its rate, channels and seconds
  *   refuse m4a_probe or alac_decode refuses it (never a crash)
  *   fuzz   whatever it does, no crash or sanitizer report, and a decode gives its stated length
@@ -107,7 +107,7 @@ static int win(const char *path, int decode, pcm_info *p, pcm_out *o, double *se
     if (plat_file_open_path(path, &f)) { snprintf(why, whyn, "can't open"); return 1; }
     int rc = 1;
     if (plat_file_stat(f, &st)) { snprintf(why, whyn, "can't stat"); goto done; }
-    if (m4a_probe(f, st.size, p, why, whyn)) goto done;
+    if (m4a_probe(f, st.size, ".m4a", p, why, whyn)) goto done;
     if (decode && p->kind == PCM_ALAC) {
         double t0 = now();
         if (pcm_out_init(o, (size_t)p->frames, p->ch)) { snprintf(why, whyn, "out of memory"); goto done; }
@@ -140,7 +140,7 @@ static void test_alac(const char *path, const char *ref) {
     const char *mp = ref ? ref : path;
     probe_info mi;
     if (probe(mp, &mi)) {                /* the Mac helper refuses it: so must this */
-        check(rc != 0, name, "AudioToolbox can't open it; here: %s%s", rc ? "refused too: " : "NOT refused", rc ? why : "");
+        check(!ref && rc != 0, name, "AudioToolbox can't open it; here: %s%s", rc ? "refused too: " : "NOT refused", rc ? why : "");
         if (!rc) pcm_out_free(&o);
         return;
     }
@@ -151,7 +151,7 @@ static void test_alac(const char *path, const char *ref) {
     int mrc = decode_pcm(mp, &ms, &mn, &mrate, &mch, mwhy, sizeof mwhy);
     double tm = now() - t0;
     if (mrc) {                           /* the Mac helper refuses it: so must this */
-        check(rc != 0, name, "AudioToolbox refuses it (%s); here: %s%s", mwhy, rc ? "refused too: " : "NOT refused", rc ? why : "");
+        check(!ref && rc != 0, name, "AudioToolbox refuses it (%s); here: %s%s", mwhy, rc ? "refused too: " : "NOT refused", rc ? why : "");
         if (!rc) pcm_out_free(&o);
         return;
     }
@@ -190,6 +190,12 @@ static void test_aac(const char *path) {
           "probe: %s %d Hz %d ch %.3f s (AudioToolbox: %s '%c%c%c%c' %d Hz %d ch %.3f s)", p.kind == PCM_AAC ? "AAC" : "not AAC", p.rate,
           p.ch, p.seconds, is_aac(mi.format) ? "AAC" : "not AAC", (char)(mi.format >> 24), (char)(mi.format >> 16), (char)(mi.format >> 8),
           (char)mi.format, mi.rate, mi.ch, mi.seconds);
+    if (!strcmp(name, "ff-hop-boundary.m4a")) {
+        size_t chunks = n_chunks((size_t)p.frames);
+        check(p.frames == 481714 && chunks == 1, name,
+              "Windows estimates %zu chunks from %llu frames (want 1 from 481714 stts frames)",
+              chunks, (unsigned long long)p.frames);
+    }
 }
 
 /* reason: when the manifest gives one, the refusal's sentence must contain it */

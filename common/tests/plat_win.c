@@ -807,6 +807,88 @@ static void t_remove_tree(void) {
     plat_dir_close(d);
 }
 
+/* Hold a real mapped image, then retry after the process ends. */
+static void t_remove_running_image(void) {
+    char tree[1100], exe[1300], other[1300];
+    wchar_t ping[MAX_PATH], image[1300], args[] = L"ping.exe -n 30 127.0.0.1";
+    path(tree, sizeof tree, "running-image");
+    plat_mkdirs(tree);
+    snprintf(exe, sizeof exe, "%s\\ping.exe", tree);
+    snprintf(other, sizeof other, "%s\\other.txt", tree);
+    put(other, "remove me");
+    plat_stat st;
+    CHECK(plat_stat_path(other, 0, &st) == 0, "running image: sibling exists before the walk");
+    UINT n = GetSystemDirectoryW(ping, MAX_PATH);
+    if (!n || n >= MAX_PATH - 10 || !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, exe, -1, image, 1300)) {
+        CHECK(0, "running image: construct ping paths");
+        return;
+    }
+    wcscat(ping, L"\\PING.EXE");
+    if (!CopyFileW(ping, image, TRUE)) {
+        CHECK(0, "running image: copy system PING.EXE (%lu)", GetLastError());
+        return;
+    }
+    STARTUPINFOW si = {.cb = sizeof si};
+    PROCESS_INFORMATION pi;
+    if (!CreateProcessW(image, args, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+        CHECK(0, "running image: start scratch copy (%lu)", GetLastError());
+        return;
+    }
+    CHECK(WaitForSingleObject(pi.hProcess, 0) == WAIT_TIMEOUT, "running image: scratch copy is running");
+    CHECK(plat_remove_tree(tree) == EBUSY, "running image: EBUSY");
+    CHECK(WaitForSingleObject(pi.hProcess, 0) == WAIT_TIMEOUT, "running image: process stayed running throughout deletion");
+    CHECK(plat_stat_path(exe, 0, &st) == 0 && plat_stat_path(other, 0, &st) == ENOENT,
+          "running image: exe kept, sibling deleted");
+    TerminateProcess(pi.hProcess, 0);
+    CHECK(WaitForSingleObject(pi.hProcess, 10000) == WAIT_OBJECT_0, "running image: scratch process ended");
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    CHECK(plat_remove_tree(tree) == 0 && plat_stat_path(tree, 0, &st) == ENOENT, "running image: retry removed the rest");
+}
+
+#ifdef PLAT_TEST_REMOVE_TREE
+static char original[1100], moved[1100], target[1100];
+static int swapped;
+
+static void swap_to_junction(const uint16_t *name, size_t n) {
+    static const uint16_t leaf[] = {'s', 'w', 'a', 'p'};
+    if (n != sizeof leaf / sizeof *leaf || memcmp(name, leaf, sizeof leaf)) return;
+    plat_test_tree_before_open = NULL;
+    wchar_t from[1100], to[1100];
+    char cmd[2300];
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, original, -1, from, 1100) ||
+        !MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, moved, -1, to, 1100) || !MoveFileW(from, to)) {
+        CHECK(0, "junction race: move the just-enumerated directory aside (%lu)", GetLastError());
+        return;
+    }
+    snprintf(cmd, sizeof cmd, "mklink /J \"%s\" \"%s\" >NUL", original, target);
+    swapped = run_cmd(cmd) == 0;
+}
+
+static void t_remove_tree_junction_race(void) {
+    char tree[1100], keep[1300];
+    plat_stat st;
+    path(tree, sizeof tree, "reparse-race");
+    path(original, sizeof original, "reparse-race\\swap");
+    path(moved, sizeof moved, "reparse-moved");
+    path(target, sizeof target, "reparse-target");
+    snprintf(keep, sizeof keep, "%s\\keep.txt", target);
+    plat_mkdirs(original);
+    plat_mkdirs(target);
+    CHECK(plat_stat_path(original, 0, &st) == 0 && st.kind == PLAT_DIR, "junction race: original directory exists");
+    put(keep, "outside");
+    CHECK(plat_stat_path(keep, 0, &st) == 0, "junction race: sentinel exists in target");
+    swapped = 0;
+    plat_test_tree_before_open = swap_to_junction;
+    int result = plat_remove_tree(tree);
+    plat_test_tree_before_open = NULL;
+    CHECK(swapped, "junction race: the enumerated entry was replaced before its handle was opened");
+    CHECK(result == 0 && plat_stat_path(tree, 0, &st) == ENOENT, "junction race: tree and replacement junction gone");
+    CHECK(plat_stat_path(moved, 0, &st) == 0 && plat_stat_path(keep, 0, &st) == 0,
+          "junction race: the moved original and target's sentinel survived");
+}
+#endif
+
 /* plat_remove_empty_dir_at (review MT1): only the folder expected, only empty, never followed; in
  * a folder of its own, run in fat mode too (without the junction, MQ4) */
 static void t_remove_empty_dir(void) {
@@ -838,6 +920,16 @@ static void t_remove_empty_dir(void) {
     CHECK(plat_remove_empty_dir_at(e, "empty-file", es.id) == ENOTDIR, "a file: ENOTDIR");
     CHECK(plat_remove_empty_dir_at(e, "empty-one", es.id) == 0 && plat_stat_path(p, 0, &st) == ENOENT, "the one expected, empty: gone");
     CHECK(plat_remove_empty_dir_at(e, "empty-one", es.id) == ENOENT, "again: ENOENT");
+    plat_mkdirs(p);
+    int sampled = plat_stat_path(p, 0, &st) == 0 && st.kind == PLAT_DIR;
+    CHECK(sampled, "same name: recreated and its id sampled");
+    if (sampled) {
+        int stale = !plat_id_same(es.id, st.id);
+        int got = plat_remove_empty_dir_at(e, "empty-one", es.id);
+        printf("INFO same name: %s identity, remove with old id = %d (ESTALE = %d)\n", stale ? "different" : "reused", got, ESTALE);
+        CHECK(got == (stale ? ESTALE : 0) && plat_stat_path(p, 0, &st) == (stale ? 0 : ENOENT),
+              "same name: the old id can remove only an identical file id");
+    }
     if (!fat_only) {
         /* a folder already delete-pending under someone's handle: an error, no crash; gone once closed */
         snprintf(p, sizeof p, "%s\\empty-dp", t);
@@ -1140,6 +1232,37 @@ static void t_full_paths(void) {
     CHECK(plat_remove_tree(p) == 0, "fp removed");
 }
 
+/* Lane A, F1: the exclusive creation handle is also the rollback handle. */
+static void t_created_dir_dispose(void) {
+    plat_dir parent, created = {0};
+    if (plat_dir_open(root, &parent)) abort();
+    int r = plat_mkdir_open_at(parent, "created-cache", 0, &created);
+    CHECK(!r, "create cache exclusively");
+    if (!r) {
+        CHECK(!plat_dir_dispose(created), "dispose the empty cache on the creation handle");
+        plat_dir_close(created);
+        plat_stat st;
+        CHECK(plat_stat_at(parent, "created-cache", &st) == ENOENT, "disposed cache is absent");
+    }
+    plat_dir_close(parent);
+}
+
+/* Lane A, Neon14: observe the indexing attribute on the creation handle itself. */
+static void t_created_dir_not_indexed(void) {
+    plat_dir parent, created = {0};
+    if (plat_dir_open(root, &parent)) abort();
+    int r = plat_mkdir_open_at(parent, "non-indexed-cache", 1, &created);
+    CHECK(!r, "create the cache for the indexing check");
+    if (!r) {
+        FILE_BASIC_INFO b;
+        CHECK(GetFileInformationByHandleEx(created.h, FileBasicInfo, &b, sizeof b) &&
+              (b.FileAttributes & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED), "cache is excluded from indexing on its creation handle");
+        CHECK(!plat_dir_dispose(created), "dispose the cache used for the indexing check");
+        plat_dir_close(created);
+    }
+    plat_dir_close(parent);
+}
+
 int main(int argc, char **argv) {
     /* SCRATCH from the UTF-16 command line: argv is in the ANSI code page, which loses a CJK
      * profile's path (seen in the VM: a profile named J, u-umlaut, "rgen" and "Tokyo" in kanji
@@ -1176,7 +1299,13 @@ int main(int argc, char **argv) {
     t_io_hint();
     t_system();
     t_remove_tree();
+    t_remove_running_image();
+#ifdef PLAT_TEST_REMOVE_TREE
+    t_remove_tree_junction_race();
+#endif
     t_remove_empty_dir();
+    t_created_dir_dispose();
+    t_created_dir_not_indexed();
     t_no_traverse();
     t_full_paths();
     printf("plat_win: %d checks, %d failed\n", checks, failures);

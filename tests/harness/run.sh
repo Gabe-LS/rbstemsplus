@@ -61,6 +61,10 @@ scenario)
   pgrep -x "RB Stems Plus" >/dev/null && quit_app
   sleep 0.3
   for f in "$OUT"/app-*.jsonl "$OUT"/perf-*.tsv "$OUT"/fields.tsv "$OUT"/watcher-*.json; do [ -f "$f" ] && cp "$f" "$RUN/"; done
+  # P14: the probe's afterExit stamps (perf mode), each file's modification time in the VM's
+  # clock, seconds with ns ("afterexit-<pid>-start|work <s.ns>"; tests/perf/stats.py)
+  for f in "$OUT"/afterexit-*; do [ -f "$f" ] && echo "${f##*/} $(stat -f %Fm "$f")"; done > "$RUN/afterexit.txt"
+  [ -s "$RUN/afterexit.txt" ] || rm -f "$RUN/afterexit.txt"
   # the order the copies started in (record.sh pairs the k-th of two runs)
   traces | sed "s|.*/||" > "$RUN/traces.txt"
   [ -f "$FAKE/log/argv.log" ] && cp "$FAKE/log/argv.log" "$RUN/helper-argv.log"

@@ -23,11 +23,9 @@
 # tests/win/suites/release.list as committed in COMMIT has exactly one
 # build/gates/COMMIT/vm-win/SUITE@ID-ARCH.ok for COMMIT and the TEST payload, no .failed, the
 # records in the real one's lines; FAKE_VM_OK: an exit 0 with a vm-win.ok that isn't this
-# commit's or payload's, or none; the real one is tested in tests/win/vm-run-test.sh). Case 12
-# runs the real check on this checkout's own release.list: its worker row blocks every Windows
-# release until worker.suite's cache-hit step passes. Case 13: a row whose suite the commit
-# doesn't have fails 4b in the fake too. Case 14 runs step 4b on the real check and a synthetic
-# record of a one-row release.list, with step 6's second check (RV1) and VMRUN_GATES refused (RV2).
+# commit's or payload's, or none; the real one is tested in tests/win/vm-run-test.sh). Case 13:
+# a row whose suite the commit doesn't have fails 4b in the fake too. Case 14 runs step 4b on
+# the real check with synthetic VM, PC and VR2 records, and exercises step 6's second check.
 #
 #   tests/release/windows-test.sh [RELEASE_SH]    run outside a sandbox: a pseudo-terminal
 set -uo pipefail
@@ -105,6 +103,14 @@ else
   # vmchange: a passing --record rerun during the real build: the row's record is now another run's
   if [ "$d" = "$root/dist" ] && [ "$fault" = vmchange ]; then
     g="$FAKE_DEV/build/gates/$(git -C "$FAKE_DEV" rev-parse HEAD)/vm-win"; mv "$g/one@1111-aaaa-arm64.ok" "$g/one@2222-bbbb-arm64.ok"
+  fi
+  if [ "$d" = "$root/dist" ]; then
+    g="$FAKE_DEV/build/gates/$(git -C "$FAKE_DEV" rev-parse HEAD)"
+    case "$fault" in
+      record-must-stop) exit 37 ;;
+      pcchange) sed -i '' 's/^date .*/date 2026-11-13T00:00:01Z/' "$g/pc-win.ok" ;;
+      handchange) sed -i '' 's/^date .*/date 2026-11-13T00:00:01Z/' "$g/win-by-hand.ok" ;;
+    esac
   fi
   if [ "$w_kind" = carry ]; then cp "$carry/rbstemsplus-windows.zip" "$d/"; else cp "$b/rbstemsplus-windows.zip" "$d/"; w_v="$v"; fi
   if [ "$fault" = noentry ]; then   # the arm64 stub left out of the zip
@@ -208,7 +214,8 @@ cat = lambda pat: b"".join(open(f, "rb").read() for f in sorted(glob.glob(root +
 files = {"RB Stems Plus.exe": cat("win/shell/*") + b"version " + stamp.encode() + drift.encode(),
          "stub/x64/RB Stems Plus.exe": cat("win/c/stub*") + b"x64" + sdrift.encode(),
          "stub/arm64/RB Stems Plus.exe": cat("win/c/stub*") + b"arm64" + sdrift.encode(),
-         "admin/RB Stems Plus.exe": cat("win/admin/*") + adrift.encode(), "NOTICE-windows.txt": cat("win/NOTICE.txt")}
+         "admin/RB Stems Plus.exe": cat("win/admin/*") + adrift.encode(), "NOTICE-windows.txt": cat("win/NOTICE.txt"),
+         "app/rbsp-prepare.exe": b"the Prepare helper"}
 for c in sys.argv[7:]:
     name, path = c.split("=", 1)
     files[name] = open(path, "rb").read()
@@ -278,6 +285,7 @@ esac
 echo "vm-run.sh check: $c passed ($n rows of release.list)"
 VM
 chmod 755 "$dev/scripts/build.sh" "$dev/scripts/build-windows.sh" "$dev/tests/win/vm-run.sh"
+cp "$root/tests/win/gate-record.py" "$dev/tests/win/"
 mkdir -p "$dev/win/shell" "$dev/win/c" "$dev/win/admin" "$dev/win/bridge"
 echo "class App {}" > "$dev/win/shell/App.cs"
 echo "int stub;" > "$dev/win/c/stub.c"
@@ -288,8 +296,8 @@ echo "7.2.19" > "$dev/win/compat.txt"
 commit_all "the Windows fakes"
 export FAKE_DEV="$dev"
 
-# gates NAME [vm]: after NAME's plan, the TEST build in its shape, a passing G3 record for it
-# and, with vm, a passing VM record
+# gates NAME [vm]: after NAME's plan, the TEST build in its shape, a passing G3 record and passing
+# performance records for it and, with vm, passing VM and VR2 records
 gates() {
   local c r
   c="$(g -C "$dev" rev-parse HEAD)"; r="$dev/build/gates/$c"
@@ -299,15 +307,21 @@ gates() {
   rm -rf "$r/g3-mac."* "$r/vm-win."* "$r/vm-win"
   { echo "g3 1"; echo "commit $c"; echo "payload_sha256 $ps"
     echo "plan_sha256 $(shasum -a 256 "$r/plan" | cut -c1-64)"; echo "guests rb26-template"; echo "guest_versions rb26-template=26.6.2"
-    (cd "$dev" && GATES_ARCHIVE="$t/no-archive" tests/mac/g3.sh _t required "$c" "rb26-template") \
+    (cd "$dev" && tests/mac/g3.sh _t required "$c" "rb26-template") \
       | while read -r gg nn; do echo "scenario $gg $nn pass 1min clicks=none"; done
     echo "coverage ok"; echo "result pass"; } > "$r/g3-mac.ok"
+  test_signed; perf_records win
   if [ "${2:-}" = vm ]; then   # one passing record per row of release.list (VR1's layout)
+    hand_record "$c"
     mkdir -p "$r/vm-win"
     for s in bootstrap uninstall update platform; do
       { rec_head "$s" "$c" "$ps"; echo "step user install PASS 0 10s"; echo "result pass"; } > "$r/vm-win/$s@1111-aaaa-arm64.ok"
     done
   fi
+}
+hand_record() {
+  python3 -I "$dev/tests/win/gate-record.py" write-by-hand "$1" "$dev/dist-test" --pass > /dev/null \
+    || bad "could not write the VR2 fixture for $1"
 }
 # rec_head SUITE COMMIT PAYLOAD-SHA: a record's first lines, as tests/win/vm-run.sh's rec_head
 # writes them (update's served candidate, platform's vm/ built from COMMIT)
@@ -355,15 +369,19 @@ publish v1.3.0
 commit_version 1.4.0; push
 for c in dl nuget pocketfft blocksrt flac; do mkdir -p "$dev/build/$c"; echo "pinned $c" > "$dev/build/$c/pin"; done
 export FAKE_WIN_CACHE_LOG="$t/caches.log"; : > "$FAKE_WIN_CACHE_LOG"
-wrun w-140-novm v1.4.0 --key "$key" --windows
+rs w-140-novm-plan v1.4.0 --key "$key" --windows --plan
+gates w-140-novm
+public_state > "$t/public.before"
+rs w-140-novm v1.4.0 --key "$key" --windows
 refused w-140-novm "no passing VM run for"
+public_unchanged w-140-novm
 logged w-140-novm "the VM record (tests/win/vm-run.sh check): the Windows app is new, the Windows x64 stub is new"
 planned w-140-novm-plan "windows\.app new"
 planned w-140-novm-plan "windows\.stub\.x64 new"
 planned w-140-novm-plan "windows\.admin new"
 planned w-140-novm-plan "windows\.bridge new"
 logged w-140-novm-plan "The VM record is needed (step 4b)"
-logged w-140-novm-plan "run each suite in tests/win/suites/release.list with --record"
+logged w-140-novm-plan "Run each suite in tests/win/suites/release.list with --record"
 logged w-140-novm-plan "scripts/release.sh v1.4.0 --windows"
 # VR1's layout (review TT6): a row of release.list without its record, or with a failed one
 rs w-140-plan v1.4.0 --key "$key" --windows --plan
@@ -425,8 +443,32 @@ FAKE_PS1_KEY="$(/usr/bin/openssl ec -pubin -in "$dev/build/test-keys/test.pub.pe
   rs w-140-testkey v1.4.0 --key "$key" --windows
 refused w-140-testkey "dist/bootstrap.ps1 trusts the test key"
 rm -rf "$dev/build/test-keys"
-rs w-140 v1.4.0 --key "$key" --windows
+# T27: the Windows performance record is waived below 1.5.1, including this first draft.
+rm "$dev/build/gates/$(g -C "$dev" rev-parse HEAD)/perf-win.tsv"
+# If step 10 lists the live zip, show it a copy without Prepare, then restore the checked zip.
+real_python="$(command -v python3)"
+python3 -I -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1], "w").close()' "$t/no-prepare.zip"
+cat > "$t/bin/python3" <<'PYTHON'
+#!/bin/bash
+if [ "$#" = 3 ] && [ "$1" = -I ] && [ "$2" = - ] && [ "$3" = "$FAKE_DEV/dist-test/rbstemsplus-windows.zip" ]; then
+  mv "$3" "$3.saved" && cp "$ZIP_WITHOUT_PREPARE" "$3" || exit 1
+  trap 'mv "$3.saved" "$3"' EXIT
+fi
+"$REAL_PYTHON" "$@"
+PYTHON
+chmod 755 "$t/bin/python3"
+REAL_PYTHON="$real_python" ZIP_WITHOUT_PREPARE="$t/no-prepare.zip" rs w-140 v1.4.0 --key "$key" --windows
+rm "$t/bin/python3"
 released w-140 v1.4.0
+cmp -s "$GATES_ARCHIVE/WP/rbstemsplus-windows.zip" "$dev/dist-test/rbstemsplus-windows.zip" \
+  && grep -q ' WP/rbstemsplus-windows.zip$' "$GATES_ARCHIVE/SHA256SUMS" \
+  && ok || bad "w-140-wp: release.sh did not archive and seal WP from the Windows TEST build"
+# T27: the first release with Windows files archives WB and the worker's W0 (J14), sealed
+cmp -s "$GATES_ARCHIVE/WB/rbstemsplus-windows.zip" "$dev/dist-test/rbstemsplus-windows.zip" \
+  && [ "$(python3 -I -c 'import sys, zipfile; sys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read("admin/RB Stems Plus.exe"))' "$dev/dist-test/rbstemsplus-windows.zip" | shasum -a 256)" \
+       = "$(shasum -a 256 < "$GATES_ARCHIVE/W0/worker/RB Stems Plus.exe")" ] \
+  && [ -f "$GATES_ARCHIVE/tag-v1.4.0/rbstemsplus-windows.zip" ] \
+  && (cd "$GATES_ARCHIVE" && shasum -a 256 -c --quiet SHA256SUMS) && ok || bad "w-140: WB, W0's worker or tag-v1.4.0 not archived"
 # step 5's build in the public clone found every cache this checkout has (review TT9): copied in
 # (never llvm-mingw/ or dotnet/), nothing downloaded there
 grep ' /public$\| .*/public$' "$FAKE_WIN_CACHE_LOG" > "$t/pub-caches" || true
@@ -463,6 +505,8 @@ cp "$t/test-payload.saved" "$dev/dist-test/payload.json"
 : > "$FAKE_WIN_CACHE_LOG"
 rs w-141 v1.4.1 --key "$key"
 released w-141 v1.4.1
+cmp -s "$GATES_ARCHIVE/WB/payload.json" "$GATES_ARCHIVE/tag-v1.4.0/payload.json" && [ -d "$GATES_ARCHIVE/tag-v1.4.1" ] \
+  && ok || bad "w-141: WB isn't v1.4.0's any more, or tag-v1.4.1 not archived"
 [ "$(grep -c ' cached .*/decide-win/src$' "$FAKE_WIN_CACHE_LOG")" = 5 ] && ! grep -q ' downloaded ' "$FAKE_WIN_CACHE_LOG" \
   && ok || bad "w-141: the carry decision's build didn't find every cache: $(tr '\n' ';' < "$FAKE_WIN_CACHE_LOG")"
 [ "$(cat "$dev/build/nuget/pin")" = "pinned nuget" ] && ! grep -q "not in this checkout" "$t/w-141.log" && ok || bad "w-141: the caches"
@@ -586,8 +630,6 @@ logged w-dry "Windows app     carried: 1.4.3"
 
 # 11. only the Windows bridge changed (review TT4): the zip carried, the bridge new, so the VM
 # record is needed; a bridge other than the TEST build's, which the VM ran, is refused (TT1)
-# (the 1.4.5 runs above stopped after the public commit: drop it, as release.sh asks the owner to)
-g -C "$t/public" reset -q --hard origin/main
 echo "int bridge_win2;" >> "$dev/win/bridge/bridge_win.c"; commit_version 1.4.6; push
 wrun w-146-novm v1.4.6 --key "$key"
 refused w-146-novm "no passing VM run for"
@@ -604,55 +646,107 @@ payload v1.4.6 windows.app.version 1.4.3
 cmp -s "$FAKE_GH/releases/v1.4.4/rbstemsplus-windows.zip" "$FAKE_GH/releases/v1.4.6/rbstemsplus-windows.zip" && ok || bad "w-146: the zip isn't v1.4.4's"
 [ "$(rsha v1.4.6 rbstemsplus-bridge-win-x64.dll)" != "$(rsha v1.4.4 rbstemsplus-bridge-win-x64.dll)" ] && ok || bad "w-146: the bridge isn't new"
 
-# 12. this checkout's own release.list and the real tests/win/vm-run.sh check: with no worker
-# record, no Windows release passes step 4b (the row is "no record")
-rc12="$(git -C "$root" rev-parse HEAD)"
-mkdir -p "$t/real-dist" "$t/real-gates/$rc12/vm-win"; echo '{"payload_version": "1.5.0"}' > "$t/real-dist/payload.json"
-real_check() { VMRUN_ROOT="$root" VMRUN_GATES="$t/real-gates" VMRUN_SHARE="$t/real-share" "$root/tests/win/vm-run.sh" check "$rc12" "$t/real-dist" > "$t/real-check.log" 2>&1; }
-git -C "$root" show "$rc12:tests/win/suites/release.list" | grep -qE '^worker[[:space:]]+arm64[[:space:]]+rekordbox 7\.2\.19 logged in$' \
-  && ok || bad "real check: $rc12's release.list has no worker row"
-real_check; rc=$?
-[ "$rc" = 1 ] && grep -qF 'no record of worker on "rekordbox 7.2.19 logged in" (arm64)' "$t/real-check.log" && [ ! -e "$t/real-gates/$rc12/vm-win.ok" ] \
-  && ok || bad "real check: no worker record, yet it said: $(tr '\n' ';' < "$t/real-check.log")"
-
 # 13. a row of release.list whose suite the commit doesn't have (the real check's contract, in the
 # fake): step 4b fails on it, even with a record of it that looks like a pass
 publish v1.4.6
 echo "int bridge_win3;" >> "$dev/win/bridge/bridge_win.c"
-printf '%s\n' 'worker     arm64  {1111-aaaa}' >> "$dev/tests/win/suites/release.list"
+printf '%s\n' 'ghost      arm64  {1111-aaaa}' >> "$dev/tests/win/suites/release.list"
 commit_version 1.4.7; push
 rs w-147-plan v1.4.7 --key "$key" --plan
 gates w-147 vm
 c147="$(g -C "$dev" rev-parse HEAD)"
-{ rec_head worker "$c147" "$(shasum -a 256 "$dev/dist-test/payload.json" | cut -c1-64)"; echo "step user install PASS 0 10s"; echo "result pass"; } \
-  > "$dev/build/gates/$c147/vm-win/worker@1111-aaaa-arm64.ok"
+{ rec_head ghost "$c147" "$(shasum -a 256 "$dev/dist-test/payload.json" | cut -c1-64)"; echo "step user install PASS 0 10s"; echo "result pass"; } \
+  > "$dev/build/gates/$c147/vm-win/ghost@1111-aaaa-arm64.ok"
 rs w-147-nosuite v1.4.7 --key "$key"
 refused w-147-nosuite "no passing VM run for"
-logged w-147-nosuite "$c147 has no tests/win/suites/worker.suite (release.list's row worker)"
+logged w-147-nosuite "$c147 has no tests/win/suites/ghost.suite (release.list's row ghost)"
 
-# 14. the real tests/win/vm-run.sh check on a synthetic record (review rr1): this sandbox's checkout
-# takes the real script and a one-row release.list whose suite it has; the record a --record run of
-# that suite would write passes step 4b; the same record with a failed step, a file missing or
-# named twice, or a second result line doesn't, nor does any while a run holds the share's lock
+# 14. the real tests/win/vm-run.sh check with a VM row and release.list's worker row
 cp "$root/tests/win/vm-run.sh" "$dev/tests/win/vm-run.sh"
 mkdir -p "$dev/tests/win/suites/s"; echo '# the one step' > "$dev/tests/win/suites/s/one.ps1"
-echo 'sys  60  one  s/one.ps1' > "$dev/tests/win/suites/one.suite"
-printf '%s\n' '# one row' 'one  arm64  {1111-aaaa}' > "$dev/tests/win/suites/release.list"
-commit_all "the real vm-run.sh and one suite"
+echo 'sys  60  one  s/one.ps1' | tee "$dev/tests/win/suites/one.suite" > "$dev/tests/win/suites/worker.suite"
+worker_row="$(sed -n '/^worker[[:space:]]/p' "$root/tests/win/suites/release.list")"
+printf '%s\n' 'one  arm64  {1111-aaaa}' "$worker_row" > "$dev/tests/win/suites/release.list"
+commit_all "the real vm-run.sh and two suites"
 # (case 13's runs stopped after the public commit: drop it, as release.sh asks the owner to)
 g -C "$t/public" reset -q --hard origin/main
 rs w-147r-plan v1.4.7 --key "$key" --plan
 logged w-147r-plan "Plan written: "
 gates w-147r
 c14="$(g -C "$dev" rev-parse HEAD)"; d14="$dev/build/gates/$c14/vm-win"; mkdir -p "$d14"
+ps14="$(shasum -a 256 "$dev/dist-test/payload.json" | cut -c1-64)"
+logged w-147r-plan "build/gates/$c14/pc-win.ok for worker:"
+logged w-147r-plan "build/gates/$c14/win-by-hand.ok for VR2:"
 fsha() { g -C "$dev" show "$c14:$1" | shasum -a 256 | cut -c1-64; }
-synth() {   # STEP-LINE: one.suite's record at c14 on the TEST build, as vm-run.sh's --record writes it
-  { echo "commit $c14"; echo "suite one"; echo "snapshot {1111-aaaa} clean Windows"; echo "vm_uuid 202a80c8-4bc4-4e95-890e-a31d6bfd5b70"; echo "arch arm64"
-    echo "payload_sha256 $(shasum -a 256 "$dev/dist-test/payload.json" | cut -c1-64)"; echo "stage_commit $c14"; echo "vm_commit -"
-    echo "run r1"; echo "file tests/win/suites/one.suite $(fsha tests/win/suites/one.suite)"
+synth() {   # STEP-LINE [SUITE SNAPSHOT]: record at c14 on the TEST build, as --record writes it
+  local suite="${2:-one}" snapshot="${3:-clean Windows}"
+  { echo "commit $c14"; echo "suite $suite"; echo "snapshot {1111-aaaa} $snapshot"; echo "vm_uuid 202a80c8-4bc4-4e95-890e-a31d6bfd5b70"; echo "arch arm64"
+    echo "payload_sha256 $ps14"; echo "stage_commit $c14"; echo "vm_commit -"
+    echo "run r1"; echo "file tests/win/suites/$suite.suite $(fsha "tests/win/suites/$suite.suite")"
     echo "file tests/win/suites/s/one.ps1 $(fsha tests/win/suites/s/one.ps1)"; echo "file tests/win/vm-run.sh $(fsha tests/win/vm-run.sh)"
-    echo "$1"; echo "result pass"; } > "$d14/one@1111-aaaa-arm64.ok"
+    echo "$1"; echo "result pass"; } > "$d14/$suite@1111-aaaa-arm64.ok"
 }
+pc="$d14/../pc-win.ok"
+pc_fixture() {   # COMMIT PAYLOAD-SHA [HITS-EXIT [DIRECTML-EXIT [CPU-LINE]]], as pc-session.sh auto record writes it
+  { printf 'commit %s\npayload_sha256 %s\n' "$1" "$2"
+    echo "round worker (release.list's worker row, on the real PC: OD2)"
+    echo 'date 2026-11-13T00:00:00Z'
+    printf 'step %s 0\n' session stage preflight cache-install T2
+    echo "step hits ${3:-0}"
+    echo "step directml ${4:-0}"
+    printf 'step %s 0\n' cache-uninstall collect cleanup
+    [ -z "${5:-}" ] || echo "$5"
+    printf 'log 20261113-000000-auto-record.log\nresult pass\n'; } > "$pc"
+}
+pc_check() {
+  VMRUN_SHARE="$t/vm-share" "$dev/tests/win/vm-run.sh" check "$c14" "$dev/dist-test" > "$t/pc-check.log" 2>&1
+}
+pc_refused() {
+  local status=0
+  pc_check || status=$?
+  [ "$status" = 1 ] && [ ! -e "$d14/../vm-win.ok" ] \
+    && grep -qF "pc-win.ok: $1" "$t/pc-check.log" \
+    && ok || bad "PC record ($1): exit $status, $(tr '\n' ';' < "$t/pc-check.log")"
+}
+synth "step sys one PASS 0 2s"
+pc_fixture "$c14" "$ps14"
+mv "$pc" "$t/pc.saved"
+synth "step sys one PASS 0 2s" worker "rekordbox 7.2.19 installed"
+pc_refused "missing record"  # a passing worker VM record cannot substitute for the PC
+mv "$d14/worker@1111-aaaa-arm64.ok" "$d14/worker@1111-aaaa-arm64.failed"
+pc_fixture "$(printf '%040d' 0)" "$ps14"; pc_refused "record commit does not match"
+pc_fixture "$c14" "$(printf '%064d' 0)"; pc_refused "record TEST payload SHA-256 does not match"
+pc_fixture "$c14" "$ps14" 3; pc_refused "required check hits did not pass"
+pc_fixture "$c14" "$ps14" 0 3; pc_refused "required check directml did not pass"
+cpu_line="directml cpu, accepted by --cpu-stems-ok"
+pc_fixture "$c14" "$ps14" 0 0 "$cpu_line"; pc_refused "required check directml did not pass"
+pc_fixture "$c14" "$ps14" 3 3 "$cpu_line"; pc_refused "required check hits did not pass"
+pc_fixture "$c14" "$ps14" 0 3 "directml cpu"; pc_refused "invalid record format"
+pc_fixture "$c14" "$ps14" 0 3 "$cpu_line"
+pc_check && grep -qx "row worker arm64 rekordbox 7.2.19 installed: pc-win.ok $(shasum -a 256 "$pc" | cut -c1-64)" "$d14/../vm-win.ok" \
+  && ok || bad "PC record (CPU stems on the owner's ruling): $(tr '\n' ';' < "$t/pc-check.log")"
+rm -f "$d14/../vm-win.ok"
+cp "$t/pc.saved" "$pc"; printf 'result pass\n' >> "$pc"; pc_refused "invalid record format"
+cp "$t/pc.saved" "$pc"
+pc_check && grep -qx "row worker arm64 rekordbox 7.2.19 installed: pc-win.ok $(shasum -a 256 "$pc" | cut -c1-64)" "$d14/../vm-win.ok" \
+  && ok || bad "PC record (valid): $(tr '\n' ';' < "$t/pc-check.log")"
+
+hand="$d14/../win-by-hand.ok"
+vr2_refused() {
+  local name="$1" why="$2"
+  VMRUN_SHARE="$t/vm-share" FAKE_BUILD_FAULT=record-must-stop rs "$name" v1.4.7 --key "$key"
+  refused "$name" "no passing VR2 by-hand record"
+  logged "$name" "win-by-hand.ok: $why"
+}
+vr2_refused w-147r-hand-missing "missing record"
+hand_record "$c14"; cp "$hand" "$t/hand.saved"
+sed -i '' "s/^commit .*/commit $(printf '%040d' 0)/" "$hand"
+vr2_refused w-147r-hand-commit "record commit does not match"
+cp "$t/hand.saved" "$hand"
+sed -i '' "s/^payload_sha256 .*/payload_sha256 $(printf '%064d' 0)/" "$hand"
+vr2_refused w-147r-hand-payload "record TEST payload SHA-256 does not match"
+cp "$t/hand.saved" "$hand"
+
 synth "step sys one FAIL 1 2s"
 VMRUN_SHARE="$t/vm-share" rs w-147r-fail v1.4.7 --key "$key"
 refused w-147r-fail "no passing VM run for"
@@ -692,10 +786,31 @@ VMRUN_SHARE="$t/vm-share" FAKE_BUILD_FAULT=vmchange rs w-147r-vmchange v1.4.7 --
 refused w-147r-vmchange "the VM record changed during the build"
 rm -f "$d14/one@2222-bbbb-arm64.ok"
 rm -f "$d14/one@1111-aaaa-arm64.failed"; synth "step sys one PASS 0 2s"
+VMRUN_SHARE="$t/vm-share" FAKE_BUILD_FAULT=pcchange rs w-147r-pcchange v1.4.7 --key "$key"
+refused w-147r-pcchange "the VM record changed during the build"
+cp "$t/pc.saved" "$pc"
+VMRUN_SHARE="$t/vm-share" FAKE_BUILD_FAULT=handchange rs w-147r-handchange v1.4.7 --key "$key"
+refused w-147r-handchange "win-by-hand.ok changed during the build"
+cp "$t/hand.saved" "$hand"
 VMRUN_SHARE="$t/vm-share" rs w-147 v1.4.7 --key "$key"
 released w-147 v1.4.7
+logged w-147 "VR2 by-hand record passed:"
 grep -qx "row one arm64 {1111-aaaa}: one@1111-aaaa-arm64.ok" "$dev/build/gates/$c14/vm-win.ok" \
   && ok || bad "w-147: the real check's vm-win.ok: $(tr '\n' ';' < "$dev/build/gates/$c14/vm-win.ok" 2> /dev/null)"
+
+# 15. a replaced TEST Windows zip stops step 10 after the draft, with the archive command
+publish v1.4.7
+commit_version 1.4.8; push
+rs w-148-plan v1.4.8 --key "$key" --plan
+gates w-148
+printf 'not a zip\n' > "$dev/dist-test/rbstemsplus-windows.zip"
+rs w-148-badzip v1.4.8 --key "$key"
+[ "$rs_rc" != 0 ] && ok || bad "w-148-badzip: release.sh exited 0"
+logged w-148-badzip "tag-v1.4.8/rbstemsplus-windows.zip isn't the one dist-test/SHA256SUMS lists"
+logged w-148-badzip "the draft v1.4.8 is made, but the TEST build wasn't archived"
+logged w-148-badzip "run tests/perf/archive-release.sh v1.4.8 --payload-sha $(shasum -a 256 "$dev/dist-test/payload.json" | cut -c1-64)"
+[ -f "$FAKE_GH/releases/v1.4.8/payload.json.sig" ] && [ ! -e "$GATES_ARCHIVE/tag-v1.4.8" ] \
+  && ok || bad "w-148-badzip: missing draft or a tag folder was archived"
 
 echo "windows-test: $pass passed, $fail failed"
 [ "$fail" = 0 ]

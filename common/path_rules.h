@@ -27,9 +27,30 @@ COMMON_API int paths_location_ok(const char *p);
 COMMON_API int paths_local_file_win(const char *p);
 COMMON_API int paths_same_win(const char *a, const char *b);
 
-#if defined(_WIN32)
+/* Windows' "another drive" (helper.md §1, T13), a pure string: the length of p's drive root when
+ * p isn't on the system volume, whose drive letter is sys (0: none known, so every drive is
+ * another), else 0. Its roots: "X:\" or "X:/" (3; "X:" alone 2), a UNC path's "\\server\share"
+ * (either separator), each also behind "\\?\" or "\\.\" ("\\?\UNC\server\share"), and
+ * "\\?\Volume{GUID}\" (49, always another). A path with none of them (relative, the Mac's
+ * "/x"): 0. By its string only, as the Mac's /Volumes/ rule: a volume mounted in a folder of the
+ * system drive counts as the system drive. Compiled on Windows and in the Mac's tests of the
+ * Windows forms (PATHS_WIN_FORM, PATHS_WIN_TRACKS) only, so the Mac helper's bytes stay. */
+#if defined(_WIN32) || defined(PATHS_WIN_FORM) || defined(PATHS_WIN_TRACKS)
+COMMON_API size_t paths_other_drive_win(const char *p, char sys);
+#endif
+
+/* PATHS_WIN_TRACKS: the Mac's tests of the helper's modules (manifest.c, library.c) with
+ * Windows' track rules, the system drive taken as C: */
+#if defined(_WIN32) || defined(PATHS_WIN_TRACKS)
 #define paths_local_file paths_local_file_win
 #define paths_same paths_same_win
+#if defined(_WIN32)
+/* Windows' another drive: paths_other_drive_win with the system volume's letter, from
+ * GetSystemWindowsDirectoryW (never %SystemRoot%), read once. In plat_helper_win.c: the helper's. */
+COMMON_API size_t paths_other_drive(const char *p);
+#else
+#define paths_other_drive(p) paths_other_drive_win((p), 'C')
+#endif
 #else
 /* A track's path that names a file on this computer's file system (a playlist's streaming tracks
  * don't): Mac, an absolute path. Its inputs, library.c's local rows and the estimate use it. */

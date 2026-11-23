@@ -6,6 +6,21 @@
 #include "plat.h"
 
 #if defined(_WIN32)
+/* The handle from an atomic exclusive directory creation, with DELETE and no share-delete.
+ * With not_indexed, request FILE_WRITE_ATTRIBUTES and set the indexing flag on this handle. */
+COMMON_API int plat_mkdir_open_at(plat_dir d, const char *name, int not_indexed, plat_dir *out);
+/* Query just the file identity when the caller does not need a full directory stat. */
+COMMON_API int plat_dir_identity(plat_dir d, plat_id *out);
+/* Open without sharing DELETE, for descendants used in a mutation of a checked cache. */
+COMMON_API int plat_dir_open_at_held(plat_dir d, const char *name, plat_dir *out);
+/* An empty-directory rollback can check ownership and request disposition on this handle. */
+COMMON_API int plat_dir_open_at_for_removal(plat_dir d, const char *name, plat_dir *out);
+COMMON_API int plat_dir_dispose(plat_dir d);
+
+/* Append one buffer to a single-link regular file in d, creating it if missing. Reparse points
+ * are refused and the checks and write use the same handle. 0 or an errno. */
+COMMON_API int plat_file_append_at(plat_dir d, const char *name, const void *p, size_t n);
+
 /* plat_owner_check's rule held through the load (owner decided 2026-11-11, review B1; bridge.md
  * §1): the file's `levels` parent folders are opened top-down, the top one by its path and each
  * one below relative to the one above, then the file relative to its folder; each without
@@ -73,7 +88,8 @@ COMMON_API int plat_win_handle_admin_only(void *handle, int accept_self);
 COMMON_API int plat_program_files(const char *sub, char *out, size_t n);
 
 /* Whether path's drive letter is a network drive (GetDriveTypeW's DRIVE_REMOTE, mapped and
- * connected or not), which the table of volumes (plat_volume_holding) doesn't list: a chosen
+ * connected or not: a mapping whose share is gone stays DRIVE_REMOTE, platform.suite's net-remote
+ * in the VM), which the table of volumes (plat_volume_holding) doesn't list: a chosen
  * location there is "not-local", not "not-connected" (common/location.c, T3c). A volume GUID
  * path never is. */
 COMMON_API int plat_win_drive_remote(const char *path);
@@ -87,6 +103,10 @@ COMMON_API int plat_win_drive_remote(const char *path);
  * read. */
 COMMON_API int plat_volume_name(const char *path, char *label, size_t ln, char *letter, size_t lt);
 
+#ifdef PLAT_TEST_REMOVE_TREE
+/* Test-only callback before the enumerated leaf is opened relative to its pinned parent. */
+extern void (*plat_test_tree_before_open)(const uint16_t *name, size_t n);
+#endif
 #ifdef PLAT_TEST_FLUSH
 /* test builds only (common/tests/win.sh's plat-win-test): plat_map_flush's next n flushes report
  * err (0: ERROR_LOCK_VIOLATION) without flushing (n <= 0: none), and the sleeps' record restarts;

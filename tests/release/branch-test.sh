@@ -18,6 +18,19 @@ rel="$(cd "$(dirname "${1:-$root/scripts/release.sh}")" && pwd)/$(basename "${1:
 # 1. an ordinary release from main, its plan first; a real run without a plan is refused
 rs main-130-noplan v1.3.0 --key "$key"
 refused main-130-noplan "no plan for"
+# Keep a stale local commit reachable while restoring main to the release base.
+rs main-130-recovery-plan v1.3.0 --plan
+public_base="$(g -C "$t/public" rev-parse HEAD)"
+g -C "$t/public" commit -q --allow-empty -m 'an earlier local commit'
+stale="$(g -C "$t/public" rev-parse HEAD)"
+rs main-130-recovery v1.3.0 --key "$key"
+refused main-130-recovery "main differs from its origin/main"
+recovery="$(printf 'git -C %q branch %q %q && git -C %q fetch origin && git -C %q reset --keep %q' "$t/public" "backup/main-$stale" "$stale" "$t/public" "$t/public" "$public_base")"
+grep -qF "$recovery" "$t/main-130-recovery.log" && (eval "$recovery" > /dev/null) \
+  && [ "$(g -C "$t/public" rev-parse HEAD "backup/main-$stale")" = "$(printf '%s\n%s' "$public_base" "$stale")" ] \
+  && ok || bad "main-130-recovery: no working recovery command that preserves the local commit"
+# Restore the fixture even when testing the older release script.
+[ "$(g -C "$t/public" rev-parse HEAD)" = "$public_base" ] || g -C "$t/public" reset -q --keep "$public_base"
 # G3 (T26): a real run needs a passing tart record of this commit, TEST payload and plan
 g3_refusals main-130 v1.3.0 --key "$key"
 # review BM3: an app that trusts this checkout's test key isn't released (step 6; build.sh's own
@@ -35,7 +48,7 @@ mv "$dev/build/test-keys/test.pub.pem" "$t/tk.pub.pem"
 /usr/bin/openssl ec -pubin -in "$dev/keys/backup.pub.pem" -conv_form compressed -pubout -out "$dev/build/test-keys/test.pub.pem" 2> /dev/null
 rs main-130-testkeyk v1.3.0 --key "$key"
 refused main-130-testkeyk "keys/backup.pub.pem is the test key"
-rm "$dev/build/test-keys/test.pub.pem"; mkdir -p "$t/ga/tag-v0.9.0/test-keys"; cp "$t/tk.pub.pem" "$t/ga/tag-v0.9.0/test-keys/test.pub.pem"
+rm "$dev/build/test-keys/test.pub.pem"; mkdir -p "$t/ga/tag-v0.9.0/test-keys"; cp "$t/tk.pub.pem" "$t/ga/tag-v0.9.0/test-keys/test.pub.pem"; reseal
 GATES_ARCHIVE="$t/ga" FAKE_APP_KEY="$tk" rs main-130-testkeya v1.3.0 --key "$key"
 refused main-130-testkeya "the app in dist/rbstemsplus-app.zip trusts the test key $t/ga/tag-v0.9.0"
 # review TK5: a test key that isn't P-256 (an RSA public key; its private half never leaves the pipe),
@@ -127,8 +140,10 @@ rs m-keep v1.4.0 --mac=keep --plan
 planned m-keep "mac\.app carry 1\.3\.0 [0-9a-f]{40} $(shasum -a 256 "$FAKE_GH/releases/v1.3.1/rbstemsplus-app.zip" | cut -d' ' -f1)"
 planned m-keep "mac\.bridge carry [0-9a-f]{40} [0-9a-f]{64}"
 # a plan made with keep isn't the release's when the run asks for a new Mac app
+public_state > "$t/public.before"
 rs m-keep-then-new v1.4.0 --key "$key" --mac=new
 refused m-keep-then-new "the carry decisions differ from the plan's"
+public_unchanged m-keep-then-new
 rsp m-new v1.4.0 --key "$key" --mac=new
 released m-new v1.4.0
 [ "$(pjson "$FAKE_GH/releases/v1.4.0/payload.json" app.version)" = 1.4.0 ] && ok || bad "m-new: the app isn't new"

@@ -59,6 +59,8 @@ typedef CONFIGRET(WINAPI *iface_prop_fn)(LPCWSTR, const DEVPROPKEY *, DEVPROPTYP
 typedef CONFIGRET(WINAPI *locate_fn)(PDEVINST, DEVINSTID_W, ULONG);
 typedef CONFIGRET(WINAPI *parent_fn)(PDEVINST, DEVINST, ULONG);
 typedef CONFIGRET(WINAPI *reg_prop_fn)(DEVINST, ULONG, PULONG, PVOID, PULONG, ULONG);
+typedef CONFIGRET(WINAPI *notify_fn)(PCM_NOTIFY_FILTER, PVOID, PCM_NOTIFY_CALLBACK, PHCMNOTIFICATION);
+typedef CONFIGRET(WINAPI *unnotify_fn)(HCMNOTIFICATION);
 
 static struct {
     list_size_fn list_size;
@@ -67,6 +69,8 @@ static struct {
     locate_fn locate;
     parent_fn parent;
     reg_prop_fn reg_prop;
+    notify_fn notify;
+    unnotify_fn unnotify;
 } cm;
 static INIT_ONCE cm_once = INIT_ONCE_STATIC_INIT;
 
@@ -88,6 +92,8 @@ static BOOL WINAPI cm_load(PINIT_ONCE once, PVOID param, PVOID *ctx) {
     parent_fn e = (parent_fn)PROC(m, "CM_Get_Parent");
     reg_prop_fn f = (reg_prop_fn)PROC(m, "CM_Get_DevNode_Registry_PropertyW");
     if (a && b && c && d && e && f) cm.list_size = a, cm.list = b, cm.iface_prop = c, cm.locate = d, cm.parent = e, cm.reg_prop = f;
+    cm.notify = (notify_fn)PROC(m, "CM_Register_Notification");
+    cm.unnotify = (unnotify_fn)PROC(m, "CM_Unregister_Notification");
     return TRUE;
 }
 
@@ -128,8 +134,28 @@ static void read_node(DEVINST dn, vol_node *v) {
     }
 }
 
+static DWORD CALLBACK disk_event(HCMNOTIFICATION notification, PVOID ctx, CM_NOTIFY_ACTION action,
+                                 PCM_NOTIFY_EVENT_DATA data, DWORD size) {
+    (void)notification;
+    (void)data;
+    (void)size;
+    if (action == CM_NOTIFY_ACTION_DEVICEQUERYREMOVE || action == CM_NOTIFY_ACTION_DEVICEREMOVEPENDING ||
+        action == CM_NOTIFY_ACTION_DEVICEREMOVECOMPLETE)
+        ((vol_watch *)ctx)->invalidated();
+    return ERROR_SUCCESS;
+}
+
+static int watch_disk(HANDLE disk, vol_watch *watch) {
+    CM_NOTIFY_FILTER filter = {.cbSize = sizeof filter, .FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEHANDLE};
+    filter.u.DeviceHandle.hTarget = disk;
+    HCMNOTIFICATION registration;
+    if (!cm.notify || !cm.unnotify || cm.notify(&filter, watch, disk_event, &registration) != CR_SUCCESS) return -1;
+    watch->registration = registration;
+    return 0;
+}
+
 /* the disk with this number: its bus, hot-plug and device tree into f */
-static void read_disk(DWORD number, vol_facts *f) {
+static void read_disk(DWORD number, vol_facts *f, vol_watch *watch) {
     InitOnceExecuteOnce(&cm_once, cm_load, NULL, NULL);
     if (!cm.list) return;
     ULONG len = 0;
@@ -149,6 +175,10 @@ static void read_disk(DWORD number, vol_facts *f) {
             || num.DeviceType != FILE_DEVICE_DISK) {
             CloseHandle(h);
             continue;
+        }
+        if (watch && watch_disk(h, watch)) {
+            CloseHandle(h);
+            break;
         }
         /* the bus */
         STORAGE_PROPERTY_QUERY q;
@@ -239,7 +269,7 @@ static char *mount_list(const wchar_t *wguid, size_t *len) {
     return out;
 }
 
-int vol_facts_read(const char *guid, int device, vol_facts *out) {
+static int read_facts(const char *guid, int device, vol_facts *out, vol_watch *watch) {
     memset(out, 0, sizeof *out);
     out->disks = out->bus = out->hotplug = -1;
     size_t g = vol_guid_root(guid);
@@ -262,17 +292,45 @@ int vol_facts_read(const char *guid, int device, vol_facts *out) {
         if (*c >= 'A' && *c <= 'Z') *c = (char)(*c - 'A' + 'a');
     out->readonly = (flags & FILE_READ_ONLY_VOLUME) != 0;
     char sys[VOL_GUID_MAX];
-    out->system = system_volume(sys, sizeof sys) == 0 && same_ascii_ci(sys, out->guid);
+    int known_system = system_volume(sys, sizeof sys) == 0;
+    out->system = known_system && same_ascii_ci(sys, out->guid);
     if (!device) return 0;
+    if (!known_system) return EIO;
     /* the volume's device: "\\?\Volume{...}" without its last '\' */
     wguid[g - 1] = 0;
     HANDLE v = CreateFileW(wguid, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
     if (v == INVALID_HANDLE_VALUE) return 0;               /* the device's facts stay unknown */
     DWORD disk = 0;
     out->disks = volume_disks(v, &disk);
+    if (out->disks == 1) read_disk(disk, out, watch);
+    /* Keep the original volume open while making the disk association. */
+    DWORD current = 0;
+    if (watch && (volume_disks(v, &current) != 1 || current != disk)) out->disks = -1;
     CloseHandle(v);
-    if (out->disks == 1) read_disk(disk, out);
     return 0;
+}
+
+int vol_facts_read(const char *guid, int device, vol_facts *out) { return read_facts(guid, device, out, NULL); }
+
+static int saved_refusal(const char *path, vol_watch *watch) {
+    size_t g = vol_guid_root(path);
+    if (!g) return VOL_REFUSE_UNREADABLE;
+    char root[VOL_GUID_MAX];
+    memcpy(root, path, g);
+    root[g] = 0;
+    vol_facts facts;
+    if (read_facts(root, 1, &facts, watch) || (watch && !watch->registration)) return VOL_REFUSE_UNREADABLE;
+    return vol_location_refusal(&facts);
+}
+
+int vol_saved_refusal(const char *path) { return saved_refusal(path, NULL); }
+
+int vol_saved_watch(const char *path, vol_watch *watch) {
+    if (watch->registration) {
+        if (cm.unnotify(watch->registration) != CR_SUCCESS) return VOL_REFUSE_UNREADABLE;
+        watch->registration = NULL;
+    }
+    return saved_refusal(path, watch);
 }
 
 int vol_list(vol_facts *out, int max) {
@@ -309,6 +367,26 @@ static int final_path(const char *path, DWORD how, char *out, size_t n) {
 int vol_guid_path(const char *path, char *out, size_t n) {
     int e = final_path(path, VOLUME_NAME_GUID, out, n);
     return e ? e : vol_guid_root(out) ? 0 : EINVAL;
+}
+
+int vol_dir_guid(plat_dir dir, char out[VOL_GUID_MAX]) {
+    wchar_t *path = malloc(sizeof(wchar_t) * (WR_NT_MAX + 1));
+    if (!path) return ENOMEM;
+    DWORD k = GetFinalPathNameByHandleW(dir.h, path, WR_NT_MAX + 1, FILE_NAME_OPENED | VOLUME_NAME_GUID);
+    int e = k == 0 ? last_errno() : k < VOL_GUID_LEN || k > WR_NT_MAX ? EINVAL : 0;
+    if (!e) {
+        path[VOL_GUID_LEN] = 0;
+        if (to8(path, out, VOL_GUID_MAX) || vol_guid_root(out) != VOL_GUID_LEN) e = EINVAL;
+        else for (char *c = out + 11; *c; c++)
+            if (*c >= 'A' && *c <= 'F') *c += 'a' - 'A';
+    }
+    free(path);
+    return e;
+}
+
+int vol_dir_on_volume(plat_dir dir, const char *guid_path) {
+    char guid[VOL_GUID_MAX];
+    return vol_guid_root(guid_path) && !vol_dir_guid(dir, guid) && !_strnicmp(guid, guid_path, VOL_GUID_LEN);
 }
 
 int vol_display_path(const char *guid_path, char *out, size_t n) {

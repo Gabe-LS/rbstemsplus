@@ -43,13 +43,18 @@ fetch() {
   if [ ! -f "$f" ] || [ "$(sha "$f")" != "$sum" ]; then
     echo "downloading $url" >&2
     mkdir -p "$d"
-    curl -fsSL -o "$f.part" "$url" || { rm -f "$f.part"; die "$n: download failed: $url"; }
-    got="$(sha "$f.part")"
-    if [ "$got" != "$sum" ]; then
-      rm -f "$f.part"
-      die "$n: sha256 $got, expected $sum ($url)"
-    fi
-    mv -f "$f.part" "$f"
+    # A refused fetch mustn't remove another fetch's partial download.
+    part="$(mktemp "$f.part.XXXXXX")" || die "$n: download failed: $url"
+    trap 'rm -f "$part"' EXIT
+    # netguard: bounded (connect timeout, stall limit), retried when transient, reported when not
+    h="${url#https://}"; h="${h%%/*}"
+    "$root/tests/harness/netguard.sh" --kind download --host "$h" --watch "$part" -- curl -fsSL -o "$part" "$url" \
+      || die "$n: download failed: $url"
+    got="$(sha "$part")"
+    [ "$got" = "$sum" ] || die "$n: sha256 $got, expected $sum ($url)"
+    chmod 0644 "$part"   # mktemp makes it 0600; the download kept curl's umask mode before
+    mv -f "$part" "$f"
+    trap - EXIT
   fi
   printf '%s\n' "$f"
 }

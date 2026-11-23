@@ -1,0 +1,83 @@
+# The by-hand plan's W1, G3 of the Windows by-hand card: Stems Cache's UAC prompt and the sign-out
+# cases (release.md section 8 UP4; app.md 5.9 WC1-WC5, WC9, WC10; W5 A7.1), with UAC prompting
+# as Windows ships it. Nobody clicks: rbui (FlaUI) answers the consent prompt and the block screen
+# on the secure desktop, run there as SYSTEM by sysdesk (tests/win/uia), and autologon signs the
+# user back in after each sign-out. From "rekordbox 7.2.19 installed + stems model", x64 and arm64:
+#   tests/win/vm-run.sh stage --build
+#   tests/win/vm-run.sh run "rekordbox 7.2.19 installed + stems model" stems-cache-uac
+# Needs the TEST build in dist-test/ as worker.suite does, and a local account signed in (setup's
+# Set-AutoLogon gives it a new random password in this reverted VM; a Microsoft account SKIPs).
+# The arm-* steps start the responders
+# for the user step after them; the sign-out comes from the consent responder as soon as the
+# worker runs (no step can time it), so the user step that causes it ends first; the case's
+# settle step (SYSTEM) answers the block screen once the sign-out began. The sign-out cases hold
+# their TEST worker 20 s (unheld, it ends before the sign-out arrives): WC1 and WC2 before its
+# work (RBSP_TEST_WORKER_HOLD), WC3 and WC10 once its work has begun changing files
+# (RBSP_TEST_WORKER_MIDHOLD), so their "Sign out anyway" ends the session mid-work. A case whose
+# worker ended before the sign-out reached the app has no veto to test, and a WC3/WC10 whose
+# session ended before the work began tests nothing: those checks say MISSING (a SKIP), never a
+# pass. The trace steps also check the ordering of the shell's TEST session markers and the
+# existing responder's block-screen observations. Not a release.list row.
+include lib/vmlib.ps1
+include worker/rblib.ps1
+include uninstall/cases/unlib.ps1
+include uac/uaclib.ps1
+include uac/trace-order.ps1
+need http
+need file repo/core/texts.def
+need file dist-test/bootstrap.ps1
+need file dist-test/payload.json
+need file vm/uia/rbui/rbui.exe
+need file vm/x64/sysdesk.exe
+need file vm/arm64/sysdesk.exe
+# MODE       SECS NAME              SCRIPT
+sys          120  prep              worker/prep.ps1
+sys          120  setup             uac/setup.ps1
+user         600  install           bootstrap/install.ps1
+# UP4: refused, then Yes (W5-A7's first install: the app folder's admin\ copy)
+sys          240  arm-no            uac/arm.ps1
+user         420  refused           uac/refused.ps1
+sys          240  arm-yes-1         uac/arm.ps1
+user         600  cache-install     worker/cache-install.ps1
+user         180  consent-yes-1     uac/consent.ps1
+sys          120  cache-files       worker/cache-files.ps1
+# WC1+WC9: Uninstall Stems Cache (the bin\ worker: W5 A7.1's chain held during runas), the
+# sign-out vetoed, nothing pressed
+sys          240  arm-wc1           uac/arm.ps1
+user         300  wc1               uac/press.ps1
+sys          600  wc1-settle        uac/settle.ps1
+wait         600  wc1-signin        logon
+user         300  wc1-after         uac/after.ps1
+user         60   wc1-trace          uac/session-trace.ps1
+# WC5: Close while the worker runs (Install Stems Cache): refused, no later quit, a Close after it quits
+sys          240  arm-yes-2         uac/arm.ps1
+user         600  wc5               uac/close-during.ps1
+user         180  consent-yes-2     uac/consent.ps1
+# WC2: Uninstall Stems Cache, the veto, Cancel on the block screen (wc2-settle's responder, as
+# SYSTEM, which also lets the sign-out settle first: a user step meanwhile would end with a
+# sign-out that goes on)
+sys          240  arm-wc2           uac/arm.ps1
+user         300  wc2               uac/press.ps1
+sys          600  wc2-settle        uac/settle.ps1
+user         480  wc2-after         uac/after.ps1
+user         60   wc2-trace          uac/session-trace.ps1
+# WC3/WC4: Install Stems Cache, the veto, "Sign out anyway"
+sys          240  arm-wc3           uac/arm.ps1
+user         300  wc3               uac/press.ps1
+sys          600  wc3-settle        uac/settle.ps1
+wait         600  wc3-signin        logon
+user         300  wc3-after         uac/after.ps1
+user         60   wc3-trace          uac/session-trace.ps1
+# WC10: Stems Cache on, then Uninstall All, the veto, "Sign out anyway". WC3's cut row (bridge,
+# no receipt: Needs repair) is put back first, as V8 does; Install has no target until then
+sys          240  arm-yes-3         uac/arm.ps1
+user         420  wc10-repair       uac/wc10-repair.ps1
+sys          240  arm-yes-4         uac/arm.ps1
+user         600  wc10-ready        uac/wc10-ready.ps1
+sys          240  arm-wc10          uac/arm.ps1
+user         300  wc10              uac/press.ps1
+sys          600  wc10-settle       uac/settle.ps1
+wait         600  wc10-signin       logon
+user         420  wc10-after        uac/after.ps1
+user         60   wc10-trace          uac/session-trace.ps1
+sys          120  done              uac/done.ps1

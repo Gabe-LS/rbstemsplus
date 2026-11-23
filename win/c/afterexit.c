@@ -290,11 +290,28 @@ static int usage_logs(const ax_os *os, const char *local) {
  * EBUSY, ENOMEM) can't tell (review UF3) */
 static int gone(int e) { return e == ENOENT || e == ENOTDIR || e == PLAT_EFTYPE; }
 
-/* whether the install still starts after a partial delete: the stub, `current` and current's
- * <version>\RB Stems Plus.exe still there, each a plain file, read through a freshly opened apps
- * handle (no link followed). 1, else 0 (review GH6); 1 also when the check can't tell (review UF3):
- * only a missing entry, a kind other than a file or a `current` that doesn't parse gives 0 */
-static int still_starts(const char *apps) {
+/* The launch files are reached through plain directories and must be plain files. As with the
+ * startup files, an unreadable entry alone is insufficient to remove the records (UF3). */
+static int launch_file(plat_dir parent, const char *subdir, const char *arch, const char *name) {
+    plat_dir sub, d;
+    if (subdir) {
+        int e = plat_dir_open_at(parent, subdir, &sub);
+        if (e) return !gone(e) && e != ELOOP;
+        parent = sub;
+    }
+    int e = plat_dir_open_at(parent, arch, &d);
+    if (subdir) plat_dir_close(sub);
+    if (e) return !gone(e) && e != ELOOP;
+    plat_stat st;
+    e = plat_stat_at(d, name, &st);
+    plat_dir_close(d);
+    return e ? !gone(e) : st.kind == PLAT_FILE;
+}
+
+/* Whether the install still starts and can launch the uninstaller after a partial delete
+ * (GH6, UF6). Check through a freshly opened apps handle. Keep the records if the check
+ * can't tell (UF3). */
+static int still_starts(const char *apps, const char *arch) {
     plat_dir d, v;
     int e = plat_dir_open(apps, &d);
     if (e) return !gone(e);
@@ -312,7 +329,7 @@ static int still_starts(const char *apps) {
         else if ((e = plat_dir_open_at(d, cur, &v))) ok = !gone(e);
         else {
             if ((e = plat_stat_at(v, AX_EXE, &st))) ok = !gone(e);
-            else ok = st.kind == PLAT_FILE;
+            else ok = st.kind == PLAT_FILE && launch_file(v, "stub", arch, AX_EXE) && launch_file(v, NULL, arch, AX_DLL);
             plat_dir_close(v);
         }
         plat_file_close(f);
@@ -341,6 +358,21 @@ int ax_run(const ax_os *os, const ax_args *a) {
         if (c < 0) say(os, "after-exit: this folder couldn't be set to go", NULL, NULL);
         return AX_PARENT_RUNS;
     }
+    /* a reinstall (bootstrap.ps1) holds the install lock from before its download until it has
+     * started the new app: then nothing here is deleted, its new files and records included
+     * (audit b-a2b-F2). Held through the records */
+    int locked = 0;
+    if (os->lock) {
+        int l = os->lock(os->ctx);
+        if (l != 1) {
+            say(os, l == 0 ? "after-exit: a reinstall is under way: nothing deleted" : "after-exit: the install lock couldn't be made: nothing deleted", NULL,
+                NULL);
+            int c = os->clean_later(os->ctx);
+            if (c < 0) say(os, "after-exit: this folder couldn't be set to go", NULL, NULL);
+            return AX_LEFT;
+        }
+        locked = 1;
+    }
     int result = AX_DONE;
     /* the Run value first: a logon meanwhile starts no watcher (release.md §7's order, UN4) */
     if (os->remove_run(os->ctx)) {
@@ -360,23 +392,19 @@ int ax_run(const ax_os *os, const ax_args *a) {
     }
     /* confirmed: nothing runs from the apps folder any more. A list that can't be read is waited
      * on as a program that runs (UN4) */
-    int confirmed = 0, unreadable = 0, kept_running = 0;
+    int scan, unreadable = 0;
     uint64_t t0 = os->now_ms(os->ctx);
     for (;;) {
-        int r = os->running_under(os->ctx, a->apps);
-        if (r == 0) {
-            confirmed = 1;
-            break;
-        }
-        if (r < 0 && !unreadable) {
+        scan = os->running_under(os->ctx, a->apps);
+        if (scan == 0) break;
+        if (scan < 0 && !unreadable) {
             unreadable = 1;
             say(os, "after-exit: the process list couldn't be read: waiting", NULL, NULL);
         }
         if (os->now_ms(os->ctx) - t0 >= AX_OTHERS_WAIT_MS) {
-            if (r < 0) say(os, "after-exit: the process list still can't be read: the app's files, the Apps & features entry and the UsageLogs entry kept", NULL, NULL);
+            if (scan < 0) say(os, "after-exit: the process list still can't be read: the app's files, the Apps & features entry and the UsageLogs entry kept", NULL, NULL);
             else say(os, "after-exit: a program still runs from ", a->apps, ": its files, the Apps & features entry and the UsageLogs entry kept; uninstall again once it is closed");
             result = AX_LEFT;
-            kept_running = 1;
             break;
         }
         os->sleep_ms(os->ctx, AX_POLL_MS);
@@ -385,7 +413,7 @@ int ax_run(const ax_os *os, const ax_args *a) {
      * writes it again), the folder, the other records. One still running after the wait, or a list
      * that still can't be read, keeps all three, so the uninstall can be run again from Apps &
      * features (owner 2026-11-13) */
-    if (confirmed) {
+    if (scan == 0) {
         if (usage_logs(os, a->local)) result = AX_LEFT;
         int e = os->remove_tree(os->ctx, a->apps), kept = 0;
         if (e == 0) say(os, "after-exit: ", a->apps, " deleted");
@@ -395,7 +423,7 @@ int ax_run(const ax_os *os, const ax_args *a) {
             /* the app still starts (a partial delete): its Apps & features entry and the other
              * records stay, so the uninstall can be run again from there (review GH6, owner
              * 2026-11-13) */
-            if (still_starts(a->apps)) {
+            if (still_starts(a->apps, os->arch)) {
                 say(os, "after-exit: the app still starts: the Apps & features entry kept", NULL, NULL);
                 kept = 1;
             }
@@ -407,16 +435,17 @@ int ax_run(const ax_os *os, const ax_args *a) {
             result = AX_LEFT;
         }
     }
+    if (locked && os->unlock) os->unlock(os->ctx);   /* before the dialog: a reinstall needn't wait for it */
     /* kept for a program still running (or a list still unknown): the one dialog, with the fix
      * only (owner 2026-11-16; the path is in the log above). Before the temp folder's cleanup,
      * whose cmd.exe gives up about a minute after it starts: the dialog waits for the user */
-    if (kept_running && os->kept_dialog) {
+    if (scan != 0 && os->kept_dialog) {
         /* the dialog says to restart Windows, and a restart ends this process inside it, before
          * clean_later: the logon-time cleanup is set first (review undefined1) */
         if (os->clean_at_logon && os->clean_at_logon(os->ctx) != 1)
             say(os, "after-exit: this folder couldn't be set to go at the next logon", NULL, NULL);
         say(os, "after-exit: telling the user to restart Windows, then uninstall again", NULL, NULL);
-        os->kept_dialog(os->ctx);
+        os->kept_dialog(os->ctx, scan < 0);
     }
     int c = os->clean_later(os->ctx);
     if (c == 1) say(os, "after-exit: this folder goes at the next logon (RunOnce)", NULL, NULL);

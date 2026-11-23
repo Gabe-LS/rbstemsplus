@@ -4,6 +4,9 @@
 #include "check.h"
 
 #include "../compat.h"
+#include "../inventory.h"
+#include "../native_facts.h"
+#include "../native_steps.h"
 
 #include <CommonCrypto/CommonDigest.h>
 #include <pthread.h>
@@ -57,7 +60,7 @@ static int mem_read(void *ctx, uint64_t off, void *buf, size_t n) {
 /* -- the fake OS */
 
 typedef struct {
-    compat_uninstall entries[8];
+    compat_uninstall entries[COMPAT_ENTRIES_MAX];
     int n_entries;
     const char *signed_paths[8];   /* AlphaTheta's, by exact path */
     int n_signed;
@@ -313,9 +316,268 @@ static void pe_files(const char *dir) {
     CHECK(compat_pe_read(mem_read, &none, &pe) == -1, "not a PE");
 }
 
+static int digest_calls;
+static int fake_code_digest(compat_read_fn read, void *ctx, uint64_t size, payload_sha out) {
+    char b[5];
+    if (size != sizeof b || read(ctx, 0, b, sizeof b) || memcmp(b, "hello", sizeof b)) return -1;
+    digest_calls++;
+    memset(out, 'a', 64);
+    out[64] = 0;
+    return 0;
+}
+
+static void t_ort_file_facts(const char *scratch) {
+    char path[COMPAT_PATH_MAX];
+    snprintf(path, sizeof path, "%s/ort-code-fixture", scratch);
+    spit(path, "hello", 5);
+    compat_file file;
+    CHECK(!compat_file_facts(NULL, path, 0, &file) && file.readable && !file.code_sha256[0], "ordinary scan has no code digest");
+    CHECK(!compat_ort_file_facts(NULL, path, 0, fake_code_digest, &file) && file.code_sha256[0] == 'a' && digest_calls == 1,
+          "an ordinary memo entry cannot satisfy a request for a code digest");
+    CHECK(!compat_ort_file_facts(NULL, path, 0, fake_code_digest, &file) && file.code_sha256[0] == 'a' && digest_calls == 1,
+          "the code digest is memoised with the file stamp");
+    unlink(path);
+}
+
 static const char *unlisted_v22;   /* review RE1: the folder whose stat fails */
 static int re1_stat_fails(const char *path) {
     return unlisted_v22 && !strcmp(path, unlisted_v22);
+}
+
+static int t_inventory_current_equivalence(const compat_os *os, const char *root, compat_rekordbox *rb, int max,
+                                           int *cur, int *state) {
+    int n = compat_find_rekordbox(os, root, rb, max, cur, state);
+    inv_list *list = malloc(sizeof *list);
+    compat_rekordbox other[8];
+    int inv_cur = -1, inv_state = -1;
+    int nr = list && inv_read(os, root, 0, list) == 0 ? inv_current(list, other, max, &inv_cur, &inv_state) : -1;
+    int same = nr == n && inv_cur == *cur && inv_state == *state;
+    for (int i = 0; same && i < n; i++) {
+        same = !strcmp(other[i].folder, rb[i].folder) && other[i].candidate == rb[i].candidate
+            && other[i].ok == rb[i].ok && other[i].agree == rb[i].agree && other[i].unknown == rb[i].unknown;
+    }
+    CHECK(same, "inventory current equals compatibility walk: n %d/%d current %d/%d state %d/%d",
+          nr, n, inv_cur, *cur, inv_state, *state);
+    free(list);
+    return n;
+}
+
+static void t_inventory(const char *scratch, const char *pedir) {
+    char root[1024], folder19[1200], folder20[1200], folder9[1200], stale[1200], exe19[1300], source[1200];
+    snprintf(root, sizeof root, "%s/inventory", scratch);
+    snprintf(folder19, sizeof folder19, "%s/rekordbox 7.2.19", root);
+    snprintf(folder20, sizeof folder20, "%s/rekordbox 7.2.20", root);
+    snprintf(folder9, sizeof folder9, "%s/rekordbox 7.2.9", root);
+    snprintf(stale, sizeof stale, "%s/rekordbox 7.2.8", root);
+    snprintf(exe19, sizeof exe19, "%s/rekordbox.exe", folder19);
+    snprintf(source, sizeof source, "%s/rekordbox-x64.exe", pedir);
+    size_t n = 0;
+    unsigned char *exe = slurp(source, &n);
+    inv_list *list = malloc(sizeof *list);
+    CHECK(exe && list && !mkdir(root, 0755) && !mkdir(folder19, 0755)
+          && !mkdir(folder20, 0755) && !mkdir(folder9, 0755), "inventory fixture");
+    if (!exe || !list) { free(exe); free(list); return; }
+    spit(exe19, exe, n);
+    fake f = {0};
+    compat_os os = {fake_entries, fake_pin, fake_procs, fake_native, &f};
+    f.signed_paths[f.n_signed++] = exe19;
+    entry(&f, "Pioneer rekordbox 7.2.19", "", "7.2.19.0342", "", "", folder19);
+    entry(&f, "Pioneer rekordbox 7.2.19", "", "7.2.19.0343", "", "", folder19);
+    entry(&f, "Pioneer rekordbox 7.2.20", "", "7.2.20.0354", "", "", folder20);
+    entry(&f, "Pioneer rekordbox 7.2.8", "", "7.2.8", "", "", stale);
+    f.entries[0].view = COMPAT_VIEW_64;
+    f.entries[1].view = COMPAT_VIEW_32;
+    CHECK(inv_read(&os, root, 0, list) == 0 && list->n == 4
+          && !strcmp(list->it[0].version, "7.2.20") && !strcmp(list->it[1].version, "7.2.19")
+          && !strcmp(list->it[2].version, "7.2.9") && !strcmp(list->it[3].version, "7.2.8"),
+          "inventory sorts numeric versions and deduplicates both views");
+    CHECK(list->it[1].trust == INV_VERIFIED && list->it[1].views == (INV_VIEW_64 | INV_VIEW_32),
+          "both registry views are retained, build suffix alone isn't a conflict");
+    plat_stat dir;
+    CHECK(plat_stat_path(folder19, 0, &dir) == 0 && plat_id_same(dir.id, list->it[1].dir_id),
+          "the verified row records its directory identity");
+    CHECK(list->it[0].trust == INV_SETTLING && list->it[2].trust == INV_DISK_ONLY && list->it[3].trust == INV_STALE
+          && list->registry_complete && list->disk_complete && !list->complete, "settling, disk-only and stale are distinct");
+    strcpy(f.entries[1].display_version, "7.2.18");
+    f.entries[2] = f.entries[--f.n_entries];     /* the settling folder is now disk-only */
+    CHECK(inv_read(&os, root, 0, list) == 0 && list->complete && list->it[1].trust == INV_UNVERIFIED,
+          "conflicting short display versions are unverified, with a complete walk");
+    compat_rekordbox legacy[8];
+    int cur, state;
+    CHECK(compat_find_rekordbox(&os, root, legacy, 8, &cur, &state) == 2
+          && cur == -1 && state == COMPAT_RB_UNVERIFIED, "the compatibility view uses the inventory's conflict verdict");
+    f.incomplete = 1;
+    CHECK(inv_read(&os, root, 0, list) == 0 && !list->registry_complete && !list->complete, "partial registry");
+    f.incomplete = 0;
+    int had = f.n_entries;
+    f.n_entries = COMPAT_ENTRIES_MAX;
+    CHECK(inv_read(&os, root, 0, list) == 0 && !list->registry_complete && !list->complete, "full buffer can be truncated");
+    f.n_entries = had;
+    compat_test_entries_alloc_fails = 1;
+    CHECK(inv_read(&os, root, 0, list) == -1 && !list->registry_complete && !list->complete, "entry allocation failed");
+    compat_test_entries_alloc_fails = 0;
+    unlisted_v22 = root;
+    compat_test_stat_fails = re1_stat_fails;
+    CHECK(inv_read(&os, root, 0, list) == 0 && list->registry_complete && !list->disk_complete && !list->complete,
+          "registry survives a failed root listing");
+    compat_test_stat_fails = NULL;
+    unlisted_v22 = NULL;
+    strcpy(f.entries[1].display_version, "7.2.19.0343");
+    f.pin_error = 1;
+    CHECK(inv_read(&os, root, COMPAT_FRESH, list) == 0 && list->it[1].trust == INV_NO_ANSWER && !list->complete,
+          "fresh inventory cannot reuse an EXE pin after the pin stops answering");
+
+    inv_cache cache = INV_CACHE_INIT;
+    f.pin_error = 0;
+    CHECK(inv_read_cached(&cache, &os, 17, root, list) == 0 && list->complete && list->gen == 17
+          && inv_read_cached(&cache, &os, 17, root, list) == 0 && cache.walks == 1, "whole inventory reused");
+    unlink(exe19);
+    CHECK(inv_read_cached(&cache, &os, 17, root, list) == 0 && list->it[1].trust == INV_SETTLING
+          && inv_read_cached(&cache, &os, 17, root, list) == 0 && cache.walks == 3, "settling is never cached");
+    inv_cache_clear(&cache);
+    free(exe);
+    free(list);
+    compat_memo_clear();
+}
+
+static void t_inventory_rules(void) {
+    static payload_manifest m;
+    m.has_windows = 1;
+    m.n_win_ort_bind = 2;
+    strcpy(m.win_ort_bind[0].rekordbox, "7.2.19");
+    strcpy(m.win_ort_bind[1].rekordbox, "7.2.20");
+    memset(m.win_ort_bind[0].sha256, 'a', 64);
+    memset(m.win_ort_bind[1].sha256, 'b', 64);
+    m.n_win_ort_sha256 = 2;
+    strcpy(m.win_ort_sha256[0], m.win_ort_bind[0].sha256);
+    strcpy(m.win_ort_sha256[1], m.win_ort_bind[1].sha256);
+    m.n_win_rekordbox = 2;
+    strcpy(m.win_rekordbox[0], "7.2.19");
+    strcpy(m.win_rekordbox[1], "7.2.20");
+    memset(m.win_ort_code_sha256, 'c', 64);
+    memset(m.win_bridge.sha256, 'd', 64);
+    compat_file original = {.exists = 1, .present = 1, .readable = 1, .pin = COMPAT_PIN_OK};
+    strcpy(original.sha256, m.win_ort_bind[0].sha256);
+    strcpy(original.code_sha256, m.win_ort_code_sha256);
+    CHECK(inv_original_bound(&m, "7.2.19.0342", &original)
+          && !inv_original_bound(&m, "7.2.20.0354", &original), "same code is bound to different originals per version");
+    strcpy(original.sha256, m.win_ort_bind[1].sha256);
+    CHECK(inv_original_bound(&m, "7.2.20.0354", &original)
+          && !inv_original_bound(&m, "7.2.19.0342", &original), "the re-signed twin is bound only to its own version");
+    original.code_sha256[0] = 'a';
+    CHECK(!inv_original_bound(&m, "7.2.20.0354", &original), "exact original hash does not substitute for code proof");
+    strcpy(original.code_sha256, m.win_ort_code_sha256);
+    original.pin = COMPAT_PIN_NO;
+    CHECK(!inv_original_bound(&m, "7.2.20.0354", &original), "an exact hash still needs the signer pin");
+    original.pin = COMPAT_PIN_OK;
+    original.marker = 1;
+    CHECK(!inv_original_bound(&m, "7.2.20.0354", &original), "a bridge is never a bound original");
+
+    inv_list *l = calloc(1, sizeof *l);
+    CHECK(l, "inventory rows allocated");
+    if (!l) return;
+    l->n = 5;
+    l->complete = 1;
+    strcpy(l->it[0].version, "7.2.20");
+    strcpy(l->it[0].display_version, "7.2.20.0354");
+    strcpy(l->it[1].version, "7.2.19");
+    l->it[2].trust = INV_STALE;
+    l->it[3].trust = l->it[4].trust = INV_DISK_ONLY;
+    inv_assess_row a[5] = {
+        {.live = COMPAT_LIVE_PIONEER, .listed = 1, .original_bound = 1, .running = 1},
+        {.live = COMPAT_LIVE_OURS, .listed = 1, .original_bound = 1, .receipt_ok = 1},
+        {.live = COMPAT_LIVE_OURS},
+        {.live = COMPAT_LIVE_PIONEER},
+        {.live = COMPAT_LIVE_OURS},
+    };
+    inv_row_view rows[5];
+    int n = inv_rows(l, a, &m, rows, 5);
+    CHECK(n == 3 && rows[0].state == INV_ROW_READY && rows[0].running && !strcmp(rows[0].display_version, "7.2.20.0354")
+          && rows[1].state == INV_ROW_ON && rows[2].state == INV_ROW_REPAIR, "UI keeps real rows and disk-only bridges");
+    a[1].receipt_ok = 0;
+    n = inv_rows(l, a, &m, rows, 5);
+    CHECK(n == 3 && rows[1].state == INV_ROW_REPAIR && rows[1].why == WHY_NOT_RECORDED,
+          "D13: repair for a bridge without its matching receipt");
+    a[1].listed = 0;
+    n = inv_rows(l, a, &m, rows, 5);
+    CHECK(n == 3 && rows[1].state == INV_ROW_REPAIR && rows[1].why == WHY_DELISTED_BRIDGE, "delisted bridge requires repair");
+    a[0].original_bound = 0;
+    strcpy(a[0].original_code, m.win_ort_code_sha256);
+    n = inv_rows(l, a, &m, rows, 5);
+    CHECK(n == 3 && rows[0].state == INV_ROW_UNSUPPORTED && rows[0].why == WHY_BUILD_UNLISTED,
+          "a listed build with the wrong original hash and matching code is build-unlisted");
+    a[0].original_code[0] = 'a';
+    n = inv_rows(l, a, &m, rows, 5);
+    CHECK(n == 3 && rows[0].state == INV_ROW_UNSUPPORTED && rows[0].why == WHY_ORT_UNLISTED,
+          "a listed build with different ORT code is ORT-unlisted");
+    l->it[0].trust = INV_NO_ANSWER;
+    n = inv_rows(l, a, &m, rows, 5);
+    CHECK(n == 3 && rows[0].state == INV_ROW_UNVERIFIED && rows[0].why == WHY_NO_ANSWER,
+          "pin errors remain visible as no answer");
+    l->n = 2;
+    l->it[0].trust = l->it[1].trust = INV_VERIFIED;
+    memset(l->it[0].exe.sha256, '2', 64);
+    memset(l->it[1].exe.sha256, '1', 64);
+    a[0] = (inv_assess_row){.live = COMPAT_LIVE_PIONEER, .listed = 1, .original_bound = 1};
+    a[1] = (inv_assess_row){.live = COMPAT_LIVE_OURS, .listed = 1, .original_bound = 1, .receipt_ok = 1};
+    memset(a[0].live_sha, '3', 64);
+    strcpy(a[1].live_sha, m.win_bridge.sha256);
+    CHECK(!*inv_outdated_bridge(l, a, m.win_bridge.sha256), "newest stock DLL is Ready, not a bridge update");
+    a[0].listed = 0;
+    CHECK(!*inv_outdated_bridge(l, a, m.win_bridge.sha256), "newest stock DLL is Unsupported, not a bridge update");
+    a[1].live = COMPAT_LIVE_OURS_UNLISTED;
+    memset(a[1].live_sha, '4', 64);
+    CHECK(!strcmp(inv_outdated_bridge(l, a, m.win_bridge.sha256), a[1].live_sha), "select the older covered bridge behind the stock DLL");
+    a[1].receipt_ok = 0;
+    CHECK(!*inv_outdated_bridge(l, a, m.win_bridge.sha256), "a receipt-less bridge needs repair, not an update offer");
+    a[0].listed = a[1].receipt_ok = 1;
+    a[1].live = COMPAT_LIVE_OURS;
+    admin_target t[2];
+    CHECK(inv_targets(INV_VERB_INSTALL, l, a, &m, t, 2) == 1
+          && !strcmp(t[0].version, "7.2.20") && !strcmp(t[0].exe16, "2222222222222222"),
+          "only the not-yet-covered version in install scope");
+    CHECK(inv_targets(INV_VERB_REINSTALL, l, a, &m, t, 2) == 2
+          && !strcmp(t[0].version, "7.2.19") && !strcmp(t[1].version, "7.2.20"),
+          "force covers both versions in ascending order");
+    a[1].live = COMPAT_LIVE_OURS_UNLISTED;
+    CHECK(inv_targets(INV_VERB_INSTALL, l, a, &m, t, 2) == 2, "a receipt-backed older bridge is eligible for upgrade");
+    a[1].receipt_ok = 0;
+    CHECK(inv_targets(INV_VERB_REINSTALL, l, a, &m, t, 2) == 1
+          && !strcmp(t[0].version, "7.2.20"), "D13 excludes receipt-less bridges even under force");
+    l->complete = 0;
+    a[1].r1 = NF_R1_ORT_MISSING;
+    a[0].r1 = -1;
+    CHECK(inv_targets(INV_VERB_INSTALL, l, a, &m, t, 2) == -1, "incomplete inventory blocks swaps");
+    CHECK(inv_targets(INV_VERB_RESTORE, l, a, &m, t, 2) == 1 && !strcmp(t[0].version, "7.2.19"),
+          "restore scopes the known repair despite incomplete inventory and skips no-answer rows");
+
+    /* uninstall (D3): complete, every bridge and repair row (disk-only, no exe hash too);
+     * incomplete, only our bridges with their receipts, never -1 */
+    l->n = 3;
+    l->complete = 1;
+    strcpy(l->it[2].version, "7.2.18");
+    l->it[2].trust = INV_DISK_ONLY;
+    memset(l->it[2].exe.sha256, 0, sizeof l->it[2].exe.sha256);
+    a[0] = (inv_assess_row){.live = COMPAT_LIVE_PIONEER, .listed = 1, .original_bound = 1};
+    a[1] = (inv_assess_row){.live = COMPAT_LIVE_OURS, .listed = 1, .original_bound = 1, .receipt_ok = 1};
+    a[2] = (inv_assess_row){.live = COMPAT_LIVE_OURS_UNLISTED};
+    admin_target u[3];
+    CHECK(inv_targets(INV_VERB_UNINSTALL, l, a, &m, u, 3) == 2 && !strcmp(u[0].version, "7.2.18") && !u[0].exe16[0]
+          && !strcmp(u[1].version, "7.2.19") && !strcmp(u[1].exe16, "1111111111111111"),
+          "uninstall, complete: both bridges, the disk-only one without an exe hash");
+    a[0].r1 = NF_R1_LIVE_MISSING;
+    CHECK(inv_targets(INV_VERB_UNINSTALL, l, a, &m, u, 3) == 3, "uninstall, complete: a repair row is affected too");
+    CHECK(inv_targets(INV_VERB_UNINSTALL, l, a, NULL, u, 3) == 3, "uninstall needs no payload");
+    l->complete = 0;
+    CHECK(inv_targets(INV_VERB_UNINSTALL, l, a, &m, u, 3) == 1 && !strcmp(u[0].version, "7.2.19"),
+          "uninstall, incomplete: only the bridge with its receipt (D3), not the repair row nor the receipt-less bridge");
+    a[1].receipt_ok = 0;
+    CHECK(inv_targets(INV_VERB_UNINSTALL, l, a, &m, u, 3) == 0, "uninstall, incomplete, no receipt-backed bridge: nothing");
+    l->it[1].trust = INV_DISK_ONLY;
+    a[1].receipt_ok = 1;
+    CHECK(inv_targets(INV_VERB_UNINSTALL, l, a, &m, u, 3) == 1 && !strcmp(u[0].version, "7.2.19"),
+          "uninstall, incomplete: an on-disk folder with our bridge and its receipt is restored");
+    free(l);
 }
 
 static void facts(const char *scratch, const char *pedir) {
@@ -368,7 +630,7 @@ static void facts(const char *scratch, const char *pedir) {
     compat_memo_clear();
     compat_rekordbox rb[8];
     int cur, st;
-    int n = compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+    int n = t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
     CHECK(n == 3, "three version folders named (the duplicate once): %d", n);
     CHECK(n == 3 && !strcmp(rb[0].folder_version, "7.2.20") && !strcmp(rb[1].folder_version, "7.2.19") && !strcmp(rb[2].folder_version, "7.2.18"),
           "newest first");
@@ -380,21 +642,21 @@ static void facts(const char *scratch, const char *pedir) {
     sha_hex(exe, exe_n, sha);
     CHECK(n == 3 && !strcmp(rb[1].exe.sha256, sha) && rb[1].exe.size == (int64_t)exe_n, "rekordbox.exe's sha256, for the resampler check");
     int calls = f.pin_calls;
-    n = compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+    n = t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
     CHECK(f.pin_calls == calls && cur == 1, "again: memoised, no new pin (%d calls)", f.pin_calls - calls);
     f.n_signed = 1;   /* 7.2.18's exe no longer AlphaTheta's... but memoised: its size and time didn't change */
     spit(exe19, exe, exe_n - 1);   /* 7.2.19's exe changed: read again */
-    compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+    t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
     CHECK(f.pin_calls == calls + 1, "a changed file is checked again (%d)", f.pin_calls - calls);
     spit(exe19, exe, exe_n);
     f.n_signed = 2;
     compat_memo_clear();
     f.pin_error = 1;
-    compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+    t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
     CHECK(cur == -1, "the pin can't be checked: no current rekordbox");
     f.pin_error = 0;
     calls = f.pin_calls;
-    compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+    t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
     CHECK(cur == 1 && f.pin_calls > calls, "the pin answers again: asked again, not taken from the memo (C7)");
 
     /* C8, owner decided: the newest folder holding rekordbox.exe decides, with no fallback */
@@ -406,25 +668,28 @@ static void facts(const char *scratch, const char *pedir) {
     f.signed_paths[f.n_signed++] = exe21;
     snprintf(p, sizeof p, "%s/Uninstall rekordbox.exe", v21);
     entry(&f, "Pioneer rekordbox 7.2.21", "rekordbox 7.2.21 64bit", "7.2.21.0001", p, "", "");
-    n = compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+    n = t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
     CHECK(n == 4 && cur == -1 && st == COMPAT_RB_UNVERIFIED && rb[0].candidate && !strcmp(rb[0].folder_version, "7.2.21") && !rb[2].candidate,
           "the newest disagrees: couldn't verify rekordbox 7.2.21, no fallback to 7.2.19 (cur %d, state %d)", cur, st);
+    char r1f[1024] = "x", r1v[64] = "x";
+    CHECK(native_r1_current(&os, root, r1f, sizeof r1f, r1v, sizeof r1v) == 0 && !r1f[0] && !r1v[0],
+          "CW1: R1's folder and version: none while rekordbox is unverified");
     unlink(exe21);
-    n = compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+    n = t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
     CHECK(cur == 2 && st == COMPAT_RB_OK && rb[2].candidate && !strcmp(rb[2].folder_version, "7.2.19"),
           "a newest folder without rekordbox.exe is passed over: 7.2.19 (cur %d)", cur);
     compat_memo_clear();
     f.signed_paths[0] = "nobody's";   /* 7.2.19's exe no longer AlphaTheta's */
-    compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+    t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
     CHECK(cur == -1 && st == COMPAT_RB_UNVERIFIED && rb[2].candidate && !rb[3].candidate, "its pin NO: couldn't verify, 7.2.18 not taken");
     compat_memo_clear();
     f.pin_error = 1;
-    compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+    t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
     CHECK(cur == -1 && st == COMPAT_RB_NO_ANSWER, "its pin ERROR: no answer");
     f.pin_error = 0;
     chmod(exe19, 0);
     compat_memo_clear();
-    compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+    t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
     chmod(exe19, 0644);
     CHECK(cur == -1 && st == COMPAT_RB_NO_ANSWER && rb[2].candidate, "its rekordbox.exe unreadable: no answer, no fallback");
     f.signed_paths[0] = exe19;
@@ -432,8 +697,23 @@ static void facts(const char *scratch, const char *pedir) {
     f.n_signed--;
     rmdir(v21);
     compat_memo_clear();
-    n = compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+    n = t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
     CHECK(n == 3 && cur == 1 && st == COMPAT_RB_OK, "back to 7.2.19");
+    CHECK(native_r1_folder(&os, root, r1f, sizeof r1f) && !strcmp(r1f, v19), "CW1: R1's folder: the verified current one (%s)", r1f);
+    CHECK(native_r1_current(&os, root, r1f, sizeof r1f, r1v, sizeof r1v) == 1 && !strcmp(r1f, v19) && !strcmp(r1v, "7.2.19"),
+          "CW1: R1's folder and version: the verified current ones (%s, %s)", r1f, r1v);
+    int had = f.n_entries;
+    f.n_entries = 0;   /* rekordbox uninstalled: no entry names a folder */
+    strcpy(r1v, "x");
+    CHECK(native_r1_current(&os, root, r1f, sizeof r1f, r1v, sizeof r1v) == 0 && !r1f[0] && !r1v[0],
+          "CW1: R1's folder and version: none when rekordbox is gone");
+    f.n_entries = had;
+    snprintf(q, sizeof q, "%s.gone", v19);
+    rename(v19, q);   /* the current version folder removed (an update, an uninstall): no fallback */
+    compat_memo_clear();
+    CHECK(!native_r1_folder(&os, root, r1f, sizeof r1f) && !r1f[0], "CW1: R1's folder: none when the current version folder is gone");
+    rename(q, v19);
+    compat_memo_clear();
     f.signed_paths[f.n_signed] = NULL;
     compat_memo_clear();
 
@@ -447,11 +727,11 @@ static void facts(const char *scratch, const char *pedir) {
         snprintf(v10, sizeof v10, "%s/rekordbox 7.2.10", root);
         snprintf(exe10, sizeof exe10, "%s/rekordbox.exe", v10);
         f.incomplete = 1;
-        n = compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+        n = t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
         CHECK(n == 3 && cur == 1 && st == COMPAT_RB_OK, "RC4: partial, no newer folder on disk: 7.2.19 stands (cur %d, state %d)", cur, st);
         mkdir(v22, 0755);
         spit(exe22, exe, exe_n);   /* 7.2.22 installed, its Uninstall key the one that couldn't be read */
-        n = compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+        n = t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
         CHECK(n == 3 && cur == -1 && st == COMPAT_RB_NO_ANSWER, "RC4: partial, a newer unlisted folder with rekordbox.exe: no answer, 7.2.19 not current (cur %d, state %d)",
               cur, st);
         {
@@ -464,17 +744,17 @@ static void facts(const char *scratch, const char *pedir) {
         mkdir(v22, 0755);
         unlisted_v22 = v22;
         compat_test_stat_fails = re1_stat_fails;
-        n = compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+        n = t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
         CHECK(cur == -1 && st == COMPAT_RB_NO_ANSWER, "RE1: partial, an unlisted newer folder that can't be stat'ed: no answer (cur %d, state %d)", cur, st);
         f.incomplete = 0;
-        n = compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+        n = t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
         CHECK(cur == 1 && st == COMPAT_RB_OK, "RE1: whole, the same folder unlisted: not rekordbox's (cur %d, state %d)", cur, st);
         {
             static char v19s[1200];
             snprintf(v19s, sizeof v19s, "%s", rb[1].folder);
             unlisted_v22 = v19s;
         }
-        n = compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+        n = t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
         CHECK(cur == -1 && st == COMPAT_RB_NO_ANSWER && rb[1].candidate && rb[1].unknown,
               "RE1: whole, the listed 7.2.19 that can't be stat'ed: no answer, never 7.2.18 (cur %d, state %d)", cur, st);
         compat_test_stat_fails = NULL;
@@ -482,15 +762,15 @@ static void facts(const char *scratch, const char *pedir) {
         f.incomplete = 1;
         spit(exe22, exe, exe_n);
         f.incomplete = 0;
-        n = compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+        n = t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
         CHECK(cur == 1 && st == COMPAT_RB_OK, "RC4: a whole enumeration: a folder no entry names isn't rekordbox's (cur %d)", cur);
         f.incomplete = 1;
         unlink(exe22);
-        n = compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+        n = t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
         CHECK(cur == 1 && st == COMPAT_RB_OK, "RC4: partial, the newer folder without rekordbox.exe: passed over, as the walk does (cur %d)", cur);
         mkdir(v10, 0755);
         spit(exe10, exe, exe_n);   /* an older unlisted one: whatever its key said, 7.2.19 is newer */
-        n = compat_find_rekordbox(&os, root, rb, 8, &cur, &st);
+        n = t_inventory_current_equivalence(&os, root, rb, 8, &cur, &st);
         CHECK(cur == 1 && st == COMPAT_RB_OK, "RC4: partial, only an older unlisted folder: 7.2.19 stands (cur %d)", cur);
         unlink(exe10);
         rmdir(v10);
@@ -1133,6 +1413,9 @@ void test_compat(const char *scratch, const char *pedir) {
     pure();
     pe_files(pedir);
     facts(scratch, pedir);
+    t_inventory(scratch, pedir);
+    t_inventory_rules();
+    t_ort_file_facts(scratch);
     signal(SIGALRM, flight_hang);
     alarm(30);
     single_flight(scratch);

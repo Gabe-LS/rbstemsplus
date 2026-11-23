@@ -345,5 +345,9 @@ foreach ($g in $groups) {
         Check ($script:BridgeLog.Contains('outside CPU memory (DirectML): passed through, not cached')) 'gpu: the log says a run with non-CPU tensors was passed through'
     }
 }
-if (Test-Path -LiteralPath $BridgeRealPath) { Remove-Item -LiteralPath $BridgeRealPath -Force }
+# the last harness may still hold the copy for a moment as it ends (gpu's): tried for up to 15 s
+for ($i = 0; $i -lt 30 -and (Test-Path -LiteralPath $BridgeRealPath); $i++) {
+    try { Remove-Item -LiteralPath $BridgeRealPath -Force -ErrorAction Stop } catch { Start-Sleep -Milliseconds 500 }
+}
+Check (-not (Test-Path -LiteralPath $BridgeRealPath)) "the copied real library is removed ($BridgeRealPath)"
 if ($standalone) { Done }

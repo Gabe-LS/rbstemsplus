@@ -128,6 +128,7 @@ core_text_id nameless_text(core_text_id named) {
     case T_CLEARING_DRIVE_N: return T_WIN_CLEARING_DRIVE_N_NAMELESS;
     case T_NOT_CLEARED_DRIVE_MSG: return T_WIN_NOT_CLEARED_DRIVE_MSG_NAMELESS;
     case T_LOCATION_LABEL: return T_WIN_LOCATION_LABEL_NAMELESS;
+    case T_WIN_UNINSTALL_ALL_DRIVE_UNMEASURED: return T_WIN_UNINSTALL_ALL_DRIVE_UNMEASURED_NAMELESS;
     default: return named;
     }
 }

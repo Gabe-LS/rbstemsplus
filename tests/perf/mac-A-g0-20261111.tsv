@@ -1,6 +1,7 @@
 # mac-A's reference: tests/perf/stats.py baselines of g0-aa-20261111-1948, side A, 210 clean launches; medians over every per-event sample (ms, MB, %); owner decided, 2026-11-12
 # noted: its A/A checks before the last (aa-1.txt, aa-2.txt, aa-3.txt) called NOISY: P3.longest.actionEnd median, P3.longest.location median, P5 median, P7.stall.full max
 # noted: its last A/A check (aa-final.txt) called NOISY: none
+# noted: VMs headless since 2026-11-17 (vm.sh up's default); mac-A's 2026-11-11 reference ran with tart's window: absolute numbers across that date aren't like for like
 # noted: perf mode's overhead (overhead-charges.tsv.refused: KEY STAT ms charged, information): P7.stall.full median 4.576; P7.stall.full max 4.959; P7.lastrow.full median 7.331; P7.done.full median 6.014; P7.stall.full@first median 1.296; P7.stall.full@first max 1.296; P7.lastrow.full@first median 3.682; P7.done.full@first median 3.157
 metric	kind	A	n	launches	per-launch medians
 P1	gate	1257.607	92	92	1201.8-1421.6

@@ -15,8 +15,9 @@
  *  - The source folder (--source): the app's verified installed-release pair, the bridge it
  *    verified, and its own worker, copied into one folder of the account's (admin_proto.h's
  *    layout). The worker re-verifies all of it from its own staging copy.
- *  - The worker's lines go to the log; its records (@still-closing, @closed, @restart, @bridge, @floor)
- *    into the result, for the core's texts and the app's own state, written after the exit code. */
+ *  - The worker's lines go to the log; its records (@still-closing, @closed, @restart, @bridge, @floor,
+ *    @target, @root-kept) into the result, for the core's texts and the app's own state, written
+ *    after the exit code. */
 #ifndef RBSP_WIN_ADMIN_H
 #define RBSP_WIN_ADMIN_H
 
@@ -64,15 +65,29 @@ int admin_choose(const admin_bin_worker *w, int n, const char *own_sha256, int p
  * written and flushed. 0, or an errno. */
 int admin_source_prepare(const char *dir, const char *payload_dir, const char *bridge_path, const char *bridge_name, const char *worker_path);
 
+/* One @target record (protocol 2, mv-spec §2.2): a target's version, its exit code (-1 for
+ * "-": not started) and what happened (ADMIN_TARGET_WHAT_*) */
+typedef struct {
+    char version[ADMIN_VERSION_MAX];
+    int code;
+    char what[ADMIN_TARGET_WHAT_MAX];
+} admin_target_result;
+
 /* What a run told the app */
 typedef struct {
     int code;                /* the worker's exit code (admin_proto.h), ADMIN_EXIT_USER_STOPPED, or -1: not started */
     int update_first;        /* the "update the app first" offer applies (12, 14, or no worker can serve) */
+    int no_source;           /* the selected verb needed a source folder before elevation */
     int still_closing;       /* the worker waited for rekordbox to close (PLAN R1) */
     int restart_pending;     /* the root's last file is removed at the next restart (I20) */
     char bridge[65];         /* @bridge: the bridge now in rekordbox */
     char floor[PAYLOAD_VERSION_MAX];
     int elevations;          /* how many times UAC was asked (the I75 case: 2) */
+    /* protocol 2 (mv-spec §2.2): the @target records in the order written (at most
+     * ADMIN_TARGETS_MAX; a malformed one is ignored), and @root-kept */
+    admin_target_result targets[ADMIN_TARGETS_MAX];
+    int ntargets;
+    int root_kept;
 } admin_result;
 
 /* Starts exe elevated (verb runas) with params, serving the pipe named pipe for its lines (each
@@ -93,6 +108,9 @@ typedef struct {
                                 * any of them may need install-worker first (J23). Without one, an
                                 * install or an install-worker is "update the app first" */
     const char *own_sha256;    /* the installed-release payload's windows.app.admin_sha256, or "" */
+    const char *manifest;      /* --manifest: the sha256 of the source folder's payload.json (the pair the
+                                * app verified, copied there); "" or NULL with no source folder, when
+                                * install and install-worker are "update the app first" */
     admin_elevate_fn elevate;
     void *ctx;
     void (*log)(void *ctx, const char *line, size_t n);   /* the core's log path (host->log) */
@@ -112,9 +130,10 @@ typedef struct {
 
 /* One admin action: the worker chosen, run (install-worker first when the app's own is missing,
  * then its own, at most once: two UAC prompts, I75), its lines logged, its records and exit code
- * into *res. Returns res->code. version: rekordbox's as the app checked it ("" for
- * remove-root-folder). Runs on the flow thread; blocks. */
-int admin_client_run(const admin_client *c, int verb, const char *version, int force, admin_result *res);
+ * into *res. Returns res->code. targets: --targets (admin_proto.h, protocol 2), the scope the app
+ * checked for install and restore ("X.Y.Z:<16 hex>,..."); the other verbs send "*" whatever it
+ * is. Runs on the flow thread; blocks. */
+int admin_client_run(const admin_client *c, int verb, const char *targets, int force, admin_result *res);
 
 /* The quoted command line of a program and its arguments, as CreateProcessW reads it back (the
  * helper's spawn): every argument in double quotes, backslashes before a quote doubled, a quote

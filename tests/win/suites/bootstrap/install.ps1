@@ -9,7 +9,8 @@ $l = Get-Layout
 $sac = (Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' -ErrorAction SilentlyContinue).VerifiedAndReputablePolicyState
 "Smart App Control state: $sac"
 $t = [Diagnostics.Stopwatch]::StartNew()
-$out = Invoke-OneLiner $VmRun.Url
+$base = if ($VmRun.Step -eq 'published') { Get-PublishedBootstrapBase } else { $VmRun.Url }
+$out = Invoke-OneLiner $base
 "one-liner ($([int]$t.Elapsed.TotalSeconds) s): $out"
 if ($sac -eq 1) {
     Check ($out -ceq (Get-BootText 'SacOn')) 'Smart App Control On: the SAC line alone (every release refuses alike)'

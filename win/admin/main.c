@@ -3,7 +3,7 @@
  * requireAdministrator manifest, no per-release version resource (I83).
  *
  *   RB Stems Plus.exe install|uninstall|restore|install-worker|remove-root-folder --proto N
- *       --version V --source DIR --force 0|1 --pipe NAME
+ *       --targets T --manifest M --source DIR --force 0|1 --pipe NAME (admin_proto.h, protocol 2)
  *
  * Its first call is SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32): bcrypt, wintrust,
  * crypt32 (and user32) are loaded from System32 only, never from the folder it runs from. The
@@ -25,41 +25,102 @@
 
 /* The marker the app reads a bin\ worker's protocol from (admin_marker_find); said in the log, so
  * the linker keeps it. */
-static const char marker[] = ADMIN_MARKER_PREFIX "proto=1 minimum=" ADMIN_COMPILED_MINIMUM "\n";
-_Static_assert(ADMIN_PROTO == 1, "the marker's proto= follows ADMIN_PROTO");
+static const char marker[] = ADMIN_MARKER_PREFIX "proto=" ADMIN_PROTO_TEXT " minimum=" ADMIN_COMPILED_MINIMUM "\n";
+_Static_assert(ADMIN_PROTO == 2, "the marker's proto= (ADMIN_PROTO_TEXT) follows ADMIN_PROTO");
 
-static int utf8_of(const wchar_t *w, char *out, size_t cap) {
-    int n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w, -1, out, (int)cap, NULL, NULL);
-    return n > 0 ? 0 : -1;
+/* w as UTF-8 (malloc'd), or NULL when it isn't valid UTF-16 */
+static char *utf8_of(const wchar_t *w) {
+    int n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w, -1, NULL, 0, NULL, NULL);
+    char *out = n > 0 ? malloc((size_t)n) : NULL;
+    if (out && WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, w, -1, out, n, NULL, NULL) != n) {
+        free(out);
+        out = NULL;
+    }
+    return out;
 }
+
+static int connect_pipe(void *ctx, const char *pipe) { return worker_win_connect(ctx, pipe); }
+
+#ifdef ADMIN_TEST_HOLD
+/* test builds only (win/admin/build.sh --test-key): two holds, each 1 to 120 seconds from a
+ * variable, said first and its end said after. The VM's sign-out cases (stems-cache-uac) need a
+ * worker that runs for seconds, so that Windows' block screen shows; here the worker ends in
+ * under one. An elevated process gets a new environment, so the suite sets them in the user's
+ * HKCU\Environment. Anything else in one, or none, holds nothing there:
+ *   RBSP_TEST_WORKER_HOLD     before the worker does anything ("hold over"): WC1, WC2, where the
+ *                             worker then finishes
+ *   RBSP_TEST_WORKER_MIDHOLD  once its work has begun changing files (worker.h's
+ *                             admin_test_mid_hold; "mid-work hold over"): WC3, WC10, where the
+ *                             session's end then lands mid-work */
+static int test_secs(const wchar_t *name) {
+    wchar_t v[8];
+    DWORD k = GetEnvironmentVariableW(name, v, 8);
+    if (!k || k >= 4) return 0;
+    int s = 0;
+    for (DWORD i = 0; i < k; i++) {
+        if (v[i] < L'0' || v[i] > L'9') return 0;
+        s = s * 10 + (v[i] - L'0');
+    }
+    return s >= 1 && s <= 120 ? s : 0;
+}
+
+static void test_hold(worker_win *ww) {
+    int s = test_secs(L"RBSP_TEST_WORKER_HOLD");
+    if (!s) return;
+    char line[96];
+    snprintf(line, sizeof line, "test build: held %d s before the work (RBSP_TEST_WORKER_HOLD)", s);
+    ww->os.say(ww, line);
+    Sleep((DWORD)s * 1000);
+    ww->os.say(ww, "test build: hold over");
+}
+
+static int test_target_matches(const char *name, const char *version, int unset) {
+    char target[COMPAT_VERSION_MAX];
+    DWORD n = GetEnvironmentVariableA(name, target, sizeof target);
+    return n ? version && n < sizeof target && !strcmp(target, version) : unset;
+}
+
+int admin_test_fail_target(const admin_os *os, const char *version) {
+    if (!test_target_matches("RBSP_TEST_WORKER_FAIL_TARGET", version, 0)) return 0;
+    char line[ADMIN_LINE_MAX];
+    snprintf(line, sizeof line, "test build: failing rekordbox %s's load check (RBSP_TEST_WORKER_FAIL_TARGET)", version);
+    os->say(os->ctx, line);
+    return 1;
+}
+
+void admin_test_mid_hold(const admin_os *os, const char *where, const char *version) {
+    static int held;   /* once per run */
+    int s = test_secs(L"RBSP_TEST_WORKER_MIDHOLD");
+    if (!s || !test_target_matches("RBSP_TEST_WORKER_MIDHOLD_TARGET", version, 1) || held++) return;
+    char line[ADMIN_LINE_MAX];
+    snprintf(line, sizeof line, "test build: held %d s mid-work: %s (RBSP_TEST_WORKER_MIDHOLD)", s, where);
+    os->say(os->ctx, line);
+    Sleep((DWORD)s * 1000);
+    os->say(os->ctx, "test build: mid-work hold over");
+}
+#endif
 
 int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show) {
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     (void)inst, (void)prev, (void)cmd, (void)show;
     int argc = __argc;
     wchar_t **wargv = __wargv;
-    if (argc != 12 || !wargv) return ADMIN_EXIT_CHECK_FAILED;
-    static char buf[12][ADMIN_PATH_MAX];
-    const char *argv[12];
-    for (int i = 0; i < 12; i++) {
-        if (utf8_of(wargv[i], buf[i], sizeof buf[i])) return ADMIN_EXIT_CHECK_FAILED;
-        argv[i] = buf[i];
-    }
+    /* any count: another protocol's line is refused as such (12), with or without its pipe, never
+     * as malformed (review finding 9, re-review 9); admin_parse_args checks this protocol's
+     * count. An argument that isn't valid UTF-16 is NULL there (malformed) */
+    if (argc < 1 || !wargv) return ADMIN_EXIT_CHECK_FAILED;
+    const char **argv = calloc((size_t)argc, sizeof *argv);
+    if (!argv) return ADMIN_EXIT_CHECK_FAILED;
+    for (int i = 0; i < argc; i++) argv[i] = utf8_of(wargv[i]);
     admin_args a;
-    char why[160];
-    int r = admin_parse_args(12, argv, &a, why, sizeof why);
     static worker_win ww;
     worker_win_init(&ww);
-    /* nothing is said, and nothing done, without the app's own pipe */
-    if (!a.pipe[0] || worker_win_connect(&ww, a.pipe)) return ADMIN_EXIT_CHECK_FAILED;
     char line[ADMIN_LINE_MAX];
     snprintf(line, sizeof line, "%.*s", (int)(sizeof marker - 2), marker);
-    ww.os.say(&ww, line);
-    if (r != ADMIN_EXIT_OK) {
-        snprintf(line, sizeof line, "%s: nothing changed", why);
-        ww.os.say(&ww, line);
-        return r;
-    }
+    int r = admin_start(argc, argv, line, connect_pipe, ww.os.say, &ww, &a);
+    for (int i = 0; i < argc; i++) free((void *)argv[i]);
+    free(argv);
+    if (r != ADMIN_EXIT_OK) return r;
     if (!worker_win_elevated()) {
         ww.os.say(&ww, "not running as an administrator: nothing changed");
         return ADMIN_EXIT_CHECK_FAILED;
@@ -86,6 +147,9 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, PWSTR cmd, int show) {
         ww.os.say(&ww, "couldn't read Windows' Program Files folder: nothing changed");
         return ADMIN_EXIT_CHECK_FAILED;
     }
+#ifdef ADMIN_TEST_HOLD
+    test_hold(&ww);
+#endif
     admin_env e = {root, rekordbox, keys, nkeys, ADMIN_COMPILED_MINIMUM, 90000, 1000};
     return admin_run(&e, &ww.os, &a);
 }

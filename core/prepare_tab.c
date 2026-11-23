@@ -166,6 +166,9 @@ typedef struct {
     prep_facts pf;
     const char *cache_folder;   /* NULL: none usable */
     int chosen_drive;
+#ifdef CORE_WIN_POLICY
+    int location_unchecked;
+#endif
     const char *max_gb_text;    /* configNumber(maxGB) */
     double max_gb;
 } prep_now;
@@ -202,6 +205,9 @@ static void prep_facts_of(core *c, const core_facts *fp, int waiter, int measure
     const char *tip;
     n->pf.cache_look = view_cache_light(c, &f, SHA_WAIT_NONE, &tip);
     n->pf.cache_tip = tip;
+#ifdef CORE_WIN_POLICY
+    n->location_unchecked = measured && win_location_unchecked(c->os, &f);
+#endif
     n->pf.quality = (int32_t)(f.set[FACT_STEMS_QUALITY] ? f.i[FACT_STEMS_QUALITY] : -1);
     const char **ours;
     n->pf.n_our_models = view_split_lines(&c->scratch, STR0(FACT_OUR_MODELS), &ours);
@@ -210,6 +216,9 @@ static void prep_facts_of(core *c, const core_facts *fp, int waiter, int measure
     case 0: n->cache_folder = c->paths[P_CACHE_DEFAULT] ? c->paths[P_CACHE_DEFAULT] : ""; break;   /* this Mac */
     case 1: {   /* a chosen folder: used once the measurement says it's the folder in use */
         const char *dir = STR(FACT_CONFIG_DIR), *in_use = STR0(FACT_LOC_IN_USE);
+#ifdef CORE_WIN_POLICY
+        if (n->location_unchecked) in_use = NULL;
+#endif
         n->cache_folder = !measured || str_eq0(in_use, dir) ? dir : NULL;
         n->chosen_drive = 1;
         break;
@@ -1250,6 +1259,9 @@ static void load_playlists(core *c, int then, int silent, const char *shown, con
         prep_update(c);
         return;
     }
+#ifdef CORE_WIN_POLICY
+    if (n.location_unchecked) prep_update(c);
+#endif
     c->gen[DOM_LIST]++;
     list_ctx *l = calloc(1, sizeof *l);
     hrun *h = hrun_new(HK_PLAYLISTS);
@@ -1688,6 +1700,10 @@ static void ask(core *c, int kind, const prep_estimate *e, const char *folder) {
  * changed since the estimate: never a run on what it said */
 static int facts_still_hold(core *c, prep_now *n, double max_gb) {
     prep_facts_now(c, SHA_WAIT_NONE, n);
+#ifdef CORE_WIN_POLICY
+    if (c->os == CORE_OS_WIN && !n->pf.rekordbox_installed)
+        core_log(c->life, "prepare: no verified current rekordbox, the run isn't started");
+#endif
     char *buf = arena_alloc(&c->scratch, 8192);
     int32_t problems = 1;
     if (buf) {
